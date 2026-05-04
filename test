@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Run the full jpegz test suite via nix flake check (sandboxed).
+#
+# Per CLAUDE.md "Testing Principles": never use `set -euo pipefail` here —
+# `set -e` aborts on the first non-zero exit code, which silently masks
+# additional sub-suite failures. Instead, accumulate exit codes explicitly.
+
+set -u
+
+cd "$(dirname "$0")"
+
+failures=0
+
+run_check() {
+	local name="$1"
+	shift
+	echo
+	echo "==> $name"
+	if "$@"; then
+		echo "    ok"
+	else
+		echo "    FAIL ($name)"
+		failures=$((failures + 1))
+	fi
+}
+
+# Phase 1 has only Zig unit tests + the Nix build check.
+# When CLI tests land (./tests/cli/), add another run_check below them.
+run_check "zig unit tests (nix flake check .#test)" \
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".test --print-build-logs
+
+run_check "package builds (nix flake check .#build)" \
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".build --print-build-logs
+
+echo
+if [ "$failures" -eq 0 ]; then
+	echo "All checks passed."
+	exit 0
+else
+	echo "$failures check(s) failed."
+	exit 1
+fi

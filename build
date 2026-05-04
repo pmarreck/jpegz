@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Build jpegz via nix (sandboxed, deterministic).
+# Avoids the Zig 0.15.2 / macOS 26.x libSystem stub issue (see CLAUDE.md
+# "Build System — CRITICAL"). Native builds go through `nix build`; cross-
+# compilation can drop into devShell with `nix develop -c zig build -Dtarget=...`.
+
+set -u
+
+cd "$(dirname "$0")"
+
+mode="release"
+for arg in "$@"; do
+	case "$arg" in
+		--debug) mode="debug" ;;
+		--test)  mode="test"  ;;
+		-h|--help)
+			cat <<-EOF
+				Usage: ./build [--debug|--test]
+
+				  (default)  release build via nix build .#default → result/
+				  --debug    devShell zig build -Doptimize=Debug (native, no nix sandbox)
+				  --test     run the test suite (alias for ./test)
+			EOF
+			exit 0
+			;;
+	esac
+done
+
+case "$mode" in
+	release)
+		exec nix build .#default --print-build-logs
+		;;
+	debug)
+		# Debug builds are for local dev only and bypass the nix sandbox.
+		exec nix develop -c zig build -Doptimize=Debug
+		;;
+	test)
+		exec ./test
+		;;
+esac

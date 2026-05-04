@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Benchmark suite stub. No benchmarks exist yet — this script will be fleshed
+# out at Phase 2 milestone 1 (cleanroom baseline JPEG) when we want to
+# compare pure-Zig against libjpeg-turbo via hyperfine.
+#
+# Per CLAUDE.md: benchmarks must run in ReleaseFast mode and assert the
+# binary does NOT contain the "DEBUG BUILD" banner.
+
+set -u
+
+cd "$(dirname "$0")"
+
+if ! command -v hyperfine >/dev/null 2>&1; then
+	# Outside the devShell: re-exec inside it so hyperfine is on PATH.
+	exec nix develop -c "$0" "$@"
+fi
+
+cat <<-EOF
+	No benchmarks defined yet.
+
+	Phase 1 is wrappers around libjpeg-turbo / openjpeg — no perf claims to
+	make until Phase 2 begins replacing them. This script is reserved.
+EOF
+exit 0

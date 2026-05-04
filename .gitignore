@@ -1,0 +1,14 @@
+.zig-cache/
+zig-cache/
+zig-out/
+result
+result-*
+.direnv/
+.DS_Store
+*.swp
+*.swo
+
+# Vault-symlinked personal references (not project assets — kept locally only)
+ZIG_RECENT_API_CHANGES.md
+ZIG_0.15_TO_0.16_MIGRATION.md
+jj_cheatsheet.md
