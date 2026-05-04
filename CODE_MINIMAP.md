@@ -39,23 +39,56 @@ on every file change. Goal: future agents skim this instead of grepping.
 
 ## Source — `src/`
 
-- `src/jpegz.zig` — public Zig core API stub. Defines:
-  - `version` (string, "0.0.1")
-  - `ColorSpace` enum (unknown/grayscale/rgb/ycbcr/cmyk/ycck/srgb/greyscale_jp2)
+- `src/jpegz.zig` — public Zig core API. Re-exports
+  `DecodeError` / `Severity` / `Variant` / `FindingCode` from
+  `core/errors.zig`. Defines public types:
+  - `version` (string, "0.1.0")
+  - `ColorSpace` (8-variant enum: source-encoded color space)
+  - `PixelLayout` (grayscale | rgb | cmyk — what the buffer contains
+    after conversion)
   - `Image` struct (`pixels`, `width`, `height`, `channels`,
-    `bits_per_sample`, `color_space`, `deinit`)
-  - `DecodeError` error set (NotImplemented, InvalidMarker,
-    UnsupportedPrecision, TruncatedStream, OutOfMemory)
-  - `decode(allocator, src) → DecodeError!Image` — stub returns
-    `error.NotImplemented`
-  - `jpeg2000` namespace with its own `decode(...)` stub
-  - inline `test "version is non-empty"`
+    `bits_per_sample`, `source_color_space`, `layout`,
+    `rowStride()`, `pixelsU16()`, `deinit(allocator)`)
+  - `ImageMetadata` (the same minus `pixels` — returned by
+    streaming-rows path)
+  - `RowCallback` (struct of `on_row: anyerror!void` + `ctx`)
+  - `Finding` (severity + code + offset + detail)
+  - `ValidationReport` (overall + variant + dimensions + findings;
+    `isValid()`, `deinit(allocator)`)
+  - Public functions: `decode`, `decodeStreamingRows`, `validate`,
+    `jpeg2000.decode`, `jpeg2000.validate`. `decode` delegates to
+    `ffi/libjpeg_wrapper.decode` (M1.3); the streaming and validate
+    paths are stubbed pending M1.5+.
+
+- `src/core/errors.zig` — single source of truth for error
+  vocabulary. Numeric values stable forever (wire format). Defines
+  `DecodeError`, `Severity`, `Variant`, `FindingCode`. Header
+  generator (M1.7) reads this at comptime; FFI mapper (M1.7) is an
+  exhaustive switch — drift is impossible.
+
+- `src/ffi/libjpeg_wrapper.zig` — Phase 1 wrapper around
+  libjpeg-turbo (BSD-3) for SOF0/1/2 (baseline / extended sequential
+  / progressive). cImport `jpeglib.h`. setjmp/longjmp error bridge
+  via `ErrorBridge` (extends `jpeg_error_mgr` with a `jmp_buf`).
+  `mapColorSpace` / `mapSourceColorSpace` translate libjpeg's
+  `J_COLOR_SPACE` to public `ColorSpace` + `PixelLayout`.
+  `classifyLibjpegError` maps libjpeg `msg_code` into `DecodeError`.
 
 ## Tests — `tests/`
 
-- `tests/unit/smoke.zig` — three tests: version exposed; `decode` stub
-  returns `NotImplemented`; `jpeg2000.decode` stub returns
-  `NotImplemented`. Imports `jpegz` via the build module.
+- `tests/unit/smoke.zig` — public-API wiring smoke tests. Confirms
+  version, `decode` rejects empty input, `jpeg2000.decode` is still
+  stubbed, validate stub returns empty PASS report,
+  `decodeStreamingRows` is stubbed, `FindingCode` numeric values
+  stable.
+- `tests/unit/decode.zig` — M1.3 decode tests. Imports baseline +
+  progressive fixtures via `@embedFile`. Asserts dimensions,
+  channels, layout, source color space, and rough pixel-quality
+  sanity (white pixel stays white).
+- `tests/unit/fixtures/baseline_2x2_rgb.jpg` — 2×2 RGB baseline JPEG
+  generated via `cjpeg -quality 90 -baseline` (690 B).
+- `tests/unit/fixtures/progressive_8x8_rgb.jpg` — 8×8 RGB progressive
+  JPEG generated via `cjpeg -progressive -quality 85` (520 B).
 
 ## Headers / FFI — `include/`
 

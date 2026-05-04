@@ -46,7 +46,8 @@
               export HOME=$TMPDIR
               export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
               mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
-              ${pkgs.lib.optionalString pkgs.stdenv.isDarwin "unset NIX_CFLAGS_COMPILE NIX_LDFLAGS"}
+              # Keep NIX_CFLAGS_COMPILE / NIX_LDFLAGS — Zig consults them
+              # to find libjpeg-turbo and openjpeg headers and libraries.
               zig build -Doptimize=${optimize} --prefix $out
             '';
             installPhase = "true"; # build.zig already installs to $out
@@ -64,7 +65,7 @@
             export HOME=$TMPDIR
             export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
             mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
-            ${pkgs.lib.optionalString pkgs.stdenv.isDarwin "unset NIX_CFLAGS_COMPILE NIX_LDFLAGS"}
+            # Keep NIX_CFLAGS_COMPILE / NIX_LDFLAGS for libjpeg-turbo / openjpeg.
             timeout 600 zig build test || { echo "Tests failed"; exit 1; }
           '';
           installPhase = ''

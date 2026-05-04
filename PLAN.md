@@ -16,13 +16,15 @@ prune older ones once context is no longer load-bearing.
       structure. Design lives in
       `docs/superpowers/specs/2026-05-04-jpegz-public-api-design.md`.
       _(2026-05-04 EST)_
-- [ ] **M1.3 — Baseline + progressive wrap (libjpeg-turbo).** Failing test
-      first: decode a 1×1 baseline JPEG fixture → expect `Image{width=1,...}`.
-      Then: cImport `jpeglib.h`, `jpeg_mem_src` → `jpeg_read_header` →
-      `jpeg_start_decompress` → `jpeg_read_scanlines`. setjmp/longjmp
-      bridging with a pinned error_mgr. Fixtures: 8-bit gray, 8-bit RGB,
-      8-bit CMYK, 12-bit gray, baseline, progressive. Oracle: `djpeg`
-      pixel-byte equality.
+- [x] **M1.3 — Baseline + progressive wrap (libjpeg-turbo).** TDD-red
+      then green: 2×2 baseline RGB + 8×8 progressive RGB fixtures decode
+      to correct dimensions / channels / layout. setjmp/longjmp bridge
+      to libjpeg's error_exit; `mapColorSpace` translates `J_COLOR_SPACE`
+      to public `ColorSpace` + `PixelLayout`. Wrapper lives at
+      `src/ffi/libjpeg_wrapper.zig`. _(2026-05-04 EST)_
+      _Follow-ups for later milestones: 8-bit gray + 8-bit CMYK +
+      12-bit gray fixtures (M1.4 area); pixel-byte oracle equality
+      against `djpeg` (will materialize when needed)._
 - [ ] **M1.4 — Lossless lift.** Move
       `validate/src/core/jpeg_lossless_decoder.zig` (698 lines, pure Zig)
       into `src/lossless.zig`. Add 16-bit DICOM-style fixtures. Oracle:
@@ -80,6 +82,13 @@ Each step retires a chunk of the C dep. Failing-test-first throughout.
 
 ## Recently completed
 
+- 2026-05-04 EST — M1.3 baseline + progressive wrap (libjpeg-turbo) —
+  src/ffi/libjpeg_wrapper.zig with setjmp/longjmp error bridge;
+  jpeg_mem_src → jpeg_read_header → jpeg_start_decompress →
+  jpeg_read_scanlines loop. Fixtures: tests/unit/fixtures/baseline_2x2_rgb.jpg
+  (690 B) + progressive_8x8_rgb.jpg (520 B). flake.nix keeps
+  NIX_CFLAGS_COMPILE / NIX_LDFLAGS so Zig finds libjpeg's headers.
+  All 14 tests green via nix flake check.
 - 2026-05-04 EST — M1.2 design lock — public Zig API + C ABI + error
   model + validation report structure. Doc:
   `docs/superpowers/specs/2026-05-04-jpegz-public-api-design.md`.

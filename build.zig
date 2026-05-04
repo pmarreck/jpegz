@@ -20,6 +20,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Link libjpeg-turbo (system; provided by Nix flake's buildInputs).
+    // The C `jpeglib.h` is reached via cImport in src/ffi/libjpeg_wrapper.zig.
+    jpegz_mod.linkSystemLibrary("jpeg", .{});
+    jpegz_mod.link_libc = true;
+
     const lib = b.addLibrary(.{
         .name = "jpegz",
         .linkage = .static,
@@ -28,22 +33,44 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(lib);
 
     // ============================================================
-    // Unit tests: tests/unit/smoke.zig
-    // The runner imports the core via `@import("jpegz")`.
+    // Test runner — three sources of tests:
+    //   1. tests/unit/smoke.zig   — public-API wiring
+    //   2. src/jpegz.zig          — inline tests (helpers, types)
+    //   3. src/core/errors.zig    — inline tests (numeric stability)
+    // The `test` step depends on all three; failure of any propagates.
     // ============================================================
+    const test_step = b.step("test", "Run unit tests");
+
+    // (1) Public smoke suite — imports `jpegz` like any consumer.
     const smoke_mod = b.createModule(.{
         .root_source_file = b.path("tests/unit/smoke.zig"),
         .target = target,
         .optimize = optimize,
     });
     smoke_mod.addImport("jpegz", jpegz_mod);
-
-    const unit_tests = b.addTest(.{
+    const smoke_tests = b.addTest(.{
         .name = "smoke",
         .root_module = smoke_mod,
     });
-    const run_unit_tests = b.addRunArtifact(unit_tests);
+    test_step.dependOn(&b.addRunArtifact(smoke_tests).step);
 
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_unit_tests.step);
+    // (2) Inline tests in the core module itself.
+    const jpegz_inline_tests = b.addTest(.{
+        .name = "jpegz_inline",
+        .root_module = jpegz_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(jpegz_inline_tests).step);
+
+    // (3) Decode test suite (M1.3 — baseline + progressive wrap).
+    const decode_mod = b.createModule(.{
+        .root_source_file = b.path("tests/unit/decode.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    decode_mod.addImport("jpegz", jpegz_mod);
+    const decode_tests = b.addTest(.{
+        .name = "decode",
+        .root_module = decode_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(decode_tests).step);
 }
