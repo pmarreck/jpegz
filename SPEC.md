@@ -82,41 +82,23 @@ step retires a chunk of the C dep.
 
 ## 2. ABI shape
 
-### Zig public API (sketch — refine via brainstorming)
+**Locked** as of 2026-05-04. See
+[`docs/superpowers/specs/2026-05-04-jpegz-public-api-design.md`](docs/superpowers/specs/2026-05-04-jpegz-public-api-design.md)
+for the full design (Zig API, C ABI, error model, ownership rules).
 
-```zig
-// Decoded image — caller owns the pixel buffer.
-pub const Image = struct {
-    pixels: []u8,
-    width: u32,
-    height: u32,
-    channels: u8,        // 1 = gray, 3 = RGB, 4 = CMYK
-    bits_per_sample: u8, // 8, 12, 16
-    color_space: ColorSpace,
-};
+The shape that landed differs from this section's earlier sketch in
+three ways:
 
-// === Baseline / Progressive / Arithmetic / Lossless / JPEG-LS ===
-pub fn decode(allocator: Allocator, source: Source) !Image;
-
-// Streaming variant — decodes scan-by-scan or MCU-row-by-MCU-row,
-// invoking callback. Caller never holds full pixel buffer.
-pub fn decodeStreaming(
-    allocator: Allocator,
-    source: Source,
-    callback: *const fn (RowCallback) anyerror!void,
-) !void;
-
-// Validation only — decodes through to verify integrity, discards
-// pixels. Returns a report.
-pub fn validate(allocator: Allocator, source: Source) !ValidationReport;
-
-// === JPEG 2000 (separate namespace) ===
-pub const jpeg2000 = struct {
-    pub fn decode(allocator: Allocator, source: Source) !Image;
-    pub fn decodeStreaming(...) !void;
-    pub fn validate(...) !ValidationReport;
-};
-```
+- **`data: []const u8`**, not a `Source` vtable. (validate's inbox
+  handoff argued this; jpegz files are small enough that streaming
+  `Source` doesn't pay off, and the underlying C wrappers materialize
+  bytes anyway.)
+- **Three decode modes (the trichotomy):** `decode` (whole image),
+  `decodeStreamingRows` (sequential / lossless / arithmetic only —
+  errors on progressive), `validate` (no pixels, accumulates findings).
+- **Structured `ValidationReport`** with `Severity` / `Variant` /
+  `FindingCode` enums (mirrors validate's vocabulary; consumers map
+  jpegz findings into their own report types).
 
 Use the same seekable `Source` abstraction tiffz uses (see
 `tiffz/SPEC.md` Appendix A's discussion of seekable Source vs forward

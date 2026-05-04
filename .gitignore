@@ -12,3 +12,7 @@ result-*
 ZIG_RECENT_API_CHANGES.md
 ZIG_0.15_TO_0.16_MIGRATION.md
 jj_cheatsheet.md
+
+# Cross-project agent inbox — transient incoming messages from sibling
+# projects' LLMs (per CLAUDE.md convention). Local-only working state.
+inbox/

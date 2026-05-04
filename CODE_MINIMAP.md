@@ -30,6 +30,13 @@ on every file change. Goal: future agents skim this instead of grepping.
 - `ZIG_RECENT_API_CHANGES.md` / `ZIG_0.15_TO_0.16_MIGRATION.md` — vault
   references on Zig API churn (we target 0.15.2; 0.16 is reference only).
 
+## Specs — `docs/superpowers/specs/`
+
+- `2026-05-04-jpegz-public-api-design.md` — frozen v1 public API
+  design (Zig + C ABI + error model + ValidationReport). Source of
+  truth for all M1.3+ implementation work. Supersedes the SPEC.md §2
+  inline sketch.
+
 ## Source — `src/`
 
 - `src/jpegz.zig` — public Zig core API stub. Defines:

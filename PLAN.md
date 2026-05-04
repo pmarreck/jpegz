@@ -11,12 +11,11 @@ prune older ones once context is no longer load-bearing.
       will auto-evaluate `packages.default` and `checks.{build,test}`.
       `build.zig` (ReleaseFast default), `src/jpegz.zig` core stub,
       `tests/unit/smoke.zig` green. _(2026-05-04 EST)_
-- [ ] **M1.2 — Brainstorm SPEC §9 open design questions.** Allocation strategy
-      (caller-allocates vs library-allocates; progressive scan-by-scan
-      callback shape), color-space conversion (RGB-default vs raw component
-      planes), DCT precision (fast/accurate/float modes exposed?), JP2
-      streaming (tile-per-callback vs whole-image-only Phase 1). Lock the
-      Zig public API + C ABI before writing FFI glue.
+- [x] **M1.2 — Brainstorm SPEC §9 open design questions.** Locked the
+      public Zig API, C ABI, error model, and validation report
+      structure. Design lives in
+      `docs/superpowers/specs/2026-05-04-jpegz-public-api-design.md`.
+      _(2026-05-04 EST)_
 - [ ] **M1.3 — Baseline + progressive wrap (libjpeg-turbo).** Failing test
       first: decode a 1×1 baseline JPEG fixture → expect `Image{width=1,...}`.
       Then: cImport `jpeglib.h`, `jpeg_mem_src` → `jpeg_read_header` →
@@ -81,6 +80,12 @@ Each step retires a chunk of the C dep. Failing-test-first throughout.
 
 ## Recently completed
 
+- 2026-05-04 EST — M1.2 design lock — public Zig API + C ABI + error
+  model + validation report structure. Doc:
+  `docs/superpowers/specs/2026-05-04-jpegz-public-api-design.md`.
+  Trichotomy: decode / decodeStreamingRows (sequential only) / validate.
+  `[]const u8` parameter type (per validate inbox). Build-generated
+  C errno header (tiffz pattern).
 - 2026-05-04 EST — M1.1 scaffold (flake.nix, build.zig, src/jpegz.zig
   stub, tests/unit/smoke.zig, ./build, ./test, ./bm, PLAN.md,
   CODE_MINIMAP.md, PROJECT_OVERVIEW.md).
