@@ -57,10 +57,21 @@
         # native targets, but when we cross-target (musl on Linux), those
         # flags point at glibc-built libs and Zig won't find anything.
         # Pass --search-prefix explicitly so Zig finds the musl deps.
+        #
+        # Multi-output trap: `pkgsStatic.libjpeg.outPath` (the default) on
+        # libjpeg-turbo resolves to the `bin` output, NOT the lib output.
+        # That's a multi-output package surprise — use `.out` explicitly to
+        # get the library directory containing libjpeg.a / lib/libjpeg.so.
+        # Headers live in `.dev` (we link headers via cImport's host search
+        # path which is fine; only library lookup needs the explicit prefix).
         # On macOS this is harmless (Zig already finds them via NIX_LDFLAGS).
         searchPrefixFlags = pkgs.lib.concatStringsSep " " [
-          "--search-prefix ${libjpegTurbo}"
-          "--search-prefix ${openjpegPkg}"
+          "--search-prefix ${libjpegTurbo.out}"
+          "--search-prefix ${openjpegPkg.out}"
+          # Some headers may live in -dev outputs; include those too so
+          # cImport's <jpeglib.h> / <openjpeg.h> resolve when targeting musl.
+          "--search-prefix ${libjpegTurbo.dev or libjpegTurbo}"
+          "--search-prefix ${openjpegPkg.dev or openjpegPkg}"
         ];
 
         commonNativeBuildInputs = [ zigPkg pkgs.git pkgs.cacert ];
