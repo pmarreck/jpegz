@@ -18,13 +18,40 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
+        isDarwin = pkgs.stdenv.isDarwin;
+        isLinux = pkgs.stdenv.isLinux;
 
-        # Pinned tool versions for the build sandbox.
-        # libjpeg in nixpkgs is libjpeg-turbo (BSD-3); openjpeg is BSD-2.
-        # Both MIT-compatible per LICENSING_NOTES.md.
         zigPkg = zig-overlay.packages.${system}."0.15.2";
-        libjpegTurbo = pkgs.libjpeg;  # libjpeg-turbo 3.1.x
-        openjpegPkg = pkgs.openjpeg;  # 2.5.x
+
+        # On Linux we target musl explicitly so both the production lib
+        # AND the test binaries are fully statically linked. Two reasons:
+        #
+        #   (1) zig-overlay ships vanilla (un-wrapped) Zig. Inside the
+        #       Nix sandbox, its host-ABI / dynamic-linker detection
+        #       fails ("FileNotFound, falling back to default ABI and
+        #       dynamic linker"). The fallback is broken — test binaries
+        #       can't find their interpreter at run time. Build of a
+        #       static `.a` "succeeds" only because archives don't need
+        #       a linker; an executable production binary (the C CLI in
+        #       M1.7+) would hit exactly the same wall.
+        #
+        #   (2) The portfolio convention favors static Linux binaries
+        #       (CLAUDE.md "Better static linking support"). tiffz uses
+        #       the same musl pattern.
+        #
+        # macOS handles its own dynamic linker via apple-sdk and the
+        # native target works there.
+        zigTarget =
+          if system == "x86_64-linux"      then "x86_64-linux-musl"
+          else if system == "aarch64-linux" then "aarch64-linux-musl"
+          else null;
+        zigTargetFlag = if zigTarget == null then "" else "-Dtarget=${zigTarget}";
+
+        # On Linux we need musl-linked C deps to match the Zig target.
+        # nixpkgs provides these via `pkgsStatic` — same source versions,
+        # built against musl + statically linkable.
+        libjpegTurbo = if isLinux then pkgs.pkgsStatic.libjpeg else pkgs.libjpeg;
+        openjpegPkg  = if isLinux then pkgs.pkgsStatic.openjpeg else pkgs.openjpeg;
 
         commonNativeBuildInputs = [ zigPkg pkgs.git pkgs.cacert ];
         commonBuildInputs = [ libjpegTurbo openjpegPkg ];
@@ -40,7 +67,7 @@
             src = ./.;
             nativeBuildInputs = commonNativeBuildInputs;
             buildInputs = commonBuildInputs
-              ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.apple-sdk ];
+              ++ pkgs.lib.optionals isDarwin [ pkgs.apple-sdk ];
             dontConfigure = true;
             buildPhase = ''
               export HOME=$TMPDIR
@@ -48,7 +75,7 @@
               mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
               # Keep NIX_CFLAGS_COMPILE / NIX_LDFLAGS — Zig consults them
               # to find libjpeg-turbo and openjpeg headers and libraries.
-              zig build -Doptimize=${optimize} --prefix $out
+              zig build -Doptimize=${optimize} ${zigTargetFlag} --prefix $out
             '';
             installPhase = "true"; # build.zig already installs to $out
           };
@@ -59,14 +86,14 @@
           src = ./.;
           nativeBuildInputs = commonNativeBuildInputs;
           buildInputs = commonBuildInputs
-            ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.apple-sdk ];
+            ++ pkgs.lib.optionals isDarwin [ pkgs.apple-sdk ];
           dontConfigure = true;
           buildPhase = ''
             export HOME=$TMPDIR
             export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
             mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
             # Keep NIX_CFLAGS_COMPILE / NIX_LDFLAGS for libjpeg-turbo / openjpeg.
-            timeout 600 zig build test || { echo "Tests failed"; exit 1; }
+            timeout 600 zig build test ${zigTargetFlag} || { echo "Tests failed"; exit 1; }
           '';
           installPhase = ''
             mkdir -p $out
@@ -83,12 +110,12 @@
         };
 
         devShells.default = pkgs.mkShell {
-          packages = commonNativeBuildInputs ++ commonBuildInputs ++ [
-            pkgs.hyperfine
-            pkgs.pkg-config
-          ];
+          # Dev shell uses the host's default libjpeg/openjpeg (glibc on
+          # Linux, native on macOS). The musl pinning above is sandbox-only
+          # — interactive dev doesn't need it.
+          packages = [ zigPkg pkgs.git pkgs.cacert pkgs.libjpeg pkgs.openjpeg pkgs.hyperfine pkgs.pkg-config ];
           shellHook = ''
-            echo "jpegz devShell — zig $(zig version), libjpeg-turbo ${libjpegTurbo.version}, openjpeg ${openjpegPkg.version}"
+            echo "jpegz devShell — zig $(zig version), libjpeg-turbo ${pkgs.libjpeg.version}, openjpeg ${pkgs.openjpeg.version}"
           '';
         };
 
