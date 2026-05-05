@@ -51,10 +51,14 @@ prune older ones once context is no longer load-bearing.
       failures as findings) deferred to M1.5b once we have a real
       consumer scenario asking for it; current walker catches all
       structural issues without it._
-- [ ] **M1.6 — JPEG 2000 wrap (openjpeg).** `jpegz.jpeg2000.decode` calls
-      openjpeg via FFI. Fixtures: lossy + 5/3 lossless wavelet + 9/7
-      lossless wavelet, tile and codeblock variations. Oracle:
-      `opj_decompress`.
+- [x] **M1.6 — JPEG 2000 wrap (openjpeg).** TDD-red→green. Custom
+      memory stream (read/skip/seek callbacks over `MemSource`),
+      auto-detect JP2 box vs raw J2K codestream, OPJ_INT32 → packed
+      `[]u8` (or `[]u16` for >8-bit). 8×8 RGB lossy fixture decodes
+      with all components within 16 of input values. _(2026-05-05 EST)_
+      _Component-subsampling support, lossless 5/3 + 9/7 fixtures, and
+      additional precisions captured as M1.6b once a real consumer
+      asks._
 - [ ] **M1.7 — C FFI.** Hand-curated `include/jpegz_core.h`. Validate via
       a C smoke test that `jpegz_decode` works end-to-end.
 - [ ] **M1.8 — `validate` integration.** Replace its
@@ -100,6 +104,11 @@ Each step retires a chunk of the C dep. Failing-test-first throughout.
 
 ## Recently completed
 
+- 2026-05-05 EST — M1.6 JPEG 2000 wrap (openjpeg) — custom memory
+  stream over MemSource (read/skip/seek callbacks), JP2-vs-J2K
+  magic-byte autodetect, OPJ_INT32 → []u8 (or host-endian []u16)
+  packing. 8×8 lossy RGB fixture round-trips within 16/255 of input.
+  23/23 tests green.
 - 2026-05-05 EST — M1.5 validate-only API — hand-written marker walker
   in src/core/validator.zig (pure Zig, no FFI). Walks SOI/segments/SOS/
   entropy/EOI, accumulates findings, never fails-fast. 6 green tests:

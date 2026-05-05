@@ -227,9 +227,7 @@ pub fn validate(
 /// arithmetic).
 pub const jpeg2000 = struct {
     pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
-        _ = allocator;
-        _ = data;
-        return error.NotImplemented;
+        return @import("ffi/openjpeg_wrapper.zig").decode(allocator, data);
     }
 
     pub fn validate(

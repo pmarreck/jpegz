@@ -20,9 +20,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Link libjpeg-turbo (system; provided by Nix flake's buildInputs).
-    // The C `jpeglib.h` is reached via cImport in src/ffi/libjpeg_wrapper.zig.
+    // Link C deps (system; provided by Nix flake's buildInputs):
+    //   - libjpeg-turbo (jpeglib.h, used by src/ffi/libjpeg_wrapper.zig)
+    //   - openjpeg     (openjpeg.h, used by src/ffi/openjpeg_wrapper.zig)
     jpegz_mod.linkSystemLibrary("jpeg", .{});
+    jpegz_mod.linkSystemLibrary("openjp2", .{});
     jpegz_mod.link_libc = true;
 
     const lib = b.addLibrary(.{
@@ -86,4 +88,17 @@ pub fn build(b: *std.Build) void {
         .root_module = validate_mod,
     });
     test_step.dependOn(&b.addRunArtifact(validate_tests).step);
+
+    // (5) JPEG 2000 decode test suite (M1.6 — openjpeg wrap).
+    const decode_jp2_mod = b.createModule(.{
+        .root_source_file = b.path("tests/unit/decode_jp2.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    decode_jp2_mod.addImport("jpegz", jpegz_mod);
+    const decode_jp2_tests = b.addTest(.{
+        .name = "decode_jp2",
+        .root_module = decode_jp2_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(decode_jp2_tests).step);
 }

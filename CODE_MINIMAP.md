@@ -82,6 +82,15 @@ on every file change. Goal: future agents skim this instead of grepping.
   `J_COLOR_SPACE` to public `ColorSpace` + `PixelLayout`.
   `classifyLibjpegError` maps libjpeg `msg_code` into `DecodeError`.
 
+- `src/ffi/openjpeg_wrapper.zig` — Phase 1 wrapper around openjpeg
+  (BSD-2) for `jpegz.jpeg2000.decode`. cImport `openjpeg.h`. Custom
+  memory stream callbacks (`memRead` / `memSkip` / `memSeek`) over a
+  `MemSource` struct hold the input buffer. `detectCodec` magic-bytes
+  JP2 box vs raw J2K codestream. After decode, OPJ_INT32-per-component
+  data is packed into interleaved `[]u8` (or host-endian `[]u16` for
+  precision > 8). All openjpeg log handlers suppressed for clean test
+  stderr.
+
 ## Tests — `tests/`
 
 - `tests/unit/smoke.zig` — public-API wiring smoke tests. Confirms
@@ -97,6 +106,12 @@ on every file change. Goal: future agents skim this instead of grepping.
   generated via `cjpeg -quality 90 -baseline` (690 B).
 - `tests/unit/fixtures/progressive_8x8_rgb.jpg` — 8×8 RGB progressive
   JPEG generated via `cjpeg -progressive -quality 85` (520 B).
+- `tests/unit/decode_jp2.zig` — M1.6 JPEG 2000 decode tests. Three
+  tests: 8×8 RGB JP2 round-trips within 16/255 of input, plus reject
+  paths for empty and non-JP2 input.
+- `tests/unit/fixtures/jp2_8x8_rgb.jp2` — 8×8 RGB JP2 file (lossy 9/7
+  wavelet, 3 resolutions) generated via `opj_compress -n 3 -r 5`
+  (238 B). Source pixels: uniform R=0x80 G=0x40 B=0xA0.
 - `tests/unit/validate.zig` — M1.5 validate suite. Six tests covering
   clean PASS for baseline/progressive/lossless plus FAIL for
   truncation, empty input, and non-JPEG bytes.

@@ -17,10 +17,10 @@ test "decode rejects empty data" {
     );
 }
 
-test "jpeg2000.decode stub returns NotImplemented" {
+test "jpeg2000.decode rejects empty data" {
     const empty: []const u8 = &[_]u8{};
     try std.testing.expectError(
-        error.NotImplemented,
+        error.TruncatedStream,
         jpegz.jpeg2000.decode(std.testing.allocator, empty),
     );
 }
