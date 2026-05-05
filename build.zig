@@ -27,6 +27,20 @@ pub fn build(b: *std.Build) void {
     jpegz_mod.linkSystemLibrary("openjp2", .{});
     jpegz_mod.link_libc = true;
 
+    // Optional explicit include / library paths from the flake. When
+    // cross-targeting (musl on Linux), Zig's host NIX_CFLAGS / NIX_LDFLAGS
+    // don't apply; the flake passes the right pkgsStatic paths via these
+    // -D options. On native builds these are unset and Zig finds the
+    // libraries via the host wrapper-cc as usual.
+    if (b.option([]const u8, "libjpeg-include", "Path to libjpeg headers")) |p|
+        jpegz_mod.addIncludePath(.{ .cwd_relative = p });
+    if (b.option([]const u8, "libjpeg-lib", "Path to libjpeg library directory")) |p|
+        jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
+    if (b.option([]const u8, "openjpeg-include", "Path to openjpeg headers (incl. version subdir)")) |p|
+        jpegz_mod.addIncludePath(.{ .cwd_relative = p });
+    if (b.option([]const u8, "openjpeg-lib", "Path to openjpeg library directory")) |p|
+        jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
+
     const lib = b.addLibrary(.{
         .name = "jpegz",
         .linkage = .static,

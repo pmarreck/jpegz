@@ -53,25 +53,23 @@
         libjpegTurbo = if isLinux then pkgs.pkgsStatic.libjpeg else pkgs.libjpeg;
         openjpegPkg  = if isLinux then pkgs.pkgsStatic.openjpeg else pkgs.openjpeg;
 
-        # Zig's `linkSystemLibrary("jpeg")` honors host NIX_LDFLAGS for
-        # native targets, but when we cross-target (musl on Linux), those
-        # flags point at glibc-built libs and Zig won't find anything.
-        # Pass --search-prefix explicitly so Zig finds the musl deps.
+        # When cross-targeting (musl on Linux), Zig's host NIX_LDFLAGS /
+        # NIX_CFLAGS don't apply, and `--search-prefix` only handles
+        # standard `<prefix>/{lib,include}` layouts. openjpeg installs
+        # its headers under `include/openjpeg-2.5/openjpeg.h` (versioned
+        # subdir) — so a generic `--search-prefix ${openjpeg.dev}`
+        # won't reach them. Pass include + library paths explicitly via
+        # `-D` build options instead.
         #
-        # Multi-output trap: `pkgsStatic.libjpeg.outPath` (the default) on
-        # libjpeg-turbo resolves to the `bin` output, NOT the lib output.
-        # That's a multi-output package surprise — use `.out` explicitly to
-        # get the library directory containing libjpeg.a / lib/libjpeg.so.
-        # Headers live in `.dev` (we link headers via cImport's host search
-        # path which is fine; only library lookup needs the explicit prefix).
-        # On macOS this is harmless (Zig already finds them via NIX_LDFLAGS).
-        searchPrefixFlags = pkgs.lib.concatStringsSep " " [
-          "--search-prefix ${libjpegTurbo.out}"
-          "--search-prefix ${openjpegPkg.out}"
-          # Some headers may live in -dev outputs; include those too so
-          # cImport's <jpeglib.h> / <openjpeg.h> resolve when targeting musl.
-          "--search-prefix ${libjpegTurbo.dev or libjpegTurbo}"
-          "--search-prefix ${openjpegPkg.dev or openjpegPkg}"
+        # Multi-output traps:
+        # - pkgsStatic.libjpeg's default output is `bin`, NOT `out`.
+        #   Use `.out` for libs, `.dev` for headers.
+        # - openjpeg's headers nest under `include/openjpeg-2.5/`.
+        depFlags = pkgs.lib.concatStringsSep " " [
+          "-Dlibjpeg-include=${libjpegTurbo.dev}/include"
+          "-Dlibjpeg-lib=${libjpegTurbo.out}/lib"
+          "-Dopenjpeg-include=${openjpegPkg.dev}/include/openjpeg-2.5"
+          "-Dopenjpeg-lib=${openjpegPkg.out}/lib"
         ];
 
         commonNativeBuildInputs = [ zigPkg pkgs.git pkgs.cacert ];
@@ -96,7 +94,7 @@
               mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
               # Keep NIX_CFLAGS_COMPILE / NIX_LDFLAGS — Zig consults them
               # to find libjpeg-turbo and openjpeg headers and libraries.
-              zig build -Doptimize=${optimize} ${zigTargetFlag} ${searchPrefixFlags} --prefix $out
+              zig build -Doptimize=${optimize} ${zigTargetFlag} ${depFlags} --prefix $out
             '';
             installPhase = "true"; # build.zig already installs to $out
           };
@@ -114,7 +112,7 @@
             export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
             mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
             # Keep NIX_CFLAGS_COMPILE / NIX_LDFLAGS for libjpeg-turbo / openjpeg.
-            timeout 600 zig build test ${zigTargetFlag} ${searchPrefixFlags} || { echo "Tests failed"; exit 1; }
+            timeout 600 zig build test ${zigTargetFlag} ${depFlags} || { echo "Tests failed"; exit 1; }
           '';
           installPhase = ''
             mkdir -p $out

@@ -1,0 +1,178 @@
+/* jpegz_core.h — public C ABI for jpegz.
+ *
+ * Project convention: this header is the real public API. The in-tree
+ * C CLI dogfoods through it; every external consumer (validate, tiffz,
+ * etc.) uses it. See README.md and
+ * docs/superpowers/specs/2026-05-04-jpegz-public-api-design.md.
+ *
+ * Buffer-lifetime contract: every function that accepts a (data, len)
+ * pair borrows the buffer for the call's duration only. Caller may
+ * free / reuse the buffer the moment the function returns.
+ *
+ * Thread safety: every function is reentrant; no shared state except
+ * the thread-local last-error string. Two threads calling jpegz
+ * concurrently cannot corrupt each other.
+ *
+ * Memory: structs containing pointers (jpegz_image_t,
+ * jpegz_validation_report_t) own those pointers. Free them via the
+ * matching jpegz_*_free() function. Do NOT free pointers individually.
+ *
+ * License: MIT. See LICENSE.
+ */
+
+#ifndef JPEGZ_CORE_H
+#define JPEGZ_CORE_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+/* Auto-generated from src/core/errors.zig; emits jpegz_status_t and
+ * jpegz_finding_code_t. Built at flake-time by tools/gen_c_header.zig. */
+#include "jpegz_errno.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ── Versioning ────────────────────────────────────────────────── */
+
+#define JPEGZ_VERSION_MAJOR 0
+#define JPEGZ_VERSION_MINOR 1
+#define JPEGZ_VERSION_PATCH 0
+
+/* Returns a NUL-terminated, statically-allocated version string.
+ * Pointer is valid for the lifetime of the loaded library. */
+const char *jpegz_version(void);
+
+/* ── Diagnostics ───────────────────────────────────────────────── */
+
+/* Thread-local human-readable detail for the most recent error.
+ * Returns a NUL-terminated UTF-8 string with thread-local lifetime —
+ * valid until the next jpegz call on this thread. Returns "" (not
+ * NULL) when the last call succeeded. */
+const char *jpegz_last_error_message(void);
+
+/* ── Pixel data ────────────────────────────────────────────────── */
+
+typedef enum {
+    JPEGZ_LAYOUT_GRAYSCALE = 0,
+    JPEGZ_LAYOUT_RGB       = 1,
+    JPEGZ_LAYOUT_CMYK      = 2,
+} jpegz_pixel_layout_t;
+
+typedef enum {
+    JPEGZ_CS_UNKNOWN        = 0,
+    JPEGZ_CS_GRAYSCALE      = 1,
+    JPEGZ_CS_RGB            = 2,
+    JPEGZ_CS_YCBCR          = 3,
+    JPEGZ_CS_CMYK           = 4,
+    JPEGZ_CS_YCCK           = 5,
+    JPEGZ_CS_SRGB           = 6,    /* JP2 enumerated colorspace 16 */
+    JPEGZ_CS_GREYSCALE_JP2  = 7,    /* JP2 enumerated colorspace 17 */
+} jpegz_color_space_t;
+
+typedef struct {
+    /* For 8-bit images: pixels is a uint8_t array of size
+     *   width * height * channels.
+     * For 12/16-bit images: pixels is a uint8_t-aliased uint16_t array
+     *   of size 2 * width * height * channels (host endianness; library
+     *   guarantees the high bits are zero on <16-bit precision).
+     * Free via jpegz_image_free(). */
+    uint8_t              *pixels;
+    size_t                pixels_len;       /* size of the buffer in bytes */
+    uint32_t              width;
+    uint32_t              height;
+    uint8_t               channels;         /* 1 (gray) | 3 (RGB) | 4 (CMYK) */
+    uint8_t               bits_per_sample;  /* 8 | 12 | 16 */
+    jpegz_color_space_t   source_color_space;
+    jpegz_pixel_layout_t  layout;
+} jpegz_image_t;
+
+/* Free pixels and reset the struct to zero. Safe to call on a
+ * zero-initialized struct (no-op). */
+void jpegz_image_free(jpegz_image_t *image);
+
+/* Decode any T.81 / T.87 JPEG (sequential / progressive / lossless /
+ * arithmetic / JPEG-LS) into a fully-realized image. */
+jpegz_status_t jpegz_decode(
+    const uint8_t  *data,
+    size_t          len,
+    jpegz_image_t  *out_image
+);
+
+/* Decode JPEG 2000 (J2K codestream or JP2 file) into a fully-realized
+ * image. Whole-image only in v1; tile/resolution streaming = v2. */
+jpegz_status_t jpegz_jp2_decode(
+    const uint8_t  *data,
+    size_t          len,
+    jpegz_image_t  *out_image
+);
+
+/* ── Validation ────────────────────────────────────────────────── */
+
+typedef enum {
+    JPEGZ_SEVERITY_PASS = 0,
+    JPEGZ_SEVERITY_INFO = 1,
+    JPEGZ_SEVERITY_WARN = 2,
+    JPEGZ_SEVERITY_FAIL = 3,
+} jpegz_severity_t;
+
+typedef enum {
+    JPEGZ_VARIANT_UNKNOWN                 = 0,
+    JPEGZ_VARIANT_BASELINE_HUFFMAN        = 1,
+    JPEGZ_VARIANT_EXTENDED_HUFFMAN        = 2,
+    JPEGZ_VARIANT_PROGRESSIVE_HUFFMAN     = 3,
+    JPEGZ_VARIANT_LOSSLESS_HUFFMAN        = 4,
+    JPEGZ_VARIANT_BASELINE_ARITHMETIC     = 5,
+    JPEGZ_VARIANT_PROGRESSIVE_ARITHMETIC  = 6,
+    JPEGZ_VARIANT_LOSSLESS_ARITHMETIC     = 7,
+    JPEGZ_VARIANT_JPEGLS                  = 8,
+    JPEGZ_VARIANT_JPEG2000                = 9,
+} jpegz_variant_t;
+
+typedef struct {
+    jpegz_severity_t      severity;
+    jpegz_finding_code_t  code;
+    /* INT64_MIN means "not applicable / unknown"; any other value is a
+     * legitimate byte offset into `data`. (Distinguishes from offset 0.) */
+    int64_t               offset;
+    /* NUL-terminated, owned by the report; freed by
+     * jpegz_validation_report_free. NULL means "no detail string". */
+    const char           *detail;
+} jpegz_finding_t;
+
+typedef struct {
+    jpegz_severity_t       overall;
+    jpegz_variant_t        variant;
+    /* width/height: 0 means "not parsed". (No real JPEG is 0×0.) */
+    uint32_t               width;
+    uint32_t               height;
+    /* Caller-readable; do not modify. Free via
+     * jpegz_validation_report_free. */
+    const jpegz_finding_t *findings;
+    size_t                 findings_len;
+} jpegz_validation_report_t;
+
+/* Free findings array and reset the struct to zero. Safe to call on
+ * a zero-initialized struct (no-op). */
+void jpegz_validation_report_free(jpegz_validation_report_t *report);
+
+/* Returns JPEGZ_OK with a populated report (even if overall == FAIL).
+ * Returns JPEGZ_ERR_OUT_OF_MEMORY only on allocation failure. */
+jpegz_status_t jpegz_validate(
+    const uint8_t              *data,
+    size_t                      len,
+    jpegz_validation_report_t  *out_report
+);
+
+jpegz_status_t jpegz_jp2_validate(
+    const uint8_t              *data,
+    size_t                      len,
+    jpegz_validation_report_t  *out_report
+);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
+
+#endif /* JPEGZ_CORE_H */
