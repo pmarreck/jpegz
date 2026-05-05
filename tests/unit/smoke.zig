@@ -25,14 +25,15 @@ test "jpeg2000.decode stub returns NotImplemented" {
     );
 }
 
-test "validate stub returns empty PASS report" {
+test "validate empty input fails fast at missing_soi" {
+    // Smoke: just confirms validate is wired and returns a freeable
+    // report. Detailed scenarios live in tests/unit/validate.zig.
     const empty: []const u8 = &[_]u8{};
     var report = try jpegz.validate(std.testing.allocator, empty);
     defer report.deinit(std.testing.allocator);
-    try std.testing.expectEqual(jpegz.Severity.pass, report.overall);
+    try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
     try std.testing.expectEqual(jpegz.Variant.unknown, report.variant);
-    try std.testing.expectEqual(@as(usize, 0), report.findings.items.len);
-    try std.testing.expect(report.isValid());
+    try std.testing.expect(report.findings.items.len > 0);
 }
 
 test "decodeStreamingRows stub returns NotImplemented" {

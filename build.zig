@@ -73,4 +73,17 @@ pub fn build(b: *std.Build) void {
         .root_module = decode_mod,
     });
     test_step.dependOn(&b.addRunArtifact(decode_tests).step);
+
+    // (4) Validate test suite (M1.5 — hand-written marker walker).
+    const validate_mod = b.createModule(.{
+        .root_source_file = b.path("tests/unit/validate.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    validate_mod.addImport("jpegz", jpegz_mod);
+    const validate_tests = b.addTest(.{
+        .name = "validate",
+        .root_module = validate_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(validate_tests).step);
 }

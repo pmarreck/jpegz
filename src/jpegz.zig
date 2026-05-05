@@ -215,17 +215,7 @@ pub fn validate(
     allocator: Allocator,
     data: []const u8,
 ) error{OutOfMemory}!ValidationReport {
-    _ = data;
-    // Phase-1 stub: caller gets an empty report. Real validation
-    // wired in M1.5.
-    _ = allocator;
-    return ValidationReport{
-        .overall = .pass,
-        .variant = .unknown,
-        .width = null,
-        .height = null,
-        .findings = .empty,
-    };
+    return @import("core/validator.zig").validate(allocator, data);
 }
 
 // ─────────────────────────────────────────────────────────────────────

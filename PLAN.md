@@ -41,9 +41,16 @@ prune older ones once context is no longer load-bearing.
       the marker, route to a sibling `decode16` path that allocates `[]u16`
       pixel buffers (matches design's `bits_per_sample = 16` shape).
       Fixtures: 16-bit grayscale lossless + 12-bit grayscale lossless.
-- [ ] **M1.5 — `validate`-only API.** `jpegz.validate(allocator, src) →
-      ValidationReport`. Decode through, discard pixels, return report.
-      This is the path `validate` actually consumes.
+- [x] **M1.5 — `validate`-only API.** Hand-written marker walker in
+      `src/core/validator.zig` (pure Zig, no FFI). Walks SOI → segments
+      → SOS → entropy → EOI, classifies variant from SOFn, accumulates
+      findings (does NOT fail-fast). Six green tests covering clean
+      baseline / progressive / lossless and three failure modes
+      (truncation, missing SOI, garbage input). _(2026-05-05 EST)_
+      _Codec-level integrity (run libjpeg-turbo decode and capture
+      failures as findings) deferred to M1.5b once we have a real
+      consumer scenario asking for it; current walker catches all
+      structural issues without it._
 - [ ] **M1.6 — JPEG 2000 wrap (openjpeg).** `jpegz.jpeg2000.decode` calls
       openjpeg via FFI. Fixtures: lossy + 5/3 lossless wavelet + 9/7
       lossless wavelet, tile and codeblock variations. Oracle:
@@ -93,6 +100,11 @@ Each step retires a chunk of the C dep. Failing-test-first throughout.
 
 ## Recently completed
 
+- 2026-05-05 EST — M1.5 validate-only API — hand-written marker walker
+  in src/core/validator.zig (pure Zig, no FFI). Walks SOI/segments/SOS/
+  entropy/EOI, accumulates findings, never fails-fast. 6 green tests:
+  baseline/progressive/lossless clean PASS plus truncation/missing-SOI/
+  garbage FAIL paths. 20/20 tests across the whole suite.
 - 2026-05-05 EST — M1.4 lossless lift (8-bit) — libjpeg-turbo 3.1.4
   handles SOF3 transparently via the same scanline API. 4×4 8-bit gray
   fixture round-trips byte-exact. Investigation revealed validate's

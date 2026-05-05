@@ -66,6 +66,14 @@ on every file change. Goal: future agents skim this instead of grepping.
   generator (M1.7) reads this at comptime; FFI mapper (M1.7) is an
   exhaustive switch — drift is impossible.
 
+- `src/core/validator.zig` — hand-written marker-chain walker (M1.5).
+  Pure Zig, no FFI. Public `validate(allocator, data)` walks
+  SOI/segments/SOS/entropy/EOI, classifies the variant from SOFn,
+  emits findings (missing markers, truncation, bad lengths, precision
+  issues, arithmetic-coding info, etc.). Designed to be the seed for
+  Phase-2 cleanroom parsing — its marker-parse machinery will be
+  shared once the cleanroom decoder lands codec by codec.
+
 - `src/ffi/libjpeg_wrapper.zig` — Phase 1 wrapper around
   libjpeg-turbo (BSD-3) for SOF0/1/2 (baseline / extended sequential
   / progressive). cImport `jpeglib.h`. setjmp/longjmp error bridge
@@ -89,6 +97,9 @@ on every file change. Goal: future agents skim this instead of grepping.
   generated via `cjpeg -quality 90 -baseline` (690 B).
 - `tests/unit/fixtures/progressive_8x8_rgb.jpg` — 8×8 RGB progressive
   JPEG generated via `cjpeg -progressive -quality 85` (520 B).
+- `tests/unit/validate.zig` — M1.5 validate suite. Six tests covering
+  clean PASS for baseline/progressive/lossless plus FAIL for
+  truncation, empty input, and non-JPEG bytes.
 - `tests/unit/fixtures/lossless_4x4_gray8.jpg` — 4×4 8-bit grayscale
   lossless (SOF3) JPEG generated via `cjpeg -lossless 1` (69 B).
   All input pixels are 0x80; round-trip-exact decode confirms the
