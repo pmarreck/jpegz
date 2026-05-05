@@ -53,6 +53,16 @@
         libjpegTurbo = if isLinux then pkgs.pkgsStatic.libjpeg else pkgs.libjpeg;
         openjpegPkg  = if isLinux then pkgs.pkgsStatic.openjpeg else pkgs.openjpeg;
 
+        # Zig's `linkSystemLibrary("jpeg")` honors host NIX_LDFLAGS for
+        # native targets, but when we cross-target (musl on Linux), those
+        # flags point at glibc-built libs and Zig won't find anything.
+        # Pass --search-prefix explicitly so Zig finds the musl deps.
+        # On macOS this is harmless (Zig already finds them via NIX_LDFLAGS).
+        searchPrefixFlags = pkgs.lib.concatStringsSep " " [
+          "--search-prefix ${libjpegTurbo}"
+          "--search-prefix ${openjpegPkg}"
+        ];
+
         commonNativeBuildInputs = [ zigPkg pkgs.git pkgs.cacert ];
         commonBuildInputs = [ libjpegTurbo openjpegPkg ];
 
@@ -75,7 +85,7 @@
               mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
               # Keep NIX_CFLAGS_COMPILE / NIX_LDFLAGS — Zig consults them
               # to find libjpeg-turbo and openjpeg headers and libraries.
-              zig build -Doptimize=${optimize} ${zigTargetFlag} --prefix $out
+              zig build -Doptimize=${optimize} ${zigTargetFlag} ${searchPrefixFlags} --prefix $out
             '';
             installPhase = "true"; # build.zig already installs to $out
           };
@@ -93,7 +103,7 @@
             export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
             mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
             # Keep NIX_CFLAGS_COMPILE / NIX_LDFLAGS for libjpeg-turbo / openjpeg.
-            timeout 600 zig build test ${zigTargetFlag} || { echo "Tests failed"; exit 1; }
+            timeout 600 zig build test ${zigTargetFlag} ${searchPrefixFlags} || { echo "Tests failed"; exit 1; }
           '';
           installPhase = ''
             mkdir -p $out
