@@ -86,6 +86,45 @@ test "decode 4x4 8-bit grayscale lossless (SOF3) JPEG" {
     }
 }
 
+/// 4×4 12-bit grayscale lossless. precision 12, all 0x800.
+const fixture_lossless_4x4_gray12 = @embedFile("fixtures/lossless_4x4_gray12.jpg");
+
+test "decode 4x4 12-bit grayscale lossless (SOF3) JPEG" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_lossless_4x4_gray12);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 1), image.channels);
+    try std.testing.expectEqual(@as(u8, 12), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.grayscale, image.layout);
+    // []u16 view: 4*4 = 16 samples, 32 bytes total.
+    try std.testing.expectEqual(@as(usize, 32), image.pixels.len);
+    const px = image.pixelsU16();
+    try std.testing.expectEqual(@as(usize, 16), px.len);
+    for (px) |s| try std.testing.expectEqual(@as(u16, 0x800), s);
+}
+
+/// 4×4 16-bit grayscale lossless. precision 16, all 0x8000.
+const fixture_lossless_4x4_gray16 = @embedFile("fixtures/lossless_4x4_gray16.jpg");
+
+test "decode 4x4 16-bit grayscale lossless (SOF3) JPEG" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_lossless_4x4_gray16);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 1), image.channels);
+    try std.testing.expectEqual(@as(u8, 16), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.grayscale, image.layout);
+    try std.testing.expectEqual(@as(usize, 32), image.pixels.len);
+    const px = image.pixelsU16();
+    try std.testing.expectEqual(@as(usize, 16), px.len);
+    for (px) |s| try std.testing.expectEqual(@as(u16, 0x8000), s);
+}
+
 test "decode 8x8 progressive RGB JPEG" {
     const allocator = std.testing.allocator;
 

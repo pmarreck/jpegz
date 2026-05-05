@@ -255,7 +255,47 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             "stream lacks EOI marker (0xFF 0xD9)");
     }
 
+    // ── Step 4: Codec-level integrity (M1.5b) ──────────────────
+    // Run libjpeg-turbo's full decode through the file. The marker
+    // walker catches structural problems (missing markers, bad
+    // segment lengths, truncation) but is blind to coefficient-level
+    // corruption — corrupt Huffman tables, bad DCT coefficients,
+    // mismatched quantization tables. Decoding-through is the
+    // ground truth.
+    //
+    // We skip when:
+    //   - The walker already found a fail-rated structural problem
+    //     (libjpeg would just rediscover it; saves cycles).
+    //   - The variant isn't supported by libjpeg-turbo (jpegls,
+    //     differential-lossless variants, JPEG 2000 — those are
+    //     handled elsewhere or not yet routed).
+    if (report.overall != .fail and shouldRunCodecCheck(report.variant)) {
+        const wrapper = @import("../ffi/libjpeg_wrapper.zig");
+        if (wrapper.validateCodecIntegrity(data)) |failure| {
+            try addFinding(&report, allocator, .fail, failure.code, null, failure.message);
+        }
+    }
+
     return report;
+}
+
+/// libjpeg-turbo handles SOF0/1/2/3/9/10/11. JPEG-LS, differential
+/// variants, and JPEG 2000 don't reach this validator (JP2 has its
+/// own path); skip the decode-through if the marker walker thinks the
+/// variant is something else, otherwise libjpeg would just emit
+/// "Unsupported JPEG process" and we'd add a redundant finding.
+fn shouldRunCodecCheck(variant: Variant) bool {
+    return switch (variant) {
+        .baseline_huffman,
+        .extended_huffman,
+        .progressive_huffman,
+        .lossless_huffman,
+        .baseline_arithmetic,
+        .progressive_arithmetic,
+        .lossless_arithmetic,
+        => true,
+        .unknown, .jpegls, .jpeg2000 => false,
+    };
 }
 
 /// Walk past entropy-coded scan data to the next marker. Inside an SOS,

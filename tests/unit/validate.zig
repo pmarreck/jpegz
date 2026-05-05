@@ -87,6 +87,34 @@ test "validate empty input → FAIL, missing_soi finding" {
     try std.testing.expect(found_missing_soi);
 }
 
+/// 4×4 baseline RGB JPEG whose DHT (Huffman table definition) was
+/// corrupted by setting all 16 code-length counts to 0xFF — an
+/// impossible declaration that fails libjpeg's Huffman validation
+/// with "Bogus Huffman table definition". The structural marker walker
+/// passes (DHT length and bracket are intact); only codec-level
+/// integrity catches it.
+const fixture_baseline_4x4_bogus_dht = @embedFile("fixtures/baseline_4x4_bogus_dht.jpg");
+
+test "validate corrupted DHT → FAIL with codec-level finding" {
+    const allocator = std.testing.allocator;
+
+    var report = try jpegz.validate(allocator, fixture_baseline_4x4_bogus_dht);
+    defer report.deinit(allocator);
+
+    try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
+    // Marker walker still classifies the variant from the SOF marker.
+    try std.testing.expectEqual(jpegz.Variant.baseline_huffman, report.variant);
+
+    // At least one finding must be the codec-level Huffman fail.
+    var found_codec_fail = false;
+    for (report.findings.items) |f| {
+        if (f.severity == .fail and f.code == .huffman_table_corrupt) {
+            found_codec_fail = true;
+        }
+    }
+    try std.testing.expect(found_codec_fail);
+}
+
 test "validate non-JPEG bytes → FAIL, missing_soi finding" {
     const allocator = std.testing.allocator;
     const garbage = "this is not a JPEG file at all";

@@ -34,13 +34,15 @@ prune older ones once context is no longer load-bearing.
       change beyond fixture + test. 4×4 8-bit grayscale lossless fixture
       decodes round-trip-exact. _(2026-05-05 EST)_
 
-- [ ] **M1.4b — Lossless 12/16-bit (DICOM/DNG path).** libjpeg-turbo
-      separates 16-bit decode behind its `jpeg16_*` API (`jpeg16_create_decompress`,
-      `jpeg16_read_scanlines`, J16SAMPARRAY). Wire that branch in
-      `src/ffi/libjpeg_wrapper.zig`: detect SOF3 + precision > 8 from
-      the marker, route to a sibling `decode16` path that allocates `[]u16`
-      pixel buffers (matches design's `bits_per_sample = 16` shape).
-      Fixtures: 16-bit grayscale lossless + 12-bit grayscale lossless.
+- [x] **M1.4b — Lossless 12/16-bit (DICOM/DNG path).** libjpeg-turbo
+      3.x's `jpeg_read_header` always populates `cinfo.data_precision`;
+      branch on that AFTER the standard read_header / start_decompress
+      to call `jpeg12_read_scanlines` (J12SAMPLE = signed short) or
+      `jpeg16_read_scanlines` (J16SAMPLE = unsigned short). Output is
+      `[]u8`-aliased `[]u16` host-endian as the design specified.
+      `pixelsU16()` returns `[]align(1) u16` because the underlying
+      allocation is byte-aligned. Fixtures: 4×4 12-bit and 16-bit gray
+      lossless, both round-trip byte-exact. _(2026-05-06 EST)_
 - [x] **M1.5 — `validate`-only API.** Hand-written marker walker in
       `src/core/validator.zig` (pure Zig, no FFI). Walks SOI → segments
       → SOS → entropy → EOI, classifies variant from SOFn, accumulates
@@ -56,9 +58,17 @@ prune older ones once context is no longer load-bearing.
       auto-detect JP2 box vs raw J2K codestream, OPJ_INT32 → packed
       `[]u8` (or `[]u16` for >8-bit). 8×8 RGB lossy fixture decodes
       with all components within 16 of input values. _(2026-05-05 EST)_
-      _Component-subsampling support, lossless 5/3 + 9/7 fixtures, and
-      additional precisions captured as M1.6b once a real consumer
-      asks._
+
+- [x] **M1.6b — JP2 lossless 5/3 + lossy 9/7 fixtures.** Both wavelet
+      modes round-trip cleanly through the openjpeg wrapper without
+      any code changes — lossless 5/3 byte-exact, lossy 9/7 within
+      16/255 tolerance. _(2026-05-06 EST)_
+
+- [ ] **M1.6c — JP2 component subsampling.** Currently the wrapper
+      errors out (BackendError) when components have differing
+      dx/dy. Real-world JP2 in the wild rarely subsamples (MCT is the
+      common path). Add nearest-neighbor upsample if a real consumer
+      hits this.
 - [x] **M1.7 — C FFI.** Hand-curated `include/jpegz_core.h` plus
       auto-generated `include/jpegz_errno.h` (from
       `tools/gen_c_header.zig` walking `src/core/errors.zig` at

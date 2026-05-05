@@ -34,6 +34,44 @@ test "jpeg2000.decode 8x8 RGB JP2 produces an 8x8 RGB Image" {
     try std.testing.expect(@abs(@as(i16, b) - 0xA0) < 16);
 }
 
+/// 8×8 RGB JP2 lossless (reversible 5/3 wavelet).
+const fixture_jp2_lossless_5x3 = @embedFile("fixtures/jp2_8x8_lossless_5x3.jp2");
+
+test "jpeg2000.decode 8x8 RGB lossless 5/3 wavelet" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.jpeg2000.decode(allocator, fixture_jp2_lossless_5x3);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 8), image.width);
+    try std.testing.expectEqual(@as(u32, 8), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+
+    // Lossless: every pixel must round-trip exactly to (0x80, 0x40, 0xA0).
+    var i: usize = 0;
+    while (i < image.pixels.len) : (i += 3) {
+        try std.testing.expectEqual(@as(u8, 0x80), image.pixels[i]);
+        try std.testing.expectEqual(@as(u8, 0x40), image.pixels[i + 1]);
+        try std.testing.expectEqual(@as(u8, 0xA0), image.pixels[i + 2]);
+    }
+}
+
+/// 8×8 RGB JP2 lossy 9/7 wavelet (irreversible).
+const fixture_jp2_lossy_9x7 = @embedFile("fixtures/jp2_8x8_lossy_9x7.jp2");
+
+test "jpeg2000.decode 8x8 RGB lossy 9/7 wavelet" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.jpeg2000.decode(allocator, fixture_jp2_lossy_9x7);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 8), image.width);
+    try std.testing.expectEqual(@as(u32, 8), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+    // Lossy at -r 5: should land within 16/255 of input on every channel.
+    try std.testing.expect(@abs(@as(i16, image.pixels[0]) - 0x80) < 16);
+    try std.testing.expect(@abs(@as(i16, image.pixels[1]) - 0x40) < 16);
+    try std.testing.expect(@abs(@as(i16, image.pixels[2]) - 0xA0) < 16);
+}
+
 test "jpeg2000.decode rejects empty input" {
     const empty: []const u8 = &[_]u8{};
     try std.testing.expectError(

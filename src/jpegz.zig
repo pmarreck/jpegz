@@ -74,9 +74,13 @@ pub const Image = struct {
         return @as(usize, self.width) * @as(usize, self.channels) * bytes_per_sample;
     }
 
-    /// Convenience: reinterpret `pixels` as `[]u16` for >8-bit images.
+    /// Convenience: reinterpret `pixels` as a u16 slice for >8-bit images.
+    /// Returns `[]align(1) u16` because the underlying allocation is
+    /// `[]u8`-typed (byte-aligned) — semantically the bytes are valid
+    /// host-endian u16 pairs but the type system can't promise natural
+    /// alignment without a separate aligned allocation.
     /// Asserts `bits_per_sample > 8`.
-    pub fn pixelsU16(self: Image) []u16 {
+    pub fn pixelsU16(self: Image) []align(1) u16 {
         std.debug.assert(self.bits_per_sample > 8);
         return std.mem.bytesAsSlice(u16, self.pixels);
     }
