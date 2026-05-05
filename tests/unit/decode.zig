@@ -59,6 +59,33 @@ test "decode rejects non-JPEG input" {
 /// this test confirms our wrapper doesn't accidentally restrict by SOF.
 const fixture_progressive_8x8 = @embedFile("fixtures/progressive_8x8_rgb.jpg");
 
+/// 4×4 8-bit grayscale lossless (SOF3) JPEG (predictor=1, all 0x80).
+/// libjpeg-turbo 3.1+ supports lossless decoding via the same
+/// `jpeg_read_scanlines` API used for SOF0/SOF1/SOF2 — for 8-bit
+/// precision. 12/16-bit lossless requires `jpeg12_/jpeg16_` APIs and
+/// is the M1.4b follow-up.
+const fixture_lossless_4x4_gray8 = @embedFile("fixtures/lossless_4x4_gray8.jpg");
+
+test "decode 4x4 8-bit grayscale lossless (SOF3) JPEG" {
+    const allocator = std.testing.allocator;
+
+    var image = try jpegz.decode(allocator, fixture_lossless_4x4_gray8);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 1), image.channels);
+    try std.testing.expectEqual(@as(u8, 8), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.grayscale, image.layout);
+    try std.testing.expectEqual(jpegz.ColorSpace.grayscale, image.source_color_space);
+    try std.testing.expectEqual(@as(usize, 16), image.pixels.len);
+
+    // Lossless round-trip: every byte should be exactly 0x80 (the input).
+    for (image.pixels) |b| {
+        try std.testing.expectEqual(@as(u8, 0x80), b);
+    }
+}
+
 test "decode 8x8 progressive RGB JPEG" {
     const allocator = std.testing.allocator;
 

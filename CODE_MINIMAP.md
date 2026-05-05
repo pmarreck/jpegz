@@ -89,6 +89,10 @@ on every file change. Goal: future agents skim this instead of grepping.
   generated via `cjpeg -quality 90 -baseline` (690 B).
 - `tests/unit/fixtures/progressive_8x8_rgb.jpg` — 8×8 RGB progressive
   JPEG generated via `cjpeg -progressive -quality 85` (520 B).
+- `tests/unit/fixtures/lossless_4x4_gray8.jpg` — 4×4 8-bit grayscale
+  lossless (SOF3) JPEG generated via `cjpeg -lossless 1` (69 B).
+  All input pixels are 0x80; round-trip-exact decode confirms the
+  lossless property.
 
 ## Headers / FFI — `include/`
 

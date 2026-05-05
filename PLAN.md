@@ -25,11 +25,22 @@ prune older ones once context is no longer load-bearing.
       _Follow-ups for later milestones: 8-bit gray + 8-bit CMYK +
       12-bit gray fixtures (M1.4 area); pixel-byte oracle equality
       against `djpeg` (will materialize when needed)._
-- [ ] **M1.4 — Lossless lift.** Move
-      `validate/src/core/jpeg_lossless_decoder.zig` (698 lines, pure Zig)
-      into `src/lossless.zig`. Add 16-bit DICOM-style fixtures. Oracle:
-      libjpeg-turbo's lossless path (or zigimg lossless, if libjpeg-turbo
-      doesn't ship the lossless decoder by default in nixpkgs).
+- [x] **M1.4 — Lossless lift (8-bit).** _Discovery: validate's
+      `jpeg_lossless_decoder.zig` is a validator, not a pixel-emitting
+      decoder. It has primitives (BitReader / HuffmanTable /
+      decodePixelDifference) but no full raster reconstruction loop._
+      Pivoted: libjpeg-turbo 3.1.4 transparently handles SOF3 lossless
+      via the same `jpeg_read_scanlines` API used for SOF0/1/2 — no code
+      change beyond fixture + test. 4×4 8-bit grayscale lossless fixture
+      decodes round-trip-exact. _(2026-05-05 EST)_
+
+- [ ] **M1.4b — Lossless 12/16-bit (DICOM/DNG path).** libjpeg-turbo
+      separates 16-bit decode behind its `jpeg16_*` API (`jpeg16_create_decompress`,
+      `jpeg16_read_scanlines`, J16SAMPARRAY). Wire that branch in
+      `src/ffi/libjpeg_wrapper.zig`: detect SOF3 + precision > 8 from
+      the marker, route to a sibling `decode16` path that allocates `[]u16`
+      pixel buffers (matches design's `bits_per_sample = 16` shape).
+      Fixtures: 16-bit grayscale lossless + 12-bit grayscale lossless.
 - [ ] **M1.5 — `validate`-only API.** `jpegz.validate(allocator, src) →
       ValidationReport`. Decode through, discard pixels, return report.
       This is the path `validate` actually consumes.
@@ -82,6 +93,11 @@ Each step retires a chunk of the C dep. Failing-test-first throughout.
 
 ## Recently completed
 
+- 2026-05-05 EST — M1.4 lossless lift (8-bit) — libjpeg-turbo 3.1.4
+  handles SOF3 transparently via the same scanline API. 4×4 8-bit gray
+  fixture round-trips byte-exact. Investigation revealed validate's
+  decoder is a validator (no full raster loop); 12/16-bit lossless
+  punted to M1.4b (libjpeg's jpeg16_* API).
 - 2026-05-04 EST — M1.3 baseline + progressive wrap (libjpeg-turbo) —
   src/ffi/libjpeg_wrapper.zig with setjmp/longjmp error bridge;
   jpeg_mem_src → jpeg_read_header → jpeg_start_decompress →
