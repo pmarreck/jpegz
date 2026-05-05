@@ -246,6 +246,13 @@ pub const jpeg2000 = struct {
     }
 };
 
+// Reference the C API so the linker pulls its `export fn`s into the
+// static library. Without this, dead-code elimination strips them
+// because nothing in the Zig source side calls them.
+comptime {
+    _ = @import("ffi/c_api.zig");
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Inline tests — wiring sanity. Real test suites in `tests/`.
 // ─────────────────────────────────────────────────────────────────────

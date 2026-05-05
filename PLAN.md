@@ -59,8 +59,13 @@ prune older ones once context is no longer load-bearing.
       _Component-subsampling support, lossless 5/3 + 9/7 fixtures, and
       additional precisions captured as M1.6b once a real consumer
       asks._
-- [ ] **M1.7 — C FFI.** Hand-curated `include/jpegz_core.h`. Validate via
-      a C smoke test that `jpegz_decode` works end-to-end.
+- [x] **M1.7 — C FFI.** Hand-curated `include/jpegz_core.h` plus
+      auto-generated `include/jpegz_errno.h` (from
+      `tools/gen_c_header.zig` walking `src/core/errors.zig` at
+      comptime). All 8 `jpegz_*` exports visible in libjpegz.a;
+      `tests/cli/smoke.c` (using C23 `#embed`) decodes the baseline
+      fixture, validates it, exercises the empty-input error path —
+      8 assertions, 4 FFI calls, all pass. _(2026-05-05 EST)_
 - [ ] **M1.8 — `validate` integration.** Replace its
       `image_validators.zig` libjpeg-turbo direct-FFI block with a jpegz
       call. Replace `jpeg2000_validator.zig` with `jpegz.jpeg2000.validate`.
@@ -104,6 +109,12 @@ Each step retires a chunk of the C dep. Failing-test-first throughout.
 
 ## Recently completed
 
+- 2026-05-05 EST — M1.7 C FFI — include/jpegz_core.h (curated) +
+  include/jpegz_errno.h (auto-generated from src/core/errors.zig at
+  build time via tools/gen_c_header.zig). src/ffi/c_api.zig has
+  exhaustive toCStatus mapper (compile-time error if a Zig variant
+  goes un-mapped). 8 jpegz_* exports verified via nm. C smoke test
+  uses C23 #embed to inline the fixture; 8 assertions pass.
 - 2026-05-05 EST — M1.6 JPEG 2000 wrap (openjpeg) — custom memory
   stream over MemSource (read/skip/seek callbacks), JP2-vs-J2K
   magic-byte autodetect, OPJ_INT32 → []u8 (or host-endian []u16)

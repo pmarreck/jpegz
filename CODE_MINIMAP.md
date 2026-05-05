@@ -106,6 +106,12 @@ on every file change. Goal: future agents skim this instead of grepping.
   generated via `cjpeg -quality 90 -baseline` (690 B).
 - `tests/unit/fixtures/progressive_8x8_rgb.jpg` — 8×8 RGB progressive
   JPEG generated via `cjpeg -progressive -quality 85` (520 B).
+- `tests/cli/smoke.c` — M1.7 C FFI smoke test. Uses C23 `#embed`
+  to inline the baseline fixture, calls `jpegz_decode` /
+  `jpegz_validate` with assertions over the result, exercises the
+  empty-input error path. Compiled with `-std=c23 -Wall -Wextra
+  -Wpedantic`, linked against `libjpegz.a`. Run as part of `zig build
+  test`.
 - `tests/unit/decode_jp2.zig` — M1.6 JPEG 2000 decode tests. Three
   tests: 8×8 RGB JP2 round-trips within 16/255 of input, plus reject
   paths for empty and non-JP2 input.
@@ -120,10 +126,29 @@ on every file change. Goal: future agents skim this instead of grepping.
   All input pixels are 0x80; round-trip-exact decode confirms the
   lossless property.
 
-## Headers / FFI — `include/`
+## Headers / FFI — `include/` and `tools/`
 
-_Not yet created. Phase 1 milestone 7 will add `jpegz_core.h` once the
-Zig API is locked._
+- `include/jpegz_core.h` — hand-curated public C ABI. Defines
+  `jpegz_image_t`, `jpegz_validation_report_t`, `jpegz_finding_t`, and
+  the entry points (`jpegz_decode`, `jpegz_jp2_decode`,
+  `jpegz_validate`, `jpegz_jp2_validate`, `jpegz_image_free`,
+  `jpegz_validation_report_free`, `jpegz_version`,
+  `jpegz_last_error_message`). Includes `jpegz_errno.h` for status
+  codes.
+- `include/jpegz_errno.h` — **auto-generated** at every build by
+  `tools/gen_c_header.zig`. Defines `jpegz_status_t` (negative codes,
+  generated from `DecodeError`) and `jpegz_finding_code_t` (positive
+  codes, generated from `FindingCode`). Numeric values are stable
+  forever; ordering must not change.
+- `tools/gen_c_header.zig` — comptime walker over
+  `src/core/errors.zig` that emits `jpegz_errno.h`. Run as a build
+  step before the lib compile; lib's `step` depends on it.
+- `src/ffi/c_api.zig` — `export fn` for every public API entry
+  point. Wraps the Zig core, marshals Zig types to C structs, owns
+  the thread-local last-error buffer. `toCStatus` is an exhaustive
+  switch that **fails the build** if a Zig `DecodeError` variant
+  goes un-mapped — drift between Zig and C is impossible by
+  construction.
 
 ## Deps — `deps/`
 

@@ -49,6 +49,37 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(lib);
 
     // ============================================================
+    // C ABI: install include/jpegz_core.h (curated) and generate
+    // include/jpegz_errno.h (auto from src/core/errors.zig).
+    // ============================================================
+    const errors_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/errors.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseFast,
+    });
+    const gen_header_mod = b.createModule(.{
+        .root_source_file = b.path("tools/gen_c_header.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseFast,
+    });
+    gen_header_mod.addImport("errors", errors_mod);
+    const gen_header_exe = b.addExecutable(.{
+        .name = "jpegz-gen-header",
+        .root_module = gen_header_mod,
+    });
+    const run_gen = b.addRunArtifact(gen_header_exe);
+    const generated_errno_h = run_gen.addOutputFileArg("jpegz_errno.h");
+    lib.step.dependOn(&run_gen.step);
+
+    b.installFile("include/jpegz_core.h", "include/jpegz_core.h");
+    const installed_errno = b.addInstallFileWithDir(
+        generated_errno_h,
+        .header,
+        "jpegz_errno.h",
+    );
+    b.getInstallStep().dependOn(&installed_errno.step);
+
+    // ============================================================
     // Test runner — three sources of tests:
     //   1. tests/unit/smoke.zig   — public-API wiring
     //   2. src/jpegz.zig          — inline tests (helpers, types)
@@ -115,4 +146,32 @@ pub fn build(b: *std.Build) void {
         .root_module = decode_jp2_mod,
     });
     test_step.dependOn(&b.addRunArtifact(decode_jp2_tests).step);
+
+    // ============================================================
+    // C FFI smoke test (M1.7 — exercises include/jpegz_core.h via a
+    // tiny C program that links against libjpegz.a). Same exec
+    // dogfoods the public ABI the way validate / tiffz will.
+    // ============================================================
+    const c_smoke_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const c_smoke = b.addExecutable(.{
+        .name = "c_smoke",
+        .root_module = c_smoke_mod,
+    });
+    c_smoke.addCSourceFile(.{
+        .file = b.path("tests/cli/smoke.c"),
+        .flags = &.{ "-std=c23", "-Wall", "-Wextra", "-Wpedantic" },
+    });
+    c_smoke.addIncludePath(b.path("include"));
+    c_smoke.addIncludePath(generated_errno_h.dirname());
+    // C23 #embed needs to reach ../unit/fixtures/ relative to the .c file.
+    c_smoke.addIncludePath(b.path("tests"));
+    c_smoke.linkLibrary(lib);
+    // Force the FFI mapping symbols (export fn) to be retained in the
+    // static archive linker pass. lib already does this via comptime
+    // import in src/jpegz.zig, so just linking is enough.
+    test_step.dependOn(&b.addRunArtifact(c_smoke).step);
 }
