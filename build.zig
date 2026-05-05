@@ -32,14 +32,14 @@ pub fn build(b: *std.Build) void {
     // don't apply; the flake passes the right pkgsStatic paths via these
     // -D options. On native builds these are unset and Zig finds the
     // libraries via the host wrapper-cc as usual.
-    if (b.option([]const u8, "libjpeg-include", "Path to libjpeg headers")) |p|
-        jpegz_mod.addIncludePath(.{ .cwd_relative = p });
-    if (b.option([]const u8, "libjpeg-lib", "Path to libjpeg library directory")) |p|
-        jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
-    if (b.option([]const u8, "openjpeg-include", "Path to openjpeg headers (incl. version subdir)")) |p|
-        jpegz_mod.addIncludePath(.{ .cwd_relative = p });
-    if (b.option([]const u8, "openjpeg-lib", "Path to openjpeg library directory")) |p|
-        jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
+    const opt_libjpeg_inc = b.option([]const u8, "libjpeg-include", "Path to libjpeg headers");
+    const opt_libjpeg_lib = b.option([]const u8, "libjpeg-lib", "Path to libjpeg library directory");
+    const opt_openjpeg_inc = b.option([]const u8, "openjpeg-include", "Path to openjpeg headers (incl. version subdir)");
+    const opt_openjpeg_lib = b.option([]const u8, "openjpeg-lib", "Path to openjpeg library directory");
+    if (opt_libjpeg_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
+    if (opt_libjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
+    if (opt_openjpeg_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
+    if (opt_openjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
 
     const lib = b.addLibrary(.{
         .name = "jpegz",
@@ -157,6 +157,16 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    // The c_smoke executable transitively pulls in libjpeg + openjp2
+    // because libjpegz.a uses them. When cross-targeting (musl on
+    // Linux), Zig's host NIX_LDFLAGS doesn't apply — we have to point
+    // c_smoke at the same -Dlibjpeg-lib / -Dopenjpeg-lib paths the
+    // library itself was given. Native builds: these options are
+    // unset and Zig finds the libs via the host wrapper-cc.
+    c_smoke_mod.linkSystemLibrary("jpeg", .{});
+    c_smoke_mod.linkSystemLibrary("openjp2", .{});
+    if (opt_libjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
+    if (opt_openjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
     const c_smoke = b.addExecutable(.{
         .name = "c_smoke",
         .root_module = c_smoke_mod,
@@ -170,8 +180,5 @@ pub fn build(b: *std.Build) void {
     // C23 #embed needs to reach ../unit/fixtures/ relative to the .c file.
     c_smoke.addIncludePath(b.path("tests"));
     c_smoke.linkLibrary(lib);
-    // Force the FFI mapping symbols (export fn) to be retained in the
-    // static archive linker pass. lib already does this via comptime
-    // import in src/jpegz.zig, so just linking is enough.
     test_step.dependOn(&b.addRunArtifact(c_smoke).step);
 }
