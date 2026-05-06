@@ -34,15 +34,17 @@ prune older ones once context is no longer load-bearing.
       change beyond fixture + test. 4×4 8-bit grayscale lossless fixture
       decodes round-trip-exact. _(2026-05-05 EST)_
 
-- [x] **M1.4b — Lossless 12/16-bit (DICOM/DNG path).** libjpeg-turbo
+- [x] **M1.4b — Lossless 9..16-bit (DICOM/DNG path).** libjpeg-turbo
       3.x's `jpeg_read_header` always populates `cinfo.data_precision`;
       branch on that AFTER the standard read_header / start_decompress
       to call `jpeg12_read_scanlines` (J12SAMPLE = signed short) or
       `jpeg16_read_scanlines` (J16SAMPLE = unsigned short). Output is
       `[]u8`-aliased `[]u16` host-endian as the design specified.
-      `pixelsU16()` returns `[]align(1) u16` because the underlying
-      allocation is byte-aligned. Fixtures: 4×4 12-bit and 16-bit gray
-      lossless, both round-trip byte-exact. _(2026-05-06 EST)_
+      Per tiffz handoff: precision range now accepts any 1..16
+      (routes 1..8/9..12/13..16 to the matching scanline API), not
+      strict 8/12/16 — DNG raw is commonly 14-bit which would have
+      been rejected. Fixtures: 4×4 12/14/16-bit gray lossless, all
+      round-trip byte-exact. _(2026-05-06 EST)_
 - [x] **M1.5 — `validate`-only API.** Hand-written marker walker in
       `src/core/validator.zig` (pure Zig, no FFI). Walks SOI → segments
       → SOS → entropy → EOI, classifies variant from SOFn, accumulates
@@ -58,6 +60,16 @@ prune older ones once context is no longer load-bearing.
       auto-detect JP2 box vs raw J2K codestream, OPJ_INT32 → packed
       `[]u8` (or `[]u16` for >8-bit). 8×8 RGB lossy fixture decodes
       with all components within 16 of input values. _(2026-05-05 EST)_
+
+- [x] **M1.5c — APPn presence + trailing-data findings.** Per
+      validate handoff (2026-05-06): added 4 new `FindingCode`
+      entries (`jfif_metadata_present`, `xmp_metadata_present`,
+      `photoshop_irb_present`, `trailing_data_after_eoi`) and wired
+      `classifyAppSignature` into the marker walker (matches APP0
+      JFIF/JFXX, APP1 Exif/XMP, APP2 ICC, APP13 Photoshop IRB).
+      Trailing data after EOI emits `.info` with the offset of the
+      first stray byte. validate's metadata pipeline gets these for
+      free without a parallel marker walk. _(2026-05-06 EST)_
 
 - [x] **M1.6b — JP2 lossless 5/3 + lossy 9/7 fixtures.** Both wavelet
       modes round-trip cleanly through the openjpeg wrapper without

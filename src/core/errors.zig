@@ -101,4 +101,11 @@ pub const FindingCode = enum(u32) {
     icc_profile_present        = 206,
     jp2_uses_9x7_wavelet       = 207,
     jp2_uses_5x3_wavelet       = 208,
+    // Added per validate handoff (2026-05-06): APPn presence flags
+    // and trailing-data signal. validate's PDF / metadata pipeline
+    // consumes these. See validator.zig's APPn signature scan.
+    jfif_metadata_present      = 209,
+    xmp_metadata_present       = 210,
+    photoshop_irb_present      = 211,
+    trailing_data_after_eoi    = 212,
 };

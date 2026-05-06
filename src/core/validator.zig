@@ -142,6 +142,12 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         if (isStandaloneMarker(marker_byte)) {
             if (marker_byte == Marker.EOI) {
                 seen_eoi = true;
+                // pos already moved past the 0xFF and marker byte;
+                // anything beyond pos is "trailing" data.
+                if (pos < data.len) {
+                    try addFinding(&report, allocator, .info, .trailing_data_after_eoi,
+                        pos, null);
+                }
                 break;
             }
             // SOI inside the stream (after position 0) is suspicious but
@@ -168,6 +174,19 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             try addFinding(&report, allocator, .fail, .truncated_stream, seg_end,
                 "segment extends past end of stream");
             return report;
+        }
+
+        // ── APPn signature scan (M1.5c — validate handoff) ────
+        // APPn markers (0xE0..0xEF) carry application-specific
+        // payloads. The first few bytes of the body are a signature
+        // that identifies the producer. Surface known producers as
+        // INFO findings so validate / metadata pipelines don't have
+        // to walk markers a second time. Body bounds are seg_body_start
+        // to seg_end; the segment-length check above guarantees safety.
+        if (marker_byte >= 0xE0 and marker_byte <= 0xEF) {
+            if (classifyAppSignature(marker_byte, data[seg_body_start..seg_end])) |code| {
+                try addFinding(&report, allocator, .info, code, marker_offset, null);
+            }
         }
 
         // ── SOF: identify variant and record dimensions ───────
@@ -303,6 +322,50 @@ fn shouldRunCodecCheck(variant: Variant) bool {
 /// real marker is 0xFF followed by a non-zero, non-RST byte. RST markers
 /// (0xFF D0..D7) are intra-scan resets and DO continue the scan.
 ///
+/// Map an APPn marker (0xE0..0xEF) + its segment body to a known
+/// producer signature, returning the corresponding INFO `FindingCode`
+/// or null if the signature is unrecognized.
+///
+/// Signatures are NUL-terminated identifiers at the start of the body
+/// (T.81 doesn't standardize this; it's de-facto industry convention).
+/// We match prefix bytes only — values inside the segment are not
+/// parsed. validate's metadata pipeline handles deeper inspection.
+fn classifyAppSignature(marker: u8, body: []const u8) ?FindingCode {
+    return switch (marker) {
+        // APP0 — JFIF / JFXX
+        0xE0 => if (startsWith(body, "JFIF\x00") or startsWith(body, "JFXX\x00"))
+            FindingCode.jfif_metadata_present
+        else
+            null,
+
+        // APP1 — Exif or XMP (most common; Adobe also uses APP1)
+        0xE1 => blk: {
+            if (startsWith(body, "Exif\x00\x00")) break :blk FindingCode.exif_metadata_present;
+            if (startsWith(body, "http://ns.adobe.com/xap/1.0/\x00"))
+                break :blk FindingCode.xmp_metadata_present;
+            break :blk null;
+        },
+
+        // APP2 — ICC profile
+        0xE2 => if (startsWith(body, "ICC_PROFILE\x00"))
+            FindingCode.icc_profile_present
+        else
+            null,
+
+        // APP13 — Photoshop IRB
+        0xED => if (startsWith(body, "Photoshop 3.0\x00"))
+            FindingCode.photoshop_irb_present
+        else
+            null,
+
+        else => null,
+    };
+}
+
+fn startsWith(haystack: []const u8, prefix: []const u8) bool {
+    return haystack.len >= prefix.len and std.mem.eql(u8, haystack[0..prefix.len], prefix);
+}
+
 /// Returns the byte offset of the 0xFF that begins the next "real"
 /// marker (so the outer parser can re-enter its 0xFF-handling loop).
 /// Returns null if the stream ends without a terminating marker.

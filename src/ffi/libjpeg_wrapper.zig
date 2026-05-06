@@ -117,12 +117,18 @@ pub fn decode(allocator: Allocator, data: []const u8) errors.DecodeError!types.I
     // Grab source color space before start_decompress (which may convert).
     const source_cs = mapSourceColorSpace(cinfo.jpeg_color_space);
 
-    // Capture data_precision BEFORE start_decompress; libjpeg-turbo
-    // doesn't change it, but we want it on the record for the branch.
+    // Capture data_precision BEFORE start_decompress.
+    //
+    // T.81 §13 SOF3 lossless allows precision 2..16. libjpeg-turbo
+    // 3.x exposes three scanline APIs by sample width:
+    //   precision  1..8   → JSAMPLE = unsigned char
+    //   precision  9..12  → J12SAMPLE = signed short
+    //   precision 13..16  → J16SAMPLE = unsigned short
+    // DNG raw is the real-world driver: most cameras emit 12-bit or
+    // 14-bit raw inside SOF3-lossless. Sticking to strict 8/12/16 only
+    // would reject 14-bit DNG; route by range instead.
     const precision: u8 = @intCast(cinfo.data_precision);
-    if (precision != 8 and precision != 12 and precision != 16) {
-        return error.UnsupportedPrecision;
-    }
+    if (precision == 0 or precision > 16) return error.UnsupportedPrecision;
 
     if (c.jpeg_start_decompress(&cinfo) == 0) return error.BackendError;
 
@@ -131,7 +137,7 @@ pub fn decode(allocator: Allocator, data: []const u8) errors.DecodeError!types.I
     const width: u32 = @intCast(cinfo.output_width);
     const height: u32 = @intCast(cinfo.output_height);
 
-    if (precision == 8) {
+    if (precision <= 8) {
         const row_stride: usize = @as(usize, width) * @as(usize, channels);
         const pixels = allocator.alloc(u8, row_stride * @as(usize, height)) catch
             return error.OutOfMemory;
@@ -173,7 +179,7 @@ pub fn decode(allocator: Allocator, data: []const u8) errors.DecodeError!types.I
     while (y < height) : (y += 1) {
         const row_ptr_u16: [*c]u16 = @ptrCast(@alignCast(pixels.ptr + y * row_bytes));
         var row_buffer: [1][*c]u16 = .{row_ptr_u16};
-        const got = if (precision == 12)
+        const got = if (precision <= 12)
             c.jpeg12_read_scanlines(&cinfo, @ptrCast(&row_buffer[0]), 1)
         else
             c.jpeg16_read_scanlines(&cinfo, @ptrCast(&row_buffer[0]), 1);
@@ -290,10 +296,10 @@ pub fn validateCodecIntegrity(data: []const u8) ?CodecCheckFailure {
     }
 
     const precision: u8 = @intCast(cinfo.data_precision);
-    if (precision != 8 and precision != 12 and precision != 16) {
+    if (precision == 0 or precision > 16) {
         return CodecCheckFailure{
             .code = .invalid_sof_precision,
-            .message = "SOF precision is not 8/12/16",
+            .message = "SOF precision out of T.81 §13 range (1..16)",
         };
     }
 
@@ -305,14 +311,13 @@ pub fn validateCodecIntegrity(data: []const u8) ?CodecCheckFailure {
     // Use the smallest row buffer the precision requires.
     const samples_per_row: usize = @as(usize, @intCast(cinfo.output_width)) *
         @as(usize, @intCast(cinfo.output_components));
-    if (precision == 8) {
+    _ = samples_per_row; // bounds check is libjpeg's; row buf is generous
+    if (precision <= 8) {
         var row: [16384]u8 = undefined;
-        const cap = @min(samples_per_row, row.len);
         var rb: [1][*c]u8 = .{&row[0]};
         var y: u32 = 0;
         const h: u32 = @intCast(cinfo.output_height);
         while (y < h) : (y += 1) {
-            _ = cap;
             const got = c.jpeg_read_scanlines(&cinfo, &rb[0], 1);
             if (got != 1) return CodecCheckFailure{
                 .code = .truncated_stream, .message = "jpeg_read_scanlines short read",
@@ -324,7 +329,7 @@ pub fn validateCodecIntegrity(data: []const u8) ?CodecCheckFailure {
         var y: u32 = 0;
         const h: u32 = @intCast(cinfo.output_height);
         while (y < h) : (y += 1) {
-            const got = if (precision == 12)
+            const got = if (precision <= 12)
                 c.jpeg12_read_scanlines(&cinfo, @ptrCast(&rb[0]), 1)
             else
                 c.jpeg16_read_scanlines(&cinfo, @ptrCast(&rb[0]), 1);

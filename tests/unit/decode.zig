@@ -106,6 +106,30 @@ test "decode 4x4 12-bit grayscale lossless (SOF3) JPEG" {
     for (px) |s| try std.testing.expectEqual(@as(u16, 0x800), s);
 }
 
+/// 4×4 14-bit grayscale lossless (precision 14, all 0x2000). DNG raw
+/// commonly uses 14-bit precision (Sony/Nikon/Fuji sensors); jpegz's
+/// libjpeg-turbo path routes precision 13..16 through jpeg16_*. M1.4b
+/// originally checked precision == exactly 16; tiffz's DNG handoff
+/// flagged 14-bit as in-scope, so the precision check now accepts
+/// any 1..16 and routes by range.
+const fixture_lossless_4x4_gray14 = @embedFile("fixtures/lossless_4x4_gray14.jpg");
+
+test "decode 4x4 14-bit grayscale lossless (SOF3) JPEG (DNG path)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_lossless_4x4_gray14);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 1), image.channels);
+    try std.testing.expectEqual(@as(u8, 14), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.grayscale, image.layout);
+    try std.testing.expectEqual(@as(usize, 32), image.pixels.len);
+    const px = image.pixelsU16();
+    try std.testing.expectEqual(@as(usize, 16), px.len);
+    for (px) |s| try std.testing.expectEqual(@as(u16, 0x2000), s);
+}
+
 /// 4×4 16-bit grayscale lossless. precision 16, all 0x8000.
 const fixture_lossless_4x4_gray16 = @embedFile("fixtures/lossless_4x4_gray16.jpg");
 

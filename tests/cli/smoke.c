@@ -61,11 +61,20 @@ int main(void) {
     jpegz_validation_report_t rpt = {0};
     rc = jpegz_validate(baseline_2x2_rgb, baseline_2x2_rgb_len, &rpt);
     ASSERT(rc == JPEGZ_OK, "validate returns OK");
-    ASSERT(rpt.overall == JPEGZ_SEVERITY_PASS, "validate overall == PASS");
+    /* PASS or INFO are both valid (cjpeg-emitted JFIF marker triggers
+     * an INFO finding; the file is still well-formed). */
+    ASSERT(rpt.overall == JPEGZ_SEVERITY_PASS || rpt.overall == JPEGZ_SEVERITY_INFO,
+           "validate overall is PASS or INFO");
     ASSERT(rpt.variant == JPEGZ_VARIANT_BASELINE_HUFFMAN, "variant == baseline_huffman");
     ASSERT(rpt.width == 2, "validate width == 2");
     ASSERT(rpt.height == 2, "validate height == 2");
-    ASSERT(rpt.findings_len == 0, "no findings on a clean JPEG");
+    /* findings_len may now be > 0 if JFIF/EXIF/etc. were detected;
+     * just assert no FAIL findings. */
+    int has_fail_finding = 0;
+    for (size_t i = 0; i < rpt.findings_len; ++i) {
+        if (rpt.findings[i].severity == JPEGZ_SEVERITY_FAIL) has_fail_finding = 1;
+    }
+    ASSERT(!has_fail_finding, "no FAIL findings on a clean JPEG");
     jpegz_validation_report_free(&rpt);
 
     /* Validate empty input: FAIL, missing_soi finding. */

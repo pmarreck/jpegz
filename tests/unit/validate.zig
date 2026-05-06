@@ -10,39 +10,45 @@ const fixture_baseline_2x2_rgb = @embedFile("fixtures/baseline_2x2_rgb.jpg");
 const fixture_progressive_8x8 = @embedFile("fixtures/progressive_8x8_rgb.jpg");
 const fixture_lossless_4x4_gray8 = @embedFile("fixtures/lossless_4x4_gray8.jpg");
 
-test "validate clean baseline JPEG → PASS, baseline_huffman" {
+test "validate clean baseline JPEG → valid, baseline_huffman" {
     const allocator = std.testing.allocator;
 
     var report = try jpegz.validate(allocator, fixture_baseline_2x2_rgb);
     defer report.deinit(allocator);
 
-    try std.testing.expectEqual(jpegz.Severity.pass, report.overall);
+    // .info is fine — cjpeg-emitted JFIF marker triggers an INFO finding.
+    try std.testing.expect(report.isValid());
+    try std.testing.expect(report.overall != .fail);
     try std.testing.expectEqual(jpegz.Variant.baseline_huffman, report.variant);
     try std.testing.expectEqual(@as(?u32, 2), report.width);
     try std.testing.expectEqual(@as(?u32, 2), report.height);
-    try std.testing.expect(report.isValid());
-    try std.testing.expectEqual(@as(usize, 0), report.findings.items.len);
+    // No fail findings.
+    for (report.findings.items) |f| {
+        try std.testing.expect(f.severity != .fail);
+    }
 }
 
-test "validate clean progressive JPEG → PASS, progressive_huffman" {
+test "validate clean progressive JPEG → valid, progressive_huffman" {
     const allocator = std.testing.allocator;
 
     var report = try jpegz.validate(allocator, fixture_progressive_8x8);
     defer report.deinit(allocator);
 
-    try std.testing.expectEqual(jpegz.Severity.pass, report.overall);
+    try std.testing.expect(report.isValid());
+    try std.testing.expect(report.overall != .fail);
     try std.testing.expectEqual(jpegz.Variant.progressive_huffman, report.variant);
     try std.testing.expectEqual(@as(?u32, 8), report.width);
     try std.testing.expectEqual(@as(?u32, 8), report.height);
 }
 
-test "validate clean lossless JPEG → PASS, lossless_huffman" {
+test "validate clean lossless JPEG → valid, lossless_huffman" {
     const allocator = std.testing.allocator;
 
     var report = try jpegz.validate(allocator, fixture_lossless_4x4_gray8);
     defer report.deinit(allocator);
 
-    try std.testing.expectEqual(jpegz.Severity.pass, report.overall);
+    try std.testing.expect(report.isValid());
+    try std.testing.expect(report.overall != .fail);
     try std.testing.expectEqual(jpegz.Variant.lossless_huffman, report.variant);
     try std.testing.expectEqual(@as(?u32, 4), report.width);
     try std.testing.expectEqual(@as(?u32, 4), report.height);
@@ -113,6 +119,61 @@ test "validate corrupted DHT → FAIL with codec-level finding" {
         }
     }
     try std.testing.expect(found_codec_fail);
+}
+
+// ── M1.5c (per validate handoff 2026-05-06) — APPn presence + trailing data ──
+
+const fixture_baseline_4x4_with_exif     = @embedFile("fixtures/baseline_4x4_with_exif.jpg");
+const fixture_baseline_4x4_with_trailing = @embedFile("fixtures/baseline_4x4_with_trailing.jpg");
+
+test "validate surfaces JFIF presence as INFO finding" {
+    const allocator = std.testing.allocator;
+    var report = try jpegz.validate(allocator, fixture_baseline_2x2_rgb);
+    defer report.deinit(allocator);
+
+    try std.testing.expect(report.isValid());
+    var found = false;
+    for (report.findings.items) |f| {
+        if (f.code == .jfif_metadata_present and f.severity == .info) found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "validate surfaces EXIF presence (APP1 'Exif\\0\\0') as INFO" {
+    const allocator = std.testing.allocator;
+    var report = try jpegz.validate(allocator, fixture_baseline_4x4_with_exif);
+    defer report.deinit(allocator);
+
+    try std.testing.expect(report.isValid());
+    var found_jfif = false;
+    var found_exif = false;
+    for (report.findings.items) |f| {
+        if (f.code == .jfif_metadata_present) found_jfif = true;
+        if (f.code == .exif_metadata_present) found_exif = true;
+    }
+    try std.testing.expect(found_jfif);
+    try std.testing.expect(found_exif);
+}
+
+test "validate surfaces trailing-data-after-EOI as INFO" {
+    const allocator = std.testing.allocator;
+    var report = try jpegz.validate(allocator, fixture_baseline_4x4_with_trailing);
+    defer report.deinit(allocator);
+
+    // Trailing data is INFO (the file is decodable; this is just a
+    // notable observation), so overall stays at .info or .pass-derived.
+    try std.testing.expect(report.isValid());
+    var found = false;
+    var offset_seen: ?u64 = null;
+    for (report.findings.items) |f| {
+        if (f.code == .trailing_data_after_eoi) {
+            found = true;
+            offset_seen = f.offset;
+        }
+    }
+    try std.testing.expect(found);
+    // Offset should point at the byte immediately after EOI.
+    try std.testing.expect(offset_seen != null);
 }
 
 test "validate non-JPEG bytes → FAIL, missing_soi finding" {
