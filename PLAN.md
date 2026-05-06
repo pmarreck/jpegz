@@ -76,12 +76,23 @@ prune older ones once context is no longer load-bearing.
       `tests/cli/smoke.c` (using C23 `#embed`) decodes the baseline
       fixture, validates it, exercises the empty-input error path —
       8 assertions, 4 FFI calls, all pass. _(2026-05-05 EST)_
-- [ ] **M1.8 — `validate` integration.** Replace its
-      `image_validators.zig` libjpeg-turbo direct-FFI block with a jpegz
-      call. Replace `jpeg2000_validator.zig` with `jpegz.jpeg2000.validate`.
-      Retire `jpeg_validator.zig` (structural-only) per SPEC §7.
-- [ ] **M1.9 — `tiffz` integration.** When tiffz hits its milestone 4
-      (JPEG-in-TIFF), wire it through jpegz.
+- [~] **M1.8 — `validate` integration — handoff complete.** Concrete
+      patch dropped at `~/Documents-CloudManaged/validate/inbox/2026-05-06-jpegz-integration-recipe.md`:
+      flake.nix patch, build.zig patch, full `jpegz_shim.zig` shim
+      file, step-by-step call-site flip plan
+      (`image_validators.zig` → `pdf_image_validator.zig` →
+      `video_validator.zig` → `scientific_validators.zig`), and
+      retire-`jpeg_validator.zig` plan per SPEC §7. Cross-project
+      execution belongs in a validate session. _(2026-05-06 EST)_
+
+- [~] **M1.9 — `tiffz` integration — handoff complete.** Concrete
+      patch dropped at `~/Documents-CloudManaged/tiffz/inbox/2026-05-06-jpegz-integration-recipe.md`:
+      flake.nix patch, build.zig patch, sketch of `decodeJpegStrip`
+      with `spliceJpegTables` helper for TIFF tag 347 (abbreviated
+      tables), error mapping. tiffz's M4 (JPEG-in-TIFF) hasn't shipped
+      yet so there's nothing to flip — recipe is greenfield. DNG raw
+      compatibility (16-bit lossless via M1.4b) called out
+      explicitly. _(2026-05-06 EST)_
 
 ## Phase 2 — cleanroom pure-Zig replacement
 
@@ -119,6 +130,19 @@ Each step retires a chunk of the C dep. Failing-test-first throughout.
 
 ## Recently completed
 
+- 2026-05-06 EST — M1.8 + M1.9 handoff recipes — concrete integration
+  patches dropped in validate/inbox/ and tiffz/inbox/. Each contains
+  the exact flake.nix + build.zig changes, the shim file in full,
+  and step-by-step call-site flip plan (validate) or greenfield
+  decodeJpegStrip sketch with JPEGTables splice helper (tiffz). Both
+  acknowledge cross-project boundary; execution lives in the consumer
+  project's session.
+- 2026-05-06 EST — M1.4b 12/16-bit lossless + M1.5b codec-integrity +
+  M1.6b JP2 lossless 5/3 + lossy 9/7 fixtures (one combined commit) —
+  cinfo.data_precision branch in libjpeg_wrapper for jpeg12_/jpeg16_
+  read paths; validateCodecIntegrity decodes-through with no pixel
+  materialization and maps libjpeg msg_code → FindingCode; both JP2
+  wavelet modes round-trip without code change. 28/28 tests green.
 - 2026-05-05 EST — M1.7 C FFI — include/jpegz_core.h (curated) +
   include/jpegz_errno.h (auto-generated from src/core/errors.zig at
   build time via tools/gen_c_header.zig). src/ffi/c_api.zig has
