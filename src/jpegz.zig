@@ -221,6 +221,9 @@ pub const internal = struct {
     pub fn cleanroomDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/baseline.zig").decode(allocator, data);
     }
+    pub fn progressiveDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
+        return @import("decode/progressive.zig").decode(allocator, data);
+    }
     pub fn wrapperDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("ffi/libjpeg_wrapper.zig").decode(allocator, data);
     }
