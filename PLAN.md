@@ -158,9 +158,29 @@ cleanroom impl must produce byte-equal output for every fixture. Order
 chosen to maximize impact per milestone (most-used codec first; share
 machinery where possible).
 
-- [ ] **M2.1 — Baseline cleanroom (sequential DCT, 8-bit).** Most-used
-      path; biggest impact. zigimg `src/formats/jpeg.zig` (MIT,
-      baseline-only) reading allowed.
+- [~] **M2.1 — Baseline cleanroom (sequential DCT, 8-bit).** Started
+      2026-05-06: bitstream reader (FF-stuffed, MSB-first), DHT-driven
+      Huffman decoder (8-bit fast lookup + slow path for codes 9..16),
+      direct-formula 8×8 IDCT (T.81 §A.3.3 inverse formula), and
+      top-level decoder integrating DQT/DHT/SOF0/SOS marker parse +
+      MCU loop with zig-zag dequant + IDCT + grayscale/YCbCr-to-RGB
+      output. Dispatcher in src/jpegz.zig routes matching SOF0 inputs
+      to cleanroom; falls back to libjpeg wrapper for unsupported
+      features (subsampling != 1×1, restart markers, multi-component
+      with non-uniform sampling). Verified end-to-end on the 4×4 8-bit
+      grayscale baseline fixture (proof-of-life via debug print
+      confirmed cleanroom path was entered). 76/76 tests green via
+      nix flake check.
+
+      Remaining for "M2.1 complete enough to retire libjpeg-turbo for
+      simple baseline":
+      - 3-component RGB without subsampling (cleanroom rejects
+        currently because cjpeg defaults to 4:2:0 chroma sub; need
+        a fixture from `cjpeg -sample 1x1`).
+      - Chroma subsampling 4:2:0 / 4:2:2 (rewrite MCU loop to handle
+        per-component sampling factors, upsample chroma).
+      - Restart markers (re-init prev_dc on RST, sync bitstream).
+      - 12-bit precision (separate scanline/IDCT path for u16 blocks).
 - [ ] **M2.2 — Progressive cleanroom.** Builds on baseline DCT; adds
       spectral selection + successive approximation.
 - [ ] **M2.3 — Lossless audit.** Audit the lifted decoder against T.81

@@ -15,12 +15,18 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// ── Re-exports from the canonical error module ──────────────────────
+// ── Re-exports from canonical core modules ──────────────────────
 const errors = @import("core/errors.zig");
 pub const DecodeError = errors.DecodeError;
 pub const Severity = errors.Severity;
 pub const Variant = errors.Variant;
 pub const FindingCode = errors.FindingCode;
+
+const core_types = @import("core/types.zig");
+pub const ColorSpace = core_types.ColorSpace;
+pub const PixelLayout = core_types.PixelLayout;
+pub const Image = core_types.Image;
+pub const ImageMetadata = core_types.ImageMetadata;
 
 pub const version: [:0]const u8 = "0.1.0";
 
@@ -28,84 +34,11 @@ pub const version: [:0]const u8 = "0.1.0";
 // 1. Pixel-data types
 // ─────────────────────────────────────────────────────────────────────
 
-/// Source-encoded color space, populated by the decoder. Output pixel
-/// layout is reported separately in `Image.layout` because the library
-/// converts YCbCr → RGB and YCCK → CMYK by default.
-pub const ColorSpace = enum(u8) {
-    unknown,
-    grayscale,
-    rgb,
-    ycbcr,           // T.81 most-common; converted to RGB on output
-    cmyk,
-    ycck,            // Adobe YCCK; converted to CMYK on output
-    srgb,            // JP2 enumerated colorspace 16
-    greyscale_jp2,   // JP2 enumerated colorspace 17
-};
-
-/// What the decoded `pixels` buffer actually contains, after conversion.
-pub const PixelLayout = enum(u8) {
-    grayscale, // 1 sample per pixel
-    rgb,       // 3 samples per pixel, R-G-B order
-    cmyk,      // 4 samples per pixel, C-M-Y-K order (JP2 doesn't emit this)
-};
-
-/// Decoded image. Caller owns `pixels`. Free via `image.deinit(allocator)`.
-///
-/// For 8-bit images, `pixels` is byte-shaped.
-/// For 12/16-bit images, `pixels` is `u16`-shaped in **host endianness**,
-/// reinterpret-cast as `[]u8`. Use `image.pixelsU16()` for the typed view.
-/// The library guarantees the unused high bits are zero on <16-bit precision.
-pub const Image = struct {
-    pixels: []u8,
-    width: u32,
-    height: u32,
-    /// 1 = grayscale, 3 = RGB, 4 = CMYK
-    channels: u8,
-    /// 8 (default) | 12 (12-bit baseline) | 16 (lossless DICOM/DNG)
-    bits_per_sample: u8,
-    /// Source color space, before output conversion (informational).
-    source_color_space: ColorSpace,
-    /// What the buffer actually contains.
-    layout: PixelLayout,
-
-    /// Convenience: row stride in bytes.
-    pub fn rowStride(self: Image) usize {
-        const bytes_per_sample: usize = if (self.bits_per_sample > 8) 2 else 1;
-        return @as(usize, self.width) * @as(usize, self.channels) * bytes_per_sample;
-    }
-
-    /// Convenience: reinterpret `pixels` as a u16 slice for >8-bit images.
-    /// Returns `[]align(1) u16` because the underlying allocation is
-    /// `[]u8`-typed (byte-aligned) — semantically the bytes are valid
-    /// host-endian u16 pairs but the type system can't promise natural
-    /// alignment without a separate aligned allocation.
-    /// Asserts `bits_per_sample > 8`.
-    pub fn pixelsU16(self: Image) []align(1) u16 {
-        std.debug.assert(self.bits_per_sample > 8);
-        return std.mem.bytesAsSlice(u16, self.pixels);
-    }
-
-    pub fn deinit(self: *Image, allocator: Allocator) void {
-        allocator.free(self.pixels);
-        self.* = undefined;
-    }
-};
-
-/// Returned by `decodeStreamingRows`. No pixel buffer — the caller's
-/// callback received the rows.
-pub const ImageMetadata = struct {
-    width: u32,
-    height: u32,
-    channels: u8,
-    bits_per_sample: u8,
-    source_color_space: ColorSpace,
-    layout: PixelLayout,
-
-    pub fn rowStride(self: ImageMetadata) usize {
-        const bytes_per_sample: usize = if (self.bits_per_sample > 8) 2 else 1;
-        return @as(usize, self.width) * @as(usize, self.channels) * bytes_per_sample;
-    }
-};
+// `ColorSpace`, `PixelLayout`, `Image`, `ImageMetadata` are
+// re-exported from `core/types.zig` above. See that file for full
+// documentation. Splitting them out lets the cleanroom decoder
+// (`src/decode/baseline.zig` etc.) import the same types without
+// creating a module cycle through this file.
 
 // ─────────────────────────────────────────────────────────────────────
 // 2. Streaming
@@ -185,7 +118,22 @@ pub const ValidationReport = struct {
 ///   - 12/16-bit images: `pixels` is `u16` host-endian (reinterpret-cast
 ///     as `[]u8`); accessed via `image.pixelsU16()`.
 pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
-    return @import("ffi/libjpeg_wrapper.zig").decode(allocator, data);
+    // Phase 2 dispatch: try the cleanroom path first; if it returns
+    // `error.NotImplemented` (a feature not yet implemented in the
+    // cleanroom decoder), fall back transparently to the
+    // libjpeg-turbo wrapper. Each retired libjpeg-turbo path
+    // shrinks the wrapper's role until Phase 2 completes and the C
+    // dep is removed entirely.
+    const cleanroom = @import("decode/baseline.zig");
+    if (cleanroom.decode(allocator, data)) |img| {
+        return img;
+    } else |err| switch (err) {
+        error.NotImplemented => {
+            // Cleanroom doesn't yet handle this variant; route through wrapper.
+            return @import("ffi/libjpeg_wrapper.zig").decode(allocator, data);
+        },
+        else => return err,
+    }
 }
 
 /// Decode JPEG row-by-row, invoking `cb` once per emitted row in

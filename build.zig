@@ -131,6 +131,25 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(huffman_tests).step);
 
+    const idct_mod = b.createModule(.{
+        .root_source_file = b.path("src/decode/idct.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const idct_tests = b.addTest(.{
+        .name = "decode_idct",
+        .root_module = idct_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(idct_tests).step);
+
+    // Cleanroom decoder modules (baseline.zig etc.) are tested
+    // implicitly via the dispatch in src/jpegz.zig — when a fixture
+    // matches the cleanroom's supported shape (8-bit, no subsampling,
+    // no DRI), the dispatcher routes to it; otherwise falls back to
+    // libjpeg_wrapper. Tier 1 fixture coverage is the indirect test
+    // surface. (Direct tests would need a separate baseline_mod which
+    // creates a module-cycle through jpegz.zig.)
+
     // (3) Decode test suite (M1.3 — baseline + progressive wrap).
     const decode_mod = b.createModule(.{
         .root_source_file = b.path("tests/unit/decode.zig"),
