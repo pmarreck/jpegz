@@ -359,4 +359,33 @@ test "decode 8x8 progressive RGB JPEG" {
     try std.testing.expectEqual(@as(u8, 8), image.bits_per_sample);
     try std.testing.expectEqual(jpegz.PixelLayout.rgb, image.layout);
     try std.testing.expectEqual(@as(usize, 8 * 8 * 3), image.pixels.len);
+    // Source: uniform R=0xFF G=0x80 B=0x40; quality=85 progressive. ±25.
+    var i: usize = 0;
+    while (i < image.pixels.len) : (i += 3) {
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 0]) - 0xFF) < 25);
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 1]) - 0x80) < 25);
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 2]) - 0x40) < 25);
+    }
+}
+
+/// 8×8 grayscale progressive — simplest progressive case (1 component,
+/// 6 scans: DC first + AC[1..5] + AC[6..63] + AC refine + DC refine + AC refine).
+const fixture_progressive_8x8_gray = @embedFile("fixtures/progressive_8x8_gray.jpg");
+
+test "decode 8x8 progressive grayscale (currently wrapper; cleanroom WIP)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_progressive_8x8_gray);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 8), image.width);
+    try std.testing.expectEqual(@as(u32, 8), image.height);
+    try std.testing.expectEqual(@as(u8, 1), image.channels);
+    try std.testing.expectEqual(@as(u8, 8), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.grayscale, image.layout);
+    try std.testing.expectEqual(@as(usize, 64), image.pixels.len);
+    // Input was uniform 0x80; quality=85 progressive should round-trip
+    // each pixel within ±15.
+    for (image.pixels) |b| {
+        try std.testing.expect(@abs(@as(i16, b) - 0x80) < 15);
+    }
 }

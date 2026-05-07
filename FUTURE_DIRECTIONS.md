@@ -19,6 +19,19 @@ JPEG-XT is an HDR extension layer that *might* fold in later).
 
 ## Sibling-project candidates (most-promising)
 
+### JPEG encoder (`jpegzz` or jpegz `encode` sub-namespace)
+
+**Status:** no project; scope-creep boundary for jpegz.
+**Why separate:** an encoder is roughly 2× the surface area of a decoder. Beyond reusing the DCT and quantization-table primitives, the encoder owns scan-script planning, subsampling decisions, Huffman-table generation (or fixed-default selection), quality / rate control, and psychovisual quantization-table tuning. mozjpeg's value lives almost entirely in encoder-side tuning; competing on quality means years of research, not weeks.
+**Profitability:** **medium for the family.** Real consumers exist: `validate` repair workflows (recompress a corrupted JPEG into a clean one), `tiffz` write paths at far-future milestones, image converters. Sharing IDCT/DCT and quant-table types between jpegz and an encoder project keeps both clean.
+**Recommendation:** when a real consumer asks, stand up `jpegzz` as a sibling project (per the convention) rather than fold encoder into jpegz. Keeps decode-only's surface tight and makes the encoder's psychovisual decisions tractable.
+
+### JPEG XL versus classic JPEG (the strategic context)
+
+JPEG XL is **strictly better** than classic JPEG on most practical axes — ~15–20% smaller at equal quality, lossless mode that beats PNG by ~50%, HDR + wide-gamut support, ANS entropy coding instead of Huffman, variable block sizes up to 256×256, plus the unique trick of losslessly transcoding existing JPEGs to a smaller JXL representation that decodes back byte-identical. **For a greenfield image, JXL wins.**
+
+But classic JPEG isn't going away because (a) decoder ubiquity (every device decodes it; JXL is Apple-yes / Chrome-no / Firefox-flag), (b) petabytes of existing files plus long legacy-system tails, (c) JPEG-LS and JPEG 2000 own specific niches (DICOM medical, DCI cinema, GIS archival) that JXL hasn't displaced. **jpegz's mission as the JPEG-family decoder is durable; JXL is `libjxlz`'s territory, not jpegz's.**
+
 ### JPEG XL (ISO/IEC 18181)
 
 **Status:** sibling project `libjxlz` exists / is in flight.

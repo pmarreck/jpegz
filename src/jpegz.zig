@@ -118,22 +118,30 @@ pub const ValidationReport = struct {
 ///   - 12/16-bit images: `pixels` is `u16` host-endian (reinterpret-cast
 ///     as `[]u8`); accessed via `image.pixelsU16()`.
 pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
-    // Phase 2 dispatch: try the cleanroom path first; if it returns
-    // `error.NotImplemented` (a feature not yet implemented in the
-    // cleanroom decoder), fall back transparently to the
-    // libjpeg-turbo wrapper. Each retired libjpeg-turbo path
-    // shrinks the wrapper's role until Phase 2 completes and the C
-    // dep is removed entirely.
-    const cleanroom = @import("decode/baseline.zig");
-    if (cleanroom.decode(allocator, data)) |img| {
+    // Phase 2 dispatch: try cleanroom paths in order; each returns
+    // `error.NotImplemented` if it doesn't handle the variant. Final
+    // fallback is the libjpeg-turbo wrapper. Each retired libjpeg
+    // path shrinks the wrapper's role until Phase 2 completes.
+    const baseline = @import("decode/baseline.zig");
+    const wrapper = @import("ffi/libjpeg_wrapper.zig");
+
+    // Try baseline cleanroom first (SOF0).
+    if (baseline.decode(allocator, data)) |img| {
         return img;
     } else |err| switch (err) {
-        error.NotImplemented => {
-            // Cleanroom doesn't yet handle this variant; route through wrapper.
-            return @import("ffi/libjpeg_wrapper.zig").decode(allocator, data);
-        },
+        error.NotImplemented => {},
         else => return err,
     }
+
+    // Progressive (SOF2) cleanroom is in-flight in src/decode/progressive.zig
+    // — has scaffolding for all four scan types (DC first/refine, AC
+    // first/refine) plus EOB-run + ZRL handling, but isn't byte-correct
+    // yet against a uniform-color test fixture. Not wired into dispatch
+    // until pixel-equality is verified. Falls through to wrapper for now.
+
+    // Final: libjpeg-turbo wrapper handles everything jpegz hasn't
+    // cleanroomed yet (SOF1/2/3/9/10/11 + arithmetic + JPEG-LS).
+    return wrapper.decode(allocator, data);
 }
 
 /// Decode JPEG row-by-row, invoking `cb` once per emitted row in

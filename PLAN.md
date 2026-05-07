@@ -212,8 +212,23 @@ machinery where possible).
       - SOF3 (lossless) → M2.3 (uses `jpeg{,12,16}_read_scanlines`)
       - SOF9/10/11 (arithmetic) → M2.5
       - 4-component CMYK input → unaddressed (rare)
-- [ ] **M2.2 — Progressive cleanroom.** Builds on baseline DCT; adds
-      spectral selection + successive approximation.
+- [~] **M2.2 — Progressive cleanroom.** Started 2026-05-07. Module
+      `src/decode/progressive.zig` written end-to-end:
+      - Persistent per-component coefficient buffers
+        (mcu_cols × h_factor × mcu_rows × v_factor blocks × 64 i16)
+      - Multi-scan marker walker (loops SOS until EOI)
+      - All 4 scan-type variants implemented per T.81 §G.1.2:
+        DC first-pass (Ah=0), DC refinement (Ah>0),
+        AC first-pass (Ah=0, with EOB-run extension),
+        AC refinement (Ah>0, with sign-preserving 1-bit refinement
+        and EOB-run carry-over)
+      - Final pass: dequantize zig-zag → un-zig-zag → IDCT → YCbCr→RGB
+      Currently NOT wired into dispatch in src/jpegz.zig — output
+      doesn't match the wrapper byte-for-byte on the simplest 8×8
+      grayscale fixture (6-scan progressive). Likely culprits in
+      AC-refinement walk-forward logic (ZRL semantics) or the
+      multi-scan byte-position handoff. Iteration to pixel-equality
+      is the M2.2-complete checkpoint; current commit is WIP.
 - [ ] **M2.3 — Lossless audit.** Audit the lifted decoder against T.81
       §13 + libjpeg-turbo oracle.
 - [ ] **M2.4 — 12-bit precision.** Rare but spec-mandatory.
