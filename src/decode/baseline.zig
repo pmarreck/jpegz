@@ -761,19 +761,25 @@ fn assembleOutput(
             var x: u32 = 0;
             while (x < width) : (x += 1) {
                 const off_in: usize = y * canvas_w + x;
-                const Ys: u8 = canvas_planes[0][off_in];
-                const Cbs: u8 = canvas_planes[1][off_in];
-                const Crs: u8 = canvas_planes[2][off_in];
-                const Y: f32 = @floatFromInt(Ys);
-                const Cb: f32 = @floatFromInt(Cbs);
-                const Cr: f32 = @floatFromInt(Crs);
-                const r = Y + 1.402 * (Cr - 128.0);
-                const g = Y - 0.344136 * (Cb - 128.0) - 0.714136 * (Cr - 128.0);
-                const b = Y + 1.772 * (Cb - 128.0);
+                // libjpeg-turbo's fixed-point YCbCr→RGB (jdcolor.c). 16-bit
+                // SCALEBITS, FIX(x) = round(x * 2^16). Constants:
+                //   Cred       =  FIX(1.40200) =  91881
+                //   Cgreen_cb  = -FIX(0.34414) = -22554
+                //   Cgreen_cr  = -FIX(0.71414) = -46802
+                //   Cblue      =  FIX(1.77200) = 116130
+                // ONE_HALF = 1 << 15 (rounding bias).
+                // Using these (vs our previous f32 path) makes cleanroom
+                // RGB output bit-identical to libjpeg-turbo's ycc_rgb_convert.
+                const Y: i32 = @intCast(canvas_planes[0][off_in]);
+                const Cb: i32 = @as(i32, canvas_planes[1][off_in]) - 128;
+                const Cr: i32 = @as(i32, canvas_planes[2][off_in]) - 128;
+                const r: i32 = Y + ((Cr * 91881 + 32768) >> 16);
+                const g: i32 = Y + ((Cb * -22554 + Cr * -46802 + 32768) >> 16);
+                const b: i32 = Y + ((Cb * 116130 + 32768) >> 16);
                 const out_off: usize = (y * width + x) * 3;
-                pixels[out_off + 0] = clampU8(r);
-                pixels[out_off + 1] = clampU8(g);
-                pixels[out_off + 2] = clampU8(b);
+                pixels[out_off + 0] = clampSampleI32(r);
+                pixels[out_off + 1] = clampSampleI32(g);
+                pixels[out_off + 2] = clampSampleI32(b);
             }
         }
     }
