@@ -20,3 +20,6 @@ inbox/
 # Non-committed scratch space: ad-hoc analysis scripts, manual test
 # harnesses against private corpora, etc. Anything in here is local-only.
 scratch/
+
+# Claude Code per-session state (lock files, scheduled task records).
+.claude/
