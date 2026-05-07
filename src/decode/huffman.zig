@@ -102,6 +102,10 @@ pub const HuffmanTable = struct {
         }
 
         // Build slow-path tables (max_code / val_offset by length).
+        // Track first_code_at_len in lockstep with the canonical generator
+        // above. CRITICAL: shift left even when count==0 — the first loop's
+        // `code <<= 1` runs for every length regardless of count, and this
+        // table must mirror that. (T.81 Annex C, Figure C.3 generate_decoder_tables.)
         for (&t.max_code) |*v| v.* = -1;
         for (&t.val_offset) |*v| v.* = 0;
         var ci: usize = 0;
@@ -110,6 +114,7 @@ pub const HuffmanTable = struct {
             const len: u8 = @intCast(len_plus_1);
             if (count == 0) {
                 t.max_code[len] = -1;
+                first_code_at_len <<= 1;
                 continue;
             }
             t.val_offset[len] = @as(i32, @intCast(ci)) - @as(i32, @intCast(first_code_at_len));
@@ -247,4 +252,27 @@ test "buildFromDht: rejects HUFFVAL too short" {
     const bits = [_]u8{ 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     const vals = [_]u8{ 0, 1 }; // only 2 values, table claims 3
     try std.testing.expectError(error.InvalidHuffmanTable, HuffmanTable.buildFromDht(bits, &vals));
+}
+
+test "buildFromDht: standard luma AC table — long-code val_offset/max_code track gap-shifts" {
+    // Standard luma AC table per T.81 Table K.5: bits =
+    // [0,2,1,3,3,2,4,3,5,5,4,4,0,0,1,125]. After L12 (4 codes max
+    // 0xFF7), the canonical generator shifts left through L13 (0
+    // codes), L14 (0 codes), then emits 1 code at L15. The L15 code
+    // is therefore 0xFF8 << 3 = 0x7FC0, NOT 0x1FF0. Without the
+    // gap-shift fix, slow-path decode of any L13-L16 code (which
+    // includes most ZRL-ish AC values in real-world JPEGs) misses,
+    // causing systematic ac_huffman_decode_failed across most files.
+    const bits = [_]u8{ 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125 };
+    // Just need 162 values to satisfy buildFromDht. Use 0..161 — the
+    // exact byte sequence doesn't matter for table-shape validation.
+    var vals: [162]u8 = undefined;
+    for (&vals, 0..) |*v, i| v.* = @intCast(i);
+    const t = try HuffmanTable.buildFromDht(bits, &vals);
+
+    // First L15 code is 0x7FC0 (the only code at that length).
+    try std.testing.expectEqual(@as(i32, 0x7FC0), t.max_code[15]);
+    // First L16 code = 0x7FC1 << 1 = 0xFF82; with 125 codes max =
+    // 0xFFFE.
+    try std.testing.expectEqual(@as(i32, 0xFFFE), t.max_code[16]);
 }

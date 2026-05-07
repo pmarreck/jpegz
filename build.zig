@@ -249,4 +249,19 @@ pub fn build(b: *std.Build) void {
         const diff_step = b.step("cleanroom-diff", "Build the scratch/ cleanroom-diff harness");
         diff_step.dependOn(&b.addInstallArtifact(diff_exe, .{}).step);
     } else |_| {}
+
+    if (std.fs.cwd().access("scratch/diag_one.zig", .{})) {
+        const diag_mod = b.createModule(.{
+            .root_source_file = b.path("scratch/diag_one.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        diag_mod.addImport("jpegz", jpegz_mod);
+        const diag_exe = b.addExecutable(.{
+            .name = "diag-one",
+            .root_module = diag_mod,
+        });
+        const diag_step = b.step("diag-one", "Single-file decoder diagnostic (scratch/diag_one.zig)");
+        diag_step.dependOn(&b.addInstallArtifact(diag_exe, .{}).step);
+    } else |_| {}
 }
