@@ -223,4 +223,30 @@ pub fn build(b: *std.Build) void {
     c_smoke.addIncludePath(b.path("tests"));
     c_smoke.linkLibrary(lib);
     test_step.dependOn(&b.addRunArtifact(c_smoke).step);
+
+    // ============================================================
+    // `zig build cleanroom-diff` — non-committed analysis tool that
+    // walks a directory of JPEGs and diffs cleanroom vs. wrapper
+    // output per-file. Source lives in scratch/ (gitignored). Skip
+    // if the file isn't present (so a fresh checkout doesn't fail).
+    // ============================================================
+    if (std.fs.cwd().access("scratch/cleanroom_diff.zig", .{})) {
+        // The diff binary lives in scratch/ (gitignored) and consumes
+        // jpegz's public test surface (jpegz.internal.cleanroomDecode +
+        // jpegz.internal.wrapperDecode) so it doesn't need to load
+        // baseline / libjpeg_wrapper as separate modules — the existing
+        // jpegz module covers everything.
+        const diff_mod = b.createModule(.{
+            .root_source_file = b.path("scratch/cleanroom_diff.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        diff_mod.addImport("jpegz", jpegz_mod);
+        const diff_exe = b.addExecutable(.{
+            .name = "cleanroom-diff",
+            .root_module = diff_mod,
+        });
+        const diff_step = b.step("cleanroom-diff", "Build the scratch/ cleanroom-diff harness");
+        diff_step.dependOn(&b.addInstallArtifact(diff_exe, .{}).step);
+    } else |_| {}
 }

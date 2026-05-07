@@ -212,6 +212,27 @@ machinery where possible).
       - SOF3 (lossless) → M2.3 (uses `jpeg{,12,16}_read_scanlines`)
       - SOF9/10/11 (arithmetic) → M2.5
       - 4-component CMYK input → unaddressed (rare)
+- [ ] **M2.1c — Cleanroom robustness against real-world corpus.**
+      Discovery 2026-05-07: ran `cleanroom-diff` (new analysis tool
+      under `scratch/`, gitignored) over Peter's 4,125-JPEG corpus
+      at `/Volumes/Fileserver/clips-image/`. Result with ±4 LSB
+      tolerance:
+        - CLEAN-OK         63   (1.5%)
+        - CLEAN-DIV       962  (23.3%) — pixels diverge >4 LSB
+        - WRAP-ONLY       277   (6.7%) — cleanroom NotImplemented (correct)
+        - CLEAN-ERR     2,823  (68.4%) — cleanroom raised an error
+        - WRAP-ERR          0   (0.0%) — wrapper handled every file
+      Synthetic fixtures (cjpeg-generated uniform-color test inputs)
+      pass cleanly through cleanroom; real-world JPEGs reveal systematic
+      bugs the synthetic tests don't exercise (likely interaction with
+      large APPn segments / DRI placement / less-trivial Huffman tables
+      / image dims not multiples of MCU). Fixing requires a targeted
+      debug session on individual error cases. Most common error is
+      `BackendError` (entropy-decode); some `InvalidMarker`,
+      `TruncatedStream`. NEXT SESSION: pick 5–10 representative
+      CLEAN-ERR files, attach error-source context, fix root causes one
+      at a time.
+
 - [~] **M2.2 — Progressive cleanroom.** Started 2026-05-07. Module
       `src/decode/progressive.zig` written end-to-end:
       - Persistent per-component coefficient buffers

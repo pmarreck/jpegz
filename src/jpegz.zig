@@ -213,6 +213,19 @@ comptime {
     _ = @import("ffi/c_api.zig");
 }
 
+/// Internal test-only entry points. Not part of the public ABI; meant
+/// for analysis tools (e.g., scratch/cleanroom_diff.zig) that need to
+/// call cleanroom and wrapper paths directly without going through
+/// the dispatcher in `decode`.
+pub const internal = struct {
+    pub fn cleanroomDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
+        return @import("decode/baseline.zig").decode(allocator, data);
+    }
+    pub fn wrapperDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
+        return @import("ffi/libjpeg_wrapper.zig").decode(allocator, data);
+    }
+};
+
 // ─────────────────────────────────────────────────────────────────────
 // Inline tests — wiring sanity. Real test suites in `tests/`.
 // ─────────────────────────────────────────────────────────────────────

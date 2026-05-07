@@ -16,3 +16,7 @@ jj_cheatsheet.md
 # Cross-project agent inbox — transient incoming messages from sibling
 # projects' LLMs (per CLAUDE.md convention). Local-only working state.
 inbox/
+
+# Non-committed scratch space: ad-hoc analysis scripts, manual test
+# harnesses against private corpora, etc. Anything in here is local-only.
+scratch/
