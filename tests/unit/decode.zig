@@ -106,6 +106,36 @@ test "decode 4x4 12-bit grayscale lossless (SOF3) JPEG" {
     for (px) |s| try std.testing.expectEqual(@as(u16, 0x800), s);
 }
 
+/// 4×4 12-bit grayscale baseline DCT (SOF1 extended sequential, NOT
+/// SOF0 baseline — T.81 SOF0 is 8-bit-only). cjpeg `-baseline
+/// -precision 12` emits this. Goes through libjpeg-turbo's
+/// `jpeg12_read_scanlines` path via M1.4b's precision-range
+/// dispatch in the wrapper. Cleanroom (SOF0-only) returns
+/// NotImplemented and falls back.
+const fixture_baseline_4x4_gray12_dct = @embedFile("fixtures/baseline_4x4_gray12_dct.jpg");
+
+test "decode 4x4 12-bit grayscale baseline DCT (SOF1)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_baseline_4x4_gray12_dct);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 1), image.channels);
+    try std.testing.expectEqual(@as(u8, 12), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.grayscale, image.layout);
+    try std.testing.expectEqual(@as(usize, 32), image.pixels.len); // 4*4*2 (u16-aliased)
+    // Source: uniform 0x0800 (mid-range 12-bit). Lossy DCT round-trip
+    // at default quality keeps values close. Tight ±200 (out of 4095)
+    // tolerance.
+    const px = image.pixelsU16();
+    try std.testing.expectEqual(@as(usize, 16), px.len);
+    for (px) |s| {
+        const delta = @as(i32, s) - 0x800;
+        try std.testing.expect(@abs(delta) < 200);
+    }
+}
+
 /// 4×4 14-bit grayscale lossless (precision 14, all 0x2000). DNG raw
 /// commonly uses 14-bit precision (Sony/Nikon/Fuji sensors); jpegz's
 /// libjpeg-turbo path routes precision 13..16 through jpeg16_*. M1.4b
@@ -138,6 +168,37 @@ test "decode 4x4 14-bit grayscale lossless (SOF3) JPEG (DNG path)" {
 // byte-equal output to libjpeg-turbo for these inputs).
 // ─────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────
+// M2.1 cleanroom — 3-component RGB without subsampling (4:4:4).
+// First fixture exercising the multi-component MCU loop in cleanroom.
+// ─────────────────────────────────────────────────────────────────────
+
+/// 4×4 RGB baseline with all components at 1×1 sampling (no subsampling).
+/// cjpeg's default produces 4:2:0; this fixture used `-sample 1x1`.
+const fixture_baseline_4x4_rgb_444 = @embedFile("fixtures/baseline_4x4_rgb_444.jpg");
+
+test "decode 4x4 RGB baseline 4:4:4 (no subsampling) — cleanroom path" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_baseline_4x4_rgb_444);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+    try std.testing.expectEqual(@as(u8, 8), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.rgb, image.layout);
+    try std.testing.expectEqual(jpegz.ColorSpace.ycbcr, image.source_color_space);
+    try std.testing.expectEqual(@as(usize, 4 * 4 * 3), image.pixels.len);
+    // Source: uniform R=0x80, G=0x40, B=0xA0. Quality=80 lossy round-trip;
+    // every output pixel should land within ±20 per channel.
+    var i: usize = 0;
+    while (i < image.pixels.len) : (i += 3) {
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 0]) - 0x80) < 20);
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 1]) - 0x40) < 20);
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 2]) - 0xA0) < 20);
+    }
+}
+
 /// T1.1: arithmetic-coded baseline (SOF9). Patents expired in early
 /// 2000s; libjpeg-turbo decodes it via the same scanline path.
 const fixture_baseline_4x4_arithmetic = @embedFile("fixtures/baseline_4x4_arithmetic.jpg");
@@ -167,6 +228,16 @@ test "decode 16x16 baseline JPEG with restart markers (DRI=2)" {
     try std.testing.expectEqual(@as(u32, 16), image.height);
     try std.testing.expectEqual(@as(u8, 3), image.channels);
     try std.testing.expectEqual(@as(usize, 16 * 16 * 3), image.pixels.len);
+    // Source: uniform R=0x80 G=0x40 B=0xA0; quality=80 lossy. Every
+    // pixel within ±25 per channel — proves restart-marker handling
+    // is correct (a missed/mishandled RST realigns prev_dc and the
+    // pixels go wildly off).
+    var i: usize = 0;
+    while (i < image.pixels.len) : (i += 3) {
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 0]) - 0x80) < 25);
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 1]) - 0x40) < 25);
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 2]) - 0xA0) < 25);
+    }
 }
 
 /// T1.3: 4×4 CMYK JPEG (4 components, Adobe APP14 colorspace = CMYK).
@@ -227,6 +298,14 @@ test "decode 8x8 baseline JPEG with 4:2:0 chroma subsampling" {
     try std.testing.expectEqual(@as(u8, 3), image.channels);
     try std.testing.expectEqual(jpegz.PixelLayout.rgb, image.layout);
     try std.testing.expectEqual(@as(usize, 8 * 8 * 3), image.pixels.len);
+    // Source: uniform R=0x80 G=0x40 B=0xA0; lossy at quality=80 with
+    // 4:2:0 chroma sub. Every pixel within ±25 per channel.
+    var i: usize = 0;
+    while (i < image.pixels.len) : (i += 3) {
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 0]) - 0x80) < 25);
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 1]) - 0x40) < 25);
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 2]) - 0xA0) < 25);
+    }
 }
 
 /// T1.5b: 8×8 RGB JPEG with 4:2:2 chroma subsampling.
@@ -241,6 +320,12 @@ test "decode 8x8 baseline JPEG with 4:2:2 chroma subsampling" {
     try std.testing.expectEqual(@as(u32, 8), image.height);
     try std.testing.expectEqual(@as(u8, 3), image.channels);
     try std.testing.expectEqual(jpegz.PixelLayout.rgb, image.layout);
+    var i: usize = 0;
+    while (i < image.pixels.len) : (i += 3) {
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 0]) - 0x80) < 25);
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 1]) - 0x40) < 25);
+        try std.testing.expect(@abs(@as(i16, image.pixels[i + 2]) - 0xA0) < 25);
+    }
 }
 
 /// 4×4 16-bit grayscale lossless. precision 16, all 0x8000.

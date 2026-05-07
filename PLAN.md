@@ -172,15 +172,46 @@ machinery where possible).
       confirmed cleanroom path was entered). 76/76 tests green via
       nix flake check.
 
-      Remaining for "M2.1 complete enough to retire libjpeg-turbo for
-      simple baseline":
-      - 3-component RGB without subsampling (cleanroom rejects
-        currently because cjpeg defaults to 4:2:0 chroma sub; need
-        a fixture from `cjpeg -sample 1x1`).
-      - Chroma subsampling 4:2:0 / 4:2:2 (rewrite MCU loop to handle
-        per-component sampling factors, upsample chroma).
-      - Restart markers (re-init prev_dc on RST, sync bitstream).
-      - 12-bit precision (separate scanline/IDCT path for u16 blocks).
+      **2026-05-07 update — second working slice landed:**
+      - [x] **3-component RGB 4:4:4 (no subsampling)** via cleanroom.
+            Generated fixture `baseline_4x4_rgb_444.jpg` with
+            `cjpeg -sample 1x1`; multi-component MCU iteration +
+            JFIF YCbCr→RGB conversion verified (all pixels within
+            ±20 of input).
+      - [x] **Chroma subsampling 4:2:0 / 4:2:2** via cleanroom.
+            Rewrote MCU loop for variable per-component sampling
+            factors; `decodeBlock` now takes plane / plane_w /
+            block_x / block_y so the same routine handles every
+            component layout. `assembleOutput` does nearest-neighbor
+            chroma upsampling via `sampleComponent(plane, h_factor,
+            v_factor, max_h, max_v)`. Both 4:2:0 and 4:2:2 fixtures
+            now decode through cleanroom with ±25 tolerance per
+            channel.
+      - [x] **Restart markers (DRI / RSTm)** via cleanroom. DRI
+            (0xDD) parsed to `restart_interval`; MCU loop resyncs
+            every N MCUs by validating the next RSTm marker (cycles
+            0..7), resetting `prev_dc`, and re-initializing the
+            BitReader past the marker. 16×16 fixture with DRI=2
+            (8 MCUs total → 4 RSTs interspersed) decodes correctly.
+
+      **12-bit DCT (SOF1, T.81 §A.4.1):**
+      - [x] **Wrapper-level support shipped** today: cjpeg
+            `-baseline -precision 12` emits SOF1 (NOT SOF0); the
+            existing libjpeg_wrapper's M1.4b precision range
+            (1..16 → jpeg/jpeg12/jpeg16 routing) handles it for any
+            SOF including SOF1. New fixture
+            `baseline_4x4_gray12_dct.jpg` decodes to a 12-bit
+            `[]u16`-aliased Image with values within 200/4095 of
+            input. _(cleanroom SOF1 12-bit DCT decode is a separate
+            future milestone — needs 12-bit IDCT and `[]u16` plane
+            storage; not in M2.1 scope.)_
+
+      **What still falls back to libjpeg-turbo for SOF0 cleanroom:**
+      - SOF1 (extended sequential — including 12-bit DCT)
+      - SOF2 (progressive) → M2.2
+      - SOF3 (lossless) → M2.3 (uses `jpeg{,12,16}_read_scanlines`)
+      - SOF9/10/11 (arithmetic) → M2.5
+      - 4-component CMYK input → unaddressed (rare)
 - [ ] **M2.2 — Progressive cleanroom.** Builds on baseline DCT; adds
       spectral selection + successive approximation.
 - [ ] **M2.3 — Lossless audit.** Audit the lifted decoder against T.81

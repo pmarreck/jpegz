@@ -78,6 +78,9 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
     var quant_tables: [4]?[64]u16 = .{ null, null, null, null };
     var dc_tables: [4]?huffman.HuffmanTable = .{ null, null, null, null };
     var ac_tables: [4]?huffman.HuffmanTable = .{ null, null, null, null };
+    // Restart interval (DRI marker) — number of MCUs between RSTm
+    // resync markers. 0 disables restart handling.
+    var restart_interval: u32 = 0;
 
     // ── Marker walk until we reach SOS ─────────────────────────
     while (pos + 1 < data.len) {
@@ -95,10 +98,12 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
                 if (frame.?.precision != 8) return error.UnsupportedPrecision;
                 if (frame.?.num_components != 1 and frame.?.num_components != 3)
                     return error.NotImplemented;
-                // v1 scope: only 1×1 sampling factors. Hand off to wrapper otherwise.
+                // Sampling factors: v2 supports any h/v_factor in 1..4
+                // (the spec maximum) including the common 4:2:0 and 4:2:2 layouts.
                 var i: usize = 0;
                 while (i < frame.?.num_components) : (i += 1) {
-                    if (frame.?.components[i].h_factor != 1 or frame.?.components[i].v_factor != 1)
+                    const c = &frame.?.components[i];
+                    if (c.h_factor < 1 or c.h_factor > 4 or c.v_factor < 1 or c.v_factor > 4)
                         return error.NotImplemented;
                 }
                 pos += parseSegmentLength(data, pos);
@@ -113,7 +118,12 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
                 try parseDqt(data, pos, &quant_tables);
                 pos += parseSegmentLength(data, pos);
             },
-            0xDD => return error.NotImplemented, // DRI (restart interval) — v1 doesn't support
+            0xDD => { // DRI — Define Restart Interval (T.81 §B.2.4.4)
+                const seg_len = parseSegmentLength(data, pos);
+                if (seg_len < 4 or pos + seg_len > data.len) return error.TruncatedStream;
+                restart_interval = (@as(u32, data[pos + 2]) << 8) | data[pos + 3];
+                pos += seg_len;
+            },
             0xDA => { // SOS — entropy data follows
                 if (frame == null) return error.InvalidMarker;
                 try parseSos(data, pos, &frame.?);
@@ -126,6 +136,7 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
                     &quant_tables,
                     &dc_tables,
                     &ac_tables,
+                    restart_interval,
                 );
             },
             // Standalone markers we can skip safely:
@@ -266,23 +277,48 @@ fn decodeScan(
     quant_tables: *const [4]?[64]u16,
     dc_tables: *const [4]?huffman.HuffmanTable,
     ac_tables: *const [4]?huffman.HuffmanTable,
+    restart_interval: u32,
 ) Error!types.Image {
     const channels: u8 = frame.num_components;
     const width: u32 = frame.width;
     const height: u32 = frame.height;
-    // MCU size: for all-1×1 sampling, one MCU = one 8×8 block per component.
-    const mcu_cols: u32 = (width + 7) / 8;
-    const mcu_rows: u32 = (height + 7) / 8;
 
-    // Allocate component planes (8-padded width × 8-padded height each).
-    const padded_w: u32 = mcu_cols * 8;
-    const padded_h: u32 = mcu_rows * 8;
-    const plane_len: usize = @as(usize, padded_w) * @as(usize, padded_h);
+    // Compute max h/v sampling factors across all components. These
+    // define the MCU size in pixels: max_h*8 wide × max_v*8 tall.
+    // Per-component plane is sized at the component's natural
+    // resolution: mcu_cols * comp.h_factor * 8 wide, etc.
+    var max_h: u32 = 1;
+    var max_v: u32 = 1;
+    {
+        var i: usize = 0;
+        while (i < channels) : (i += 1) {
+            const c = &frame.components[i];
+            if (@as(u32, c.h_factor) > max_h) max_h = @intCast(c.h_factor);
+            if (@as(u32, c.v_factor) > max_v) max_v = @intCast(c.v_factor);
+        }
+    }
+    const mcu_pixel_w: u32 = max_h * 8;
+    const mcu_pixel_h: u32 = max_v * 8;
+    const mcu_cols: u32 = (width + mcu_pixel_w - 1) / mcu_pixel_w;
+    const mcu_rows: u32 = (height + mcu_pixel_h - 1) / mcu_pixel_h;
+
+    // Per-component plane dimensions (at component's natural resolution).
+    var plane_w: [3]u32 = .{ 0, 0, 0 };
+    var plane_h: [3]u32 = .{ 0, 0, 0 };
+    {
+        var i: usize = 0;
+        while (i < channels) : (i += 1) {
+            plane_w[i] = mcu_cols * @as(u32, frame.components[i].h_factor) * 8;
+            plane_h[i] = mcu_rows * @as(u32, frame.components[i].v_factor) * 8;
+        }
+    }
 
     var planes: [3][]u8 = .{ &.{}, &.{}, &.{} };
-    var i: usize = 0;
-    while (i < channels) : (i += 1) {
-        planes[i] = try allocator.alloc(u8, plane_len);
+    {
+        var i: usize = 0;
+        while (i < channels) : (i += 1) {
+            planes[i] = try allocator.alloc(u8, plane_w[i] * plane_h[i]);
+        }
     }
     errdefer {
         var j: usize = 0;
@@ -293,111 +329,233 @@ fn decodeScan(
 
     var br = bitstream.BitReader.init(data);
     var prev_dc: [3]i16 = .{ 0, 0, 0 };
+    // Counts MCUs since the last RST. Reset to zero on every RST
+    // (and at scan start). Used only when restart_interval > 0.
+    var mcus_since_rst: u32 = 0;
+    // Expected next RST marker byte (cycles 0xD0..0xD7). T.81 §F.2.1.3.
+    var expected_rst: u8 = 0xD0;
 
     var mcu_y: u32 = 0;
     while (mcu_y < mcu_rows) : (mcu_y += 1) {
         var mcu_x: u32 = 0;
         while (mcu_x < mcu_cols) : (mcu_x += 1) {
-            // Decode one 8×8 block per component.
+            // ── Restart-interval handling (T.81 §F.2.1.3.2) ────
+            // After `restart_interval` MCUs, the entropy stream is
+            // realigned: bit buffer flushed to next byte boundary,
+            // an RSTm marker (FF D0..D7) consumed, prev_dc reset
+            // to zero. Markers cycle through 0..7 across the scan.
+            if (restart_interval > 0 and mcus_since_rst == restart_interval) {
+                // skipEntropyData-style helper: byte-align the reader.
+                // Our BitReader's marker_seen state already triggers
+                // on encountering the RST in the stream during the
+                // previous block decode. After the marker is reached,
+                // the bit buffer is empty and marker_byte is set.
+                if (!br.marker_seen) return error.InvalidMarker;
+                if (br.marker_byte != expected_rst) return error.InvalidMarker;
+                // Reset for the next interval.
+                prev_dc = .{ 0, 0, 0 };
+                mcus_since_rst = 0;
+                expected_rst = 0xD0 + ((expected_rst - 0xD0 + 1) & 0x07);
+                // Re-init the BitReader from the byte position just
+                // PAST the RST marker — the BitReader stops *before*
+                // the FF byte of the marker, so we advance by 2.
+                const consumed_pos: usize = br.byte_pos + 2;
+                if (consumed_pos > data.len) return error.TruncatedStream;
+                br = bitstream.BitReader.init(data[consumed_pos..]);
+            }
+            // Per T.81 §A.2.3 / F.1.5: when the scan has multiple
+            // components, the MCU contains, for each component in
+            // SOS order, (h_factor × v_factor) blocks. Within a
+            // component's blocks: row-major (top-to-bottom, then
+            // left-to-right). E.g. 4:2:0 RGB MCU: Y[0,0] Y[0,1]
+            // Y[1,0] Y[1,1] Cb[0,0] Cr[0,0].
             var ci: usize = 0;
             while (ci < channels) : (ci += 1) {
                 const comp = &frame.components[ci];
-                const dc_t = dc_tables[comp.dc_table] orelse return error.InvalidMarker;
-                const ac_t = ac_tables[comp.ac_table] orelse return error.InvalidMarker;
-                const qt = quant_tables[comp.qt_index] orelse return error.InvalidMarker;
-
-                // Coefficients stored in zig-zag order during entropy
-                // decode; dequantized in zig-zag (matches DQT layout
-                // per T.81 §B.2.4.1); un-zig-zagged for IDCT input
-                // (which expects natural row-major order).
-                var zz: [64]i16 = .{0} ** 64;
-
-                // ── DC coefficient (T.81 §F.2.2.1) ─────────────
-                const dc_size: u8 = dc_t.decode(&br) catch return error.BackendError;
-                if (dc_size > 11) return error.BackendError;
-                var dc_diff: i16 = 0;
-                if (dc_size > 0) {
-                    const bits = br.readBits(@intCast(dc_size)) catch return error.TruncatedStream;
-                    dc_diff = huffman.extendSign(bits, @intCast(dc_size));
-                }
-                prev_dc[ci] += dc_diff;
-                zz[0] = prev_dc[ci];
-
-                // ── 63 AC coefficients (T.81 §F.2.2.2) ─────────
-                var k: usize = 1;
-                while (k < 64) {
-                    const rs: u8 = ac_t.decode(&br) catch return error.BackendError;
-                    if (rs == 0x00) break; // EOB — rest of block is zero
-                    if (rs == 0xF0) {
-                        // ZRL — 16 zeros (already zeroed; just advance)
-                        k += 16;
-                        continue;
-                    }
-                    const run: u8 = rs >> 4;
-                    const size: u8 = rs & 0x0F;
-                    if (size == 0 or size > 10) return error.BackendError;
-                    k += run;
-                    if (k >= 64) return error.BackendError;
-                    const bits = br.readBits(@intCast(size)) catch return error.TruncatedStream;
-                    const val = huffman.extendSign(bits, @intCast(size));
-                    zz[k] = val;
-                    k += 1;
-                }
-
-                // ── Dequantize in zig-zag space ───────────────
-                var n: usize = 0;
-                while (n < 64) : (n += 1) {
-                    zz[n] = @as(i16, @intCast(@as(i32, zz[n]) * @as(i32, qt[n])));
-                }
-
-                // ── Un-zig-zag into natural row-major order ────
-                var coeffs: [64]i16 = undefined;
-                n = 0;
-                while (n < 64) : (n += 1) {
-                    coeffs[ZIGZAG[n]] = zz[n];
-                }
-
-                // ── IDCT into the component plane ──────────────
-                var block: [64]u8 = undefined;
-                idct.idct8x8(&coeffs, &block);
-
-                // Copy 8×8 block into the plane at (mcu_x*8, mcu_y*8).
-                var by: u32 = 0;
-                while (by < 8) : (by += 1) {
-                    var bx: u32 = 0;
-                    while (bx < 8) : (bx += 1) {
-                        const px: u32 = mcu_x * 8 + bx;
-                        const py: u32 = mcu_y * 8 + by;
-                        planes[ci][py * padded_w + px] = block[by * 8 + bx];
+                const blocks_v: u32 = @intCast(comp.v_factor);
+                const blocks_h: u32 = @intCast(comp.h_factor);
+                var block_v: u32 = 0;
+                while (block_v < blocks_v) : (block_v += 1) {
+                    var block_h: u32 = 0;
+                    while (block_h < blocks_h) : (block_h += 1) {
+                        try decodeBlock(
+                            &br,
+                            ci,
+                            comp,
+                            dc_tables,
+                            ac_tables,
+                            quant_tables,
+                            &prev_dc,
+                            planes[ci],
+                            plane_w[ci],
+                            mcu_x * blocks_h * 8 + block_h * 8,
+                            mcu_y * blocks_v * 8 + block_v * 8,
+                        );
                     }
                 }
             }
+            mcus_since_rst += 1;
         }
     }
 
-    // ── Assemble interleaved output ─────────────────────────────
+    // After block decoding, fall through to the assembly section
+    // below. The original per-block decode-inline code is now in
+    // decodeBlock(); the rest of this function is the assembly path.
+    return assembleOutput(allocator, frame, channels, width, height, max_h, max_v, plane_w, plane_h, &planes);
+}
+
+/// Decode a single 8×8 block from the entropy stream and place its
+/// spatial samples into `plane` at (block_x_pixels, block_y_pixels).
+/// Updates `prev_dc[ci]` (DC differential per component, T.81 §F.2.2.1).
+fn decodeBlock(
+    br: *bitstream.BitReader,
+    ci: usize,
+    comp: *const ComponentInfo,
+    dc_tables: *const [4]?huffman.HuffmanTable,
+    ac_tables: *const [4]?huffman.HuffmanTable,
+    quant_tables: *const [4]?[64]u16,
+    prev_dc: *[3]i16,
+    plane: []u8,
+    plane_w: u32,
+    block_x: u32,
+    block_y: u32,
+) Error!void {
+    const dc_t = dc_tables[comp.dc_table] orelse return error.InvalidMarker;
+    const ac_t = ac_tables[comp.ac_table] orelse return error.InvalidMarker;
+    const qt = quant_tables[comp.qt_index] orelse return error.InvalidMarker;
+
+    // Coefficients stored in zig-zag order during entropy decode;
+    // dequantized in zig-zag (matches DQT layout per T.81 §B.2.4.1);
+    // un-zig-zagged for IDCT input (which expects natural row-major).
+    var zz: [64]i16 = .{0} ** 64;
+
+    // ── DC coefficient (T.81 §F.2.2.1) ─────────────────────────
+    const dc_size: u8 = dc_t.decode(br) catch return error.BackendError;
+    if (dc_size > 11) return error.BackendError;
+    var dc_diff: i16 = 0;
+    if (dc_size > 0) {
+        const bits = br.readBits(@intCast(dc_size)) catch return error.TruncatedStream;
+        dc_diff = huffman.extendSign(bits, @intCast(dc_size));
+    }
+    prev_dc[ci] += dc_diff;
+    zz[0] = prev_dc[ci];
+
+    // ── 63 AC coefficients (T.81 §F.2.2.2) ─────────────────────
+    var k: usize = 1;
+    while (k < 64) {
+        const rs: u8 = ac_t.decode(br) catch return error.BackendError;
+        if (rs == 0x00) break; // EOB — rest of block is zero
+        if (rs == 0xF0) {
+            k += 16; // ZRL — 16 zeros (already zeroed; just advance)
+            continue;
+        }
+        const run: u8 = rs >> 4;
+        const size: u8 = rs & 0x0F;
+        if (size == 0 or size > 10) return error.BackendError;
+        k += run;
+        if (k >= 64) return error.BackendError;
+        const bits = br.readBits(@intCast(size)) catch return error.TruncatedStream;
+        const val = huffman.extendSign(bits, @intCast(size));
+        zz[k] = val;
+        k += 1;
+    }
+
+    // ── Dequantize in zig-zag space ────────────────────────────
+    var n: usize = 0;
+    while (n < 64) : (n += 1) {
+        zz[n] = @as(i16, @intCast(@as(i32, zz[n]) * @as(i32, qt[n])));
+    }
+
+    // ── Un-zig-zag into natural row-major order ────────────────
+    var coeffs: [64]i16 = undefined;
+    n = 0;
+    while (n < 64) : (n += 1) {
+        coeffs[ZIGZAG[n]] = zz[n];
+    }
+
+    // ── IDCT to spatial samples ───────────────────────────────
+    var block: [64]u8 = undefined;
+    idct.idct8x8(&coeffs, &block);
+
+    // ── Copy 8×8 block into plane at (block_x, block_y) ───────
+    var by: u32 = 0;
+    while (by < 8) : (by += 1) {
+        var bx: u32 = 0;
+        while (bx < 8) : (bx += 1) {
+            const px: u32 = block_x + bx;
+            const py: u32 = block_y + by;
+            plane[py * plane_w + px] = block[by * 8 + bx];
+        }
+    }
+}
+
+/// Sample a component plane at canvas pixel (x, y) by mapping
+/// canvas coords → component coords using the sampling factors.
+/// Nearest-neighbor; no fancy chroma reconstruction filter.
+inline fn sampleComponent(
+    plane: []const u8,
+    plane_w: u32,
+    plane_h: u32,
+    canvas_x: u32,
+    canvas_y: u32,
+    h_factor: u32,
+    v_factor: u32,
+    max_h: u32,
+    max_v: u32,
+) u8 {
+    var cx: u32 = (canvas_x * h_factor) / max_h;
+    var cy: u32 = (canvas_y * v_factor) / max_v;
+    if (cx >= plane_w) cx = plane_w - 1;
+    if (cy >= plane_h) cy = plane_h - 1;
+    return plane[cy * plane_w + cx];
+}
+
+/// After all blocks are decoded into per-component planes, convert
+/// to interleaved output (grayscale or RGB) at canvas resolution.
+/// Subsampled chroma is upsampled nearest-neighbor (good enough for
+/// v2; proper cosited / midpoint reconstruction is a future
+/// refinement when image-quality consumers ask).
+fn assembleOutput(
+    allocator: Allocator,
+    frame: *const FrameInfo,
+    channels: u8,
+    width: u32,
+    height: u32,
+    max_h: u32,
+    max_v: u32,
+    plane_w: [3]u32,
+    plane_h: [3]u32,
+    planes: *const [3][]u8,
+) Error!types.Image {
     const out_len: usize = @as(usize, width) * @as(usize, height) * @as(usize, channels);
     const pixels = try allocator.alloc(u8, out_len);
     errdefer allocator.free(pixels);
 
     if (channels == 1) {
-        // Grayscale: copy plane 0 directly.
         var y: u32 = 0;
         while (y < height) : (y += 1) {
             var x: u32 = 0;
             while (x < width) : (x += 1) {
-                pixels[y * width + x] = planes[0][y * padded_w + x];
+                pixels[y * width + x] = planes[0][y * plane_w[0] + x];
             }
         }
     } else {
-        // 3-component YCbCr → RGB (JFIF formula).
+        const c0 = &frame.components[0];
+        const c1 = &frame.components[1];
+        const c2 = &frame.components[2];
         var y: u32 = 0;
         while (y < height) : (y += 1) {
             var x: u32 = 0;
             while (x < width) : (x += 1) {
-                const Y: f32 = @floatFromInt(planes[0][y * padded_w + x]);
-                const Cb: f32 = @floatFromInt(planes[1][y * padded_w + x]);
-                const Cr: f32 = @floatFromInt(planes[2][y * padded_w + x]);
+                const Ys = sampleComponent(planes[0], plane_w[0], plane_h[0], x, y,
+                    @intCast(c0.h_factor), @intCast(c0.v_factor), max_h, max_v);
+                const Cbs = sampleComponent(planes[1], plane_w[1], plane_h[1], x, y,
+                    @intCast(c1.h_factor), @intCast(c1.v_factor), max_h, max_v);
+                const Crs = sampleComponent(planes[2], plane_w[2], plane_h[2], x, y,
+                    @intCast(c2.h_factor), @intCast(c2.v_factor), max_h, max_v);
+                const Y: f32 = @floatFromInt(Ys);
+                const Cb: f32 = @floatFromInt(Cbs);
+                const Cr: f32 = @floatFromInt(Crs);
                 const r = Y + 1.402 * (Cr - 128.0);
                 const g = Y - 0.344136 * (Cb - 128.0) - 0.714136 * (Cr - 128.0);
                 const b = Y + 1.772 * (Cb - 128.0);
