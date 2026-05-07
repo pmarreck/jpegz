@@ -341,7 +341,11 @@ fn decodeScan(
     }
 
     var br = bitstream.BitReader.init(data);
-    var prev_dc: [3]i16 = .{ 0, 0, 0 };
+    // Accumulator: T.81 §F.1.2.1 says DC predictor "shall be initialized
+    // to 0 and reset whenever a restart marker is encountered." The
+    // running value walks through coefficient differentials; use i32
+    // so multi-block accumulation can't overflow i16's ±32767 range.
+    var prev_dc: [3]i32 = .{ 0, 0, 0 };
     // Counts MCUs since the last RST. Reset to zero on every RST
     // (and at scan start). Used only when restart_interval > 0.
     var mcus_since_rst: u32 = 0;
@@ -420,7 +424,7 @@ fn decodeBlock(
     dc_tables: *const [4]?huffman.HuffmanTable,
     ac_tables: *const [4]?huffman.HuffmanTable,
     quant_tables: *const [4]?[64]u16,
-    prev_dc: *[3]i16,
+    prev_dc: *[3]i32,
     plane: []u8,
     plane_w: u32,
     block_x: u32,
@@ -433,12 +437,13 @@ fn decodeBlock(
     // Coefficients stored in zig-zag order during entropy decode;
     // dequantized in zig-zag (matches DQT layout per T.81 §B.2.4.1);
     // un-zig-zagged for IDCT input (which expects natural row-major).
-    var zz: [64]i16 = .{0} ** 64;
+    // i32 for headroom: DC*qt can exceed i16 range on adversarial input.
+    var zz: [64]i32 = .{0} ** 64;
 
     // ── DC coefficient (T.81 §F.2.2.1) ─────────────────────────
-    const dc_size: u8 = dc_t.decode(br) catch return error.BackendError;
-    if (dc_size > 11) return error.BackendError;
-    var dc_diff: i16 = 0;
+    const dc_size: u8 = dc_t.decode(br) catch return fail("dc_huffman_decode_failed", error.BackendError);
+    if (dc_size > 11) return fail("dc_size_too_large", error.BackendError);
+    var dc_diff: i32 = 0;
     if (dc_size > 0) {
         const bits = br.readBits(@intCast(dc_size)) catch return error.TruncatedStream;
         dc_diff = huffman.extendSign(bits, @intCast(dc_size));
@@ -449,7 +454,7 @@ fn decodeBlock(
     // ── 63 AC coefficients (T.81 §F.2.2.2) ─────────────────────
     var k: usize = 1;
     while (k < 64) {
-        const rs: u8 = ac_t.decode(br) catch return error.BackendError;
+        const rs: u8 = ac_t.decode(br) catch return fail("ac_huffman_decode_failed", error.BackendError);
         if (rs == 0x00) break; // EOB — rest of block is zero
         if (rs == 0xF0) {
             k += 16; // ZRL — 16 zeros (already zeroed; just advance)
@@ -457,9 +462,9 @@ fn decodeBlock(
         }
         const run: u8 = rs >> 4;
         const size: u8 = rs & 0x0F;
-        if (size == 0 or size > 10) return error.BackendError;
+        if (size == 0 or size > 10) return fail("ac_bad_size", error.BackendError);
         k += run;
-        if (k >= 64) return error.BackendError;
+        if (k >= 64) return fail("ac_k_overflow", error.BackendError);
         const bits = br.readBits(@intCast(size)) catch return error.TruncatedStream;
         const val = huffman.extendSign(bits, @intCast(size));
         zz[k] = val;
@@ -469,11 +474,11 @@ fn decodeBlock(
     // ── Dequantize in zig-zag space ────────────────────────────
     var n: usize = 0;
     while (n < 64) : (n += 1) {
-        zz[n] = @as(i16, @intCast(@as(i32, zz[n]) * @as(i32, qt[n])));
+        zz[n] = zz[n] * @as(i32, qt[n]);
     }
 
     // ── Un-zig-zag into natural row-major order ────────────────
-    var coeffs: [64]i16 = undefined;
+    var coeffs: [64]i32 = undefined;
     n = 0;
     while (n < 64) : (n += 1) {
         coeffs[ZIGZAG[n]] = zz[n];

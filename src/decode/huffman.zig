@@ -123,18 +123,35 @@ pub const HuffmanTable = struct {
 
     /// Decode the next Huffman symbol from the bit stream.
     pub fn decode(self: *const HuffmanTable, br: *bitstream.BitReader) Error!u8 {
-        // Fast path: 8-bit lookup.
+        // Fast path: 8-bit lookup. Only safe when 8 valid bits exist —
+        // otherwise peekBits zero-pads and we'd consume phantom bits.
         const peek = br.peekBits(8);
-        const fv = self.fast_value[peek];
-        if (fv != 0xFF) {
-            const sz: u5 = @intCast(self.fast_size[peek]);
-            br.consume(sz);
-            return fv;
+        if (br.bits_valid >= 8) {
+            const fv = self.fast_value[peek];
+            if (fv != 0xFF) {
+                const sz: u5 = @intCast(self.fast_size[peek]);
+                br.consume(sz);
+                return fv;
+            }
+            // Slow path: walk bit-by-bit for codes > 8 bits.
+            var code: i32 = @intCast(peek);
+            br.consume(8);
+            var len: u8 = 9;
+            while (len <= 16) : (len += 1) {
+                const bit = br.readBits(1) catch return error.HuffmanDecodeError;
+                code = (code << 1) | @as(i32, bit);
+                if (code <= self.max_code[len]) {
+                    const idx: usize = @intCast(code + self.val_offset[len]);
+                    if (idx >= self.total) return error.HuffmanDecodeError;
+                    return self.values[idx];
+                }
+            }
+            return error.HuffmanDecodeError;
         }
-        // Slow path: walk bit-by-bit for codes > 8 bits.
-        var code: i32 = @intCast(peek);
-        br.consume(8);
-        var len: u8 = 9;
+        // Short-buffer path: stream is near a marker / EOI. Walk bit-by-bit
+        // so readBits surfaces NotEnoughBits cleanly instead of asserting.
+        var code: i32 = 0;
+        var len: u8 = 1;
         while (len <= 16) : (len += 1) {
             const bit = br.readBits(1) catch return error.HuffmanDecodeError;
             code = (code << 1) | @as(i32, bit);

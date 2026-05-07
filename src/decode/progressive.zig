@@ -684,10 +684,10 @@ fn assembleProgressive(
                 while (n < 64) : (n += 1) {
                     zz[n] = @as(i16, @intCast(@as(i32, zz[n]) * @as(i32, qt[n])));
                 }
-                var natural: [64]i16 = undefined;
+                var natural: [64]i32 = undefined;
                 n = 0;
                 while (n < 64) : (n += 1) {
-                    natural[ZIGZAG[n]] = zz[n];
+                    natural[ZIGZAG[n]] = @as(i32, zz[n]);
                 }
                 var block_pix: [64]u8 = undefined;
                 idct.idct8x8(&natural, &block_pix);

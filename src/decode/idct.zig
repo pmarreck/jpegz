@@ -47,9 +47,11 @@ const NORM: [N]f64 = blk: {
 /// Run the inverse 8×8 DCT on `coeffs` and write the spatial samples
 /// into `out`. Output is level-shifted by +128 and clamped to 0..255.
 ///
-/// `coeffs[v * 8 + u]` = the (u, v) frequency coefficient.
+/// `coeffs[v * 8 + u]` = the (u, v) frequency coefficient (post-dequant
+/// in natural row-major order; type i32 so adversarial DC*qt products
+/// don't overflow i16's ±32767 range).
 /// `out[y * 8 + x]` = the (x, y) spatial sample.
-pub fn idct8x8(coeffs: *const [64]i16, out: *[64]u8) void {
+pub fn idct8x8(coeffs: *const [64]i32, out: *[64]u8) void {
     var y: usize = 0;
     while (y < N) : (y += 1) {
         var x: usize = 0;
@@ -80,14 +82,14 @@ pub fn idct8x8(coeffs: *const [64]i16, out: *[64]u8) void {
 // ── Tests ────────────────────────────────────────────────────
 
 test "idct8x8 of all-zero coefficients yields uniform 128" {
-    const coeffs = [_]i16{0} ** 64;
+    const coeffs = [_]i32{0} ** 64;
     var out: [64]u8 = undefined;
     idct8x8(&coeffs, &out);
     for (out) |s| try std.testing.expectEqual(@as(u8, 128), s);
 }
 
 test "idct8x8 of DC-only with positive amplitude yields uniform brighter" {
-    var coeffs = [_]i16{0} ** 64;
+    var coeffs = [_]i32{0} ** 64;
     coeffs[0] = 256; // DC coefficient: shifts the mean up
     var out: [64]u8 = undefined;
     idct8x8(&coeffs, &out);
@@ -97,7 +99,7 @@ test "idct8x8 of DC-only with positive amplitude yields uniform brighter" {
 }
 
 test "idct8x8 of DC-only with negative amplitude yields uniform darker" {
-    var coeffs = [_]i16{0} ** 64;
+    var coeffs = [_]i32{0} ** 64;
     coeffs[0] = -256;
     var out: [64]u8 = undefined;
     idct8x8(&coeffs, &out);
@@ -106,7 +108,7 @@ test "idct8x8 of DC-only with negative amplitude yields uniform darker" {
 }
 
 test "idct8x8 clamps to 0..255" {
-    var coeffs = [_]i16{0} ** 64;
+    var coeffs = [_]i32{0} ** 64;
     coeffs[0] = 4096; // way too large; output would overflow without clamp
     var out: [64]u8 = undefined;
     idct8x8(&coeffs, &out);
