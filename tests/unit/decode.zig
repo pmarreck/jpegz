@@ -173,6 +173,44 @@ test "decode 4x4 14-bit grayscale lossless (SOF3) JPEG (DNG path)" {
 // First fixture exercising the multi-component MCU loop in cleanroom.
 // ─────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────
+// M2.1c — real-world failure-mode reproducers. Each fixture below
+// reproduces a class of CLEAN-ERR seen in the cleanroom-diff run
+// against Peter's 4,125-JPEG corpus. Synthetic stand-ins generated
+// via cjpeg with the matching encoder flags (per CLAUDE.md: do not
+// commit Peter's actual corpus files; reproduce shape with cjpeg).
+// ─────────────────────────────────────────────────────────────────────
+
+/// 128×128 RGB baseline 4:4:4 with restart markers every 4 MCUs.
+/// 256 MCUs total → 63 RSTm markers cycling 0..7. Reproduces the
+/// `InvalidMarker` failure mode hit by petethumb128x128.jpg in the
+/// real corpus. cjpeg `-sample 1x1 -restart 4B`.
+const fixture_baseline_128x128_dri4 = @embedFile("fixtures/baseline_128x128_dri4.jpg");
+
+test "decode 128x128 4:4:4 RGB baseline with DRI=4 (RST every 4 MCUs)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_baseline_128x128_dri4);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 128), image.width);
+    try std.testing.expectEqual(@as(u32, 128), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+    try std.testing.expectEqual(jpegz.PixelLayout.rgb, image.layout);
+    try std.testing.expectEqual(@as(usize, 128 * 128 * 3), image.pixels.len);
+    // Source: pixel(x, y) = ((2x)%256, (2y)%256, (x+y)%256). Lossy q=80
+    // round-trip stays within ±25 per channel against that pattern.
+    var y: u32 = 0;
+    while (y < 128) : (y += 1) {
+        var x: u32 = 0;
+        while (x < 128) : (x += 1) {
+            const i = (y * 128 + x) * 3;
+            try std.testing.expect(@abs(@as(i16, image.pixels[i + 0]) - @as(i16, @intCast((x * 2) % 256))) < 25);
+            try std.testing.expect(@abs(@as(i16, image.pixels[i + 1]) - @as(i16, @intCast((y * 2) % 256))) < 25);
+            try std.testing.expect(@abs(@as(i16, image.pixels[i + 2]) - @as(i16, @intCast((x + y) % 256))) < 25);
+        }
+    }
+}
+
 /// 4×4 RGB baseline with all components at 1×1 sampling (no subsampling).
 /// cjpeg's default produces 4:2:0; this fixture used `-sample 1x1`.
 const fixture_baseline_4x4_rgb_444 = @embedFile("fixtures/baseline_4x4_rgb_444.jpg");

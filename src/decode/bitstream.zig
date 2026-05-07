@@ -128,6 +128,54 @@ pub const BitReader = struct {
     pub fn markerOffset(self: BitReader) usize {
         return self.byte_pos;
     }
+
+    /// Reposition the reader just past a marker we've already seen
+    /// (sets byte_pos forward by 2 to skip the FF Mm pair, clears the
+    /// bit buffer, and resets marker_seen so subsequent reads can hit
+    /// the next marker). Used by JPEG decoders to handle restart
+    /// markers (RSTm) inline without re-creating the BitReader,
+    /// which would lose absolute-offset tracking when the original
+    /// data slice was sub-sliced earlier.
+    pub fn skipPastMarker(self: *BitReader) void {
+        std.debug.assert(self.marker_seen);
+        self.byte_pos += 2;
+        self.buf = 0;
+        self.bits_valid = 0;
+        self.marker_seen = false;
+        self.marker_byte = 0;
+    }
+
+    /// Discard any padding bits in the bit buffer (per T.81 §F.1.2.3
+    /// the encoder pads to byte boundary with 1-bits before emitting
+    /// a restart marker), then peek at the next bytes in `data` to
+    /// detect a marker. Used by JPEG decoders at MCU restart-interval
+    /// boundaries: the previous MCU's last AC coefficient was decoded
+    /// successfully and the bit buffer may still have unconsumed
+    /// padding bits, so `marker_seen` hasn't fired via `refill()`. This
+    /// method ensures the BitReader's marker_seen / marker_byte state
+    /// reflects what's actually at byte_pos.
+    pub fn seekToMarker(self: *BitReader) void {
+        // Drop padding bits — at restart boundaries these are 1-bits
+        // the encoder added to reach byte alignment before the marker.
+        self.buf = 0;
+        self.bits_valid = 0;
+        // Advance past any leading 0xFF fill bytes (rare but legal).
+        while (self.byte_pos < self.data.len and self.data[self.byte_pos] == 0xFF and
+            self.byte_pos + 1 < self.data.len and self.data[self.byte_pos + 1] == 0xFF)
+        {
+            self.byte_pos += 1;
+        }
+        if (self.byte_pos + 1 >= self.data.len) {
+            self.marker_seen = false;
+            return;
+        }
+        if (self.data[self.byte_pos] == 0xFF and self.data[self.byte_pos + 1] != 0x00) {
+            self.marker_seen = true;
+            self.marker_byte = self.data[self.byte_pos + 1];
+        } else {
+            self.marker_seen = false;
+        }
+    }
 };
 
 // ── Tests ────────────────────────────────────────────────────

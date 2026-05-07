@@ -26,6 +26,21 @@ const bitstream = @import("bitstream.zig");
 const huffman = @import("huffman.zig");
 const idct = @import("idct.zig");
 
+const builtin = @import("builtin");
+
+/// Debug-only error annotation: in Debug builds, prints a tagged
+/// trace line to stderr ("[baseline:tag] err.X") so the
+/// cleanroom-diff tool can pinpoint where each error originates
+/// without rewriting every call-site. In ReleaseFast/Safe/Small
+/// builds the helper inlines to a plain `return err` with zero
+/// runtime cost.
+inline fn fail(comptime tag: []const u8, err: errors.DecodeError) errors.DecodeError {
+    if (comptime builtin.mode == .Debug) {
+        std.debug.print("[baseline:{s}] {s}\n", .{ tag, @errorName(err) });
+    }
+    return err;
+}
+
 /// JPEG zig-zag scan order (T.81 Figure A.6). Maps zig-zag index
 /// (the order in which AC coefficients arrive in the entropy stream)
 /// to natural (row-major) order in the 8×8 block.
@@ -70,8 +85,8 @@ pub const Error = errors.DecodeError;
 /// the caller (`src/jpegz.zig`) is expected to fall back to the
 /// libjpeg-turbo wrapper in that case.
 pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
-    if (data.len < 4) return error.TruncatedStream;
-    if (data[0] != 0xFF or data[1] != 0xD8) return error.InvalidMarker;
+    if (data.len < 4) return fail("entry_too_short", error.TruncatedStream);
+    if (data[0] != 0xFF or data[1] != 0xD8) return fail("entry_no_soi", error.InvalidMarker);
 
     var pos: usize = 2;
     var frame: ?FrameInfo = null;
@@ -84,32 +99,30 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
 
     // ── Marker walk until we reach SOS ─────────────────────────
     while (pos + 1 < data.len) {
-        if (data[pos] != 0xFF) return error.InvalidMarker;
+        if (data[pos] != 0xFF) return fail("walker_expected_ff", error.InvalidMarker);
         // Skip 0xFF padding.
         while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
-        if (pos + 1 >= data.len) return error.TruncatedStream;
+        if (pos + 1 >= data.len) return fail("walker_eof_after_ff", error.TruncatedStream);
         const marker = data[pos + 1];
         pos += 2;
 
         switch (marker) {
-            0xD9 => return error.TruncatedStream, // EOI before SOS
+            0xD9 => return fail("eoi_before_sos", error.TruncatedStream),
             0xC0 => { // SOF0 — baseline DCT
                 frame = try parseSof(data, pos);
-                if (frame.?.precision != 8) return error.UnsupportedPrecision;
+                if (frame.?.precision != 8) return fail("sof_precision_not_8", error.UnsupportedPrecision);
                 if (frame.?.num_components != 1 and frame.?.num_components != 3)
-                    return error.NotImplemented;
-                // Sampling factors: v2 supports any h/v_factor in 1..4
-                // (the spec maximum) including the common 4:2:0 and 4:2:2 layouts.
+                    return fail("sof_unsupported_ncomp", error.NotImplemented);
                 var i: usize = 0;
                 while (i < frame.?.num_components) : (i += 1) {
                     const c = &frame.?.components[i];
                     if (c.h_factor < 1 or c.h_factor > 4 or c.v_factor < 1 or c.v_factor > 4)
-                        return error.NotImplemented;
+                        return fail("sof_bad_sampling", error.NotImplemented);
                 }
                 pos += parseSegmentLength(data, pos);
             },
-            0xC1, 0xC2, 0xC3 => return error.NotImplemented, // SOF1/2/3
-            0xC9, 0xCA, 0xCB => return error.NotImplemented, // SOF9/10/11
+            0xC1, 0xC2, 0xC3 => return fail("sof_not_baseline", error.NotImplemented),
+            0xC9, 0xCA, 0xCB => return fail("sof_arithmetic", error.NotImplemented),
             0xC4 => { // DHT
                 try parseDht(data, pos, &dc_tables, &ac_tables);
                 pos += parseSegmentLength(data, pos);
@@ -125,7 +138,7 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
                 pos += seg_len;
             },
             0xDA => { // SOS — entropy data follows
-                if (frame == null) return error.InvalidMarker;
+                if (frame == null) return fail("sos_before_sof", error.InvalidMarker);
                 try parseSos(data, pos, &frame.?);
                 pos += parseSegmentLength(data, pos);
                 // Decode the entropy stream, get pixels.
@@ -162,7 +175,7 @@ fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
     fi.height = (@as(u16, data[pos + 3]) << 8) | data[pos + 4];
     fi.width = (@as(u16, data[pos + 5]) << 8) | data[pos + 6];
     fi.num_components = data[pos + 7];
-    if (fi.num_components == 0 or fi.num_components > 4) return error.InvalidMarker;
+    if (fi.num_components == 0 or fi.num_components > 4) return fail("sof_bad_ncomp", error.InvalidMarker);
     if (seg_len < 8 + @as(usize, fi.num_components) * 3) return error.TruncatedStream;
     var i: usize = 0;
     while (i < fi.num_components) : (i += 1) {
@@ -191,7 +204,7 @@ fn parseDqt(
         const pq_tq = data[off];
         const precision_id: u8 = pq_tq >> 4; // 0 = 8-bit, 1 = 16-bit
         const tq: u8 = pq_tq & 0x0F;
-        if (tq > 3) return error.InvalidMarker;
+        if (tq > 3) return fail("dqt_bad_tq", error.InvalidMarker);
         off += 1;
         var table: [64]u16 = undefined;
         if (precision_id == 0) {
@@ -209,7 +222,7 @@ fn parseDqt(
                 table[i] = (@as(u16, data[off + i * 2]) << 8) | data[off + i * 2 + 1];
             }
             off += 128;
-        } else return error.InvalidMarker;
+        } else return fail("dqt_bad_precision_id", error.InvalidMarker);
         quant_tables[tq] = table;
     }
 }
@@ -229,7 +242,7 @@ fn parseDht(
         const tc_th = data[off];
         const tc: u8 = tc_th >> 4; // 0 = DC, 1 = AC
         const th: u8 = tc_th & 0x0F;
-        if (tc > 1 or th > 3) return error.InvalidMarker;
+        if (tc > 1 or th > 3) return fail("dht_bad_tc_th", error.InvalidMarker);
         off += 1;
         var bits: [16]u8 = undefined;
         var total: u16 = 0;
@@ -241,7 +254,7 @@ fn parseDht(
         if (off + total > seg_end) return error.TruncatedStream;
         const values = data[off .. off + total];
         const t = huffman.HuffmanTable.buildFromDht(bits, values) catch
-            return error.InvalidMarker;
+            return fail("dht_build_failed", error.InvalidMarker);
         if (tc == 0) dc_tables[th] = t else ac_tables[th] = t;
         off += total;
     }
@@ -251,7 +264,7 @@ fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!void {
     const seg_len = parseSegmentLength(data, pos);
     if (seg_len < 6 or pos + seg_len > data.len) return error.TruncatedStream;
     const ns = data[pos + 2];
-    if (ns != frame.num_components) return error.InvalidMarker;
+    if (ns != frame.num_components) return fail("sos_ns_mismatch", error.InvalidMarker);
     var i: usize = 0;
     while (i < ns) : (i += 1) {
         const off = pos + 3 + i * 2;
@@ -345,23 +358,16 @@ fn decodeScan(
             // an RSTm marker (FF D0..D7) consumed, prev_dc reset
             // to zero. Markers cycle through 0..7 across the scan.
             if (restart_interval > 0 and mcus_since_rst == restart_interval) {
-                // skipEntropyData-style helper: byte-align the reader.
-                // Our BitReader's marker_seen state already triggers
-                // on encountering the RST in the stream during the
-                // previous block decode. After the marker is reached,
-                // the bit buffer is empty and marker_byte is set.
-                if (!br.marker_seen) return error.InvalidMarker;
-                if (br.marker_byte != expected_rst) return error.InvalidMarker;
-                // Reset for the next interval.
+                // Force the reader to look ahead for the marker — the
+                // bit buffer may still hold padding bits that haven't
+                // triggered a refill yet.
+                br.seekToMarker();
+                if (!br.marker_seen) return fail("rst_no_marker_seen", error.InvalidMarker);
+                if (br.marker_byte != expected_rst) return fail("rst_wrong_marker", error.InvalidMarker);
                 prev_dc = .{ 0, 0, 0 };
                 mcus_since_rst = 0;
                 expected_rst = 0xD0 + ((expected_rst - 0xD0 + 1) & 0x07);
-                // Re-init the BitReader from the byte position just
-                // PAST the RST marker — the BitReader stops *before*
-                // the FF byte of the marker, so we advance by 2.
-                const consumed_pos: usize = br.byte_pos + 2;
-                if (consumed_pos > data.len) return error.TruncatedStream;
-                br = bitstream.BitReader.init(data[consumed_pos..]);
+                br.skipPastMarker();
             }
             // Per T.81 §A.2.3 / F.1.5: when the scan has multiple
             // components, the MCU contains, for each component in
@@ -420,9 +426,9 @@ fn decodeBlock(
     block_x: u32,
     block_y: u32,
 ) Error!void {
-    const dc_t = dc_tables[comp.dc_table] orelse return error.InvalidMarker;
-    const ac_t = ac_tables[comp.ac_table] orelse return error.InvalidMarker;
-    const qt = quant_tables[comp.qt_index] orelse return error.InvalidMarker;
+    const dc_t = dc_tables[comp.dc_table] orelse return fail("block_dc_table_null", error.InvalidMarker);
+    const ac_t = ac_tables[comp.ac_table] orelse return fail("block_ac_table_null", error.InvalidMarker);
+    const qt = quant_tables[comp.qt_index] orelse return fail("block_qt_null", error.InvalidMarker);
 
     // Coefficients stored in zig-zag order during entropy decode;
     // dequantized in zig-zag (matches DQT layout per T.81 §B.2.4.1);
