@@ -122,21 +122,45 @@ pub fn decode(allocator: Allocator, data: []const u8) errors.DecodeError!types.I
     const num_comps: u8 = @intCast(image.numcomps);
     if (num_comps == 0 or num_comps > 4) return error.BackendError;
 
-    // Use component 0's dimensions as the image dimensions; assume all
-    // components share width/height (true for non-subsampled JP2 — most
-    // common case; we'll handle subsampling in M1.6b if needed).
-    const c0 = image.comps[0];
-    const width: u32 = c0.w;
-    const height: u32 = c0.h;
-    const prec: u8 = @intCast(c0.prec);
+    // Image dimensions are emitted at the highest-resolution component's
+    // natural resolution (matches what opj_decompress writes). Each JP2
+    // component samples at its own dx/dy in the reference grid; we emit
+    // at the resolution corresponding to the *finest* component (min dx
+    // and min dy across all comps). Coarser components get nearest-
+    // neighbor upsampled to that resolution.
+    //
+    // Worked examples:
+    //   - All comps dx=dy=1 (no subsampling): width = canvas extent.
+    //   - True 4:2:0 (Y=1×1, Cb/Cr=2×2): min_dx=min_dy=1, width = canvas.
+    //   - Isotropic dx=dy=2 (IM convention): min_dx=2, width = canvas/2.
+    //
+    // Sample lookup: image pixel (x, y) maps to canvas position
+    // (x * min_dx, y * min_dy); component i samples that canvas position
+    // at (cx, cy) = (x * min_dx / comp.dx, y * min_dy / comp.dy).
+    if (image.x1 <= image.x0 or image.y1 <= image.y0) return error.BackendError;
+    var min_dx: u32 = std.math.maxInt(u32);
+    var min_dy: u32 = std.math.maxInt(u32);
+    {
+        var ci: usize = 0;
+        while (ci < num_comps) : (ci += 1) {
+            const dx: u32 = @intCast(image.comps[ci].dx);
+            const dy: u32 = @intCast(image.comps[ci].dy);
+            if (dx == 0 or dy == 0) return error.BackendError;
+            if (dx < min_dx) min_dx = dx;
+            if (dy < min_dy) min_dy = dy;
+        }
+    }
+    const canvas_w: u32 = @intCast(image.x1 - image.x0);
+    const canvas_h: u32 = @intCast(image.y1 - image.y0);
+    // Ceiling divide canvas extent by min_dx for the emit dimension.
+    const width: u32 = (canvas_w + min_dx - 1) / min_dx;
+    const height: u32 = (canvas_h + min_dy - 1) / min_dy;
+    const prec: u8 = @intCast(image.comps[0].prec);
 
-    // Verify all components have the same dimensions and precision.
+    // Precision must match across components (JPEG 2000 allows
+    // per-component precision but we don't expose that in v1).
     var i: usize = 1;
     while (i < num_comps) : (i += 1) {
-        if (image.comps[i].w != width or image.comps[i].h != height) {
-            // Component subsampling: not handled in v1.
-            return error.BackendError;
-        }
         if (image.comps[i].prec != prec) return error.BackendError;
     }
 
@@ -155,40 +179,70 @@ pub fn decode(allocator: Allocator, data: []const u8) errors.DecodeError!types.I
         else => if (num_comps == 1) .greyscale_jp2 else .srgb,
     };
 
-    // Allocate destination buffer.
+    // Allocate destination buffer at canvas resolution.
     const bytes_per_sample: usize = if (prec > 8) 2 else 1;
     const pixel_count: usize = @as(usize, width) * @as(usize, height);
     const buf_len = pixel_count * @as(usize, num_comps) * bytes_per_sample;
     const pixels = allocator.alloc(u8, buf_len) catch return error.OutOfMemory;
     errdefer allocator.free(pixels);
 
-    // Pack: openjpeg gives us OPJ_INT32 per-sample-per-component,
-    // organized by component. We need interleaved RGB / CMYK / etc.
+    // Per-component sample lookup: nearest-neighbor map from canvas
+    // (x, y) to component (cx, cy) using floor(x / dx), floor(y / dy).
+    //
+    // Common cases:
+    //   - dx=dy=1 → identity (no subsampling); canvas pixel == component sample.
+    //   - dx=dy=2 → 4:2:0; each component sample covers a 2×2 canvas block.
+    //   - dx=2,dy=1 → 4:2:2; component sample covers a 2×1 canvas block.
+    // The compute is cheap (integer division per pixel-component);
+    // proper (cosited / midpoint) chroma upsampling is a future
+    // refinement when image-quality consumers need it.
     if (prec <= 8) {
-        var pi: usize = 0;
-        while (pi < pixel_count) : (pi += 1) {
-            var ci: usize = 0;
-            while (ci < num_comps) : (ci += 1) {
-                const v = image.comps[ci].data[pi];
-                const clamped: u8 = if (v < 0) 0 else if (v > 255) 255 else @intCast(v);
-                pixels[pi * num_comps + ci] = clamped;
+        var y: u32 = 0;
+        while (y < height) : (y += 1) {
+            var x: u32 = 0;
+            while (x < width) : (x += 1) {
+                const pixel_idx: usize = @as(usize, y) * @as(usize, width) + @as(usize, x);
+                var ci: usize = 0;
+                while (ci < num_comps) : (ci += 1) {
+                    const comp = &image.comps[ci];
+                    const cx: u32 = (x * min_dx) / @as(u32, @intCast(comp.dx));
+                    const cy: u32 = (y * min_dy) / @as(u32, @intCast(comp.dy));
+                    const clamped_cx: u32 = if (cx >= comp.w) comp.w - 1 else cx;
+                    const clamped_cy: u32 = if (cy >= comp.h) comp.h - 1 else cy;
+                    const sample_idx: usize = @as(usize, clamped_cy) *
+                        @as(usize, @intCast(comp.w)) + @as(usize, clamped_cx);
+                    const v = comp.data[sample_idx];
+                    const clamped: u8 = if (v < 0) 0 else if (v > 255) 255 else @intCast(v);
+                    pixels[pixel_idx * num_comps + ci] = clamped;
+                }
             }
         }
     } else {
         // 9-16 bit: emit as host-endian u16 (matches design.md §3.1).
         const max_val: i32 = (@as(i32, 1) << @intCast(prec)) - 1;
         const out16 = std.mem.bytesAsSlice(u16, pixels);
-        var pi: usize = 0;
-        while (pi < pixel_count) : (pi += 1) {
-            var ci: usize = 0;
-            while (ci < num_comps) : (ci += 1) {
-                const v = image.comps[ci].data[pi];
-                const clamped: u16 = blk: {
-                    if (v < 0) break :blk 0;
-                    if (v > max_val) break :blk @intCast(max_val);
-                    break :blk @intCast(v);
-                };
-                out16[pi * num_comps + ci] = clamped;
+        var y: u32 = 0;
+        while (y < height) : (y += 1) {
+            var x: u32 = 0;
+            while (x < width) : (x += 1) {
+                const pixel_idx: usize = @as(usize, y) * @as(usize, width) + @as(usize, x);
+                var ci: usize = 0;
+                while (ci < num_comps) : (ci += 1) {
+                    const comp = &image.comps[ci];
+                    const cx: u32 = (x * min_dx) / @as(u32, @intCast(comp.dx));
+                    const cy: u32 = (y * min_dy) / @as(u32, @intCast(comp.dy));
+                    const clamped_cx: u32 = if (cx >= comp.w) comp.w - 1 else cx;
+                    const clamped_cy: u32 = if (cy >= comp.h) comp.h - 1 else cy;
+                    const sample_idx: usize = @as(usize, clamped_cy) *
+                        @as(usize, @intCast(comp.w)) + @as(usize, clamped_cx);
+                    const v = comp.data[sample_idx];
+                    const clamped: u16 = blk: {
+                        if (v < 0) break :blk 0;
+                        if (v > max_val) break :blk @intCast(max_val);
+                        break :blk @intCast(v);
+                    };
+                    out16[pixel_idx * num_comps + ci] = clamped;
+                }
             }
         }
     }

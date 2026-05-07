@@ -1,10 +1,22 @@
 # jpegz — work plan
 
-Mirrors `SPEC.md` §6 (Phase 1) and §1 (Phase 2). Add datetime when ticking
-boxes (EST). Keep the last few completed items visible for continuity;
-prune older ones once context is no longer load-bearing.
+**Mission recap.** jpegz is the spec-complete JPEG family decoder for
+the Zig ecosystem. Zig stdlib has no native JPEG support; zigimg's
+`src/formats/jpeg.zig` is 322 lines, baseline-only, not spec-complete.
+jpegz fills that gap. **End state: pure Zig, zero C deps in the
+shipped binary**, full T.81 / T.87 / T.800 coverage including the
+arithmetic-coded and lossless modes the wider ecosystem skips.
 
-## Phase 1 — wrapper MVP
+Phase 1 (wrapper) was scaffolding to unblock validate + tiffz in days
+instead of weeks. The wrapper milestones are DONE; the actual product
+is the cleanroom Zig implementation, with libjpeg-turbo and openjpeg
+demoted to `tests/oracles/` for byte-equal verification.
+
+Date format: tick boxes with `_(YYYY-MM-DD EST)_`. Keep the last few
+completed items for continuity; prune older ones when context is no
+longer load-bearing.
+
+## Phase 1 — wrapper MVP (DONE — scaffolding)
 
 - [x] **M1.1 — Scaffold + flake.nix.** `flake.nix` with zig 0.15.2,
       libjpeg-turbo 3.1.3 (`pkgs.libjpeg`), openjpeg 2.5.4, hyperfine. Garnix
@@ -106,9 +118,45 @@ prune older ones once context is no longer load-bearing.
       compatibility (16-bit lossless via M1.4b) called out
       explicitly. _(2026-05-06 EST)_
 
-## Phase 2 — cleanroom pure-Zig replacement
+## Tier 1 — wrapper coverage verification (oracle prep for Phase 2)
 
-Each step retires a chunk of the C dep. Failing-test-first throughout.
+These are claims Phase 1 makes ("we support arithmetic / restart
+markers / CMYK / grayscale / subsampled YCbCr") that aren't actually
+covered by fixtures yet. TDD-red first: write the test, see whether
+libjpeg-turbo + our wrapper handle the case. Each fixture becomes
+a Phase 2 oracle test (the cleanroom decoder must produce byte-equal
+output to libjpeg-turbo for these inputs).
+
+- [x] **T1.1 — Arithmetic-coded baseline JPEG fixture** (SOF9). All
+      green; libjpeg-turbo decodes via the same scanline path. _(2026-05-06 EST)_
+- [x] **T1.2 — JPEG with restart markers fixture.** DRI=2 every 2
+      MCUs; `skipEntropyData`'s RST handling exercised end-to-end. _(2026-05-06 EST)_
+- [x] **T1.3 — CMYK JPEG fixture.** ImageMagick-generated; 4-channel
+      layout + APP14 Adobe colorspace handled. _(2026-05-06 EST)_
+- [x] **T1.4 — Grayscale baseline JPEG fixture.** 1-channel layout +
+      `JCS_GRAYSCALE` source mapping verified. _(2026-05-06 EST)_
+- [x] **T1.5 — Subsampled YCbCr JPEGs** (4:2:0, 4:2:2). libjpeg-turbo
+      upsamples on output; consumer sees uniform RGB. _(2026-05-06 EST)_
+- [x] **T1.6 — JP2 component subsampling.** Real fix shipped in
+      openjpeg_wrapper.zig: image dim = `ceil(canvas_extent / min_dx)`,
+      per-component sampling at `cx = (x * min_dx) / comp.dx`. Two
+      fixtures: isotropic dx=2 (IM `-sampling-factor 4:2:0`) AND true
+      asymmetric 4:2:0 (ffmpeg `-pix_fmt yuv420p`, Y=1×1 / Cb,Cr=2×2).
+      Both round-trip cleanly. _(2026-05-06 EST)_
+
+## Phase 2 — cleanroom pure-Zig replacement (the actual goal)
+
+**This is what jpegz exists to be.** Phase 1 wrappers were scaffolding;
+Phase 2 retires every C dep, leaving a single static library with no
+runtime C dependency. libjpeg-turbo and openjpeg move from
+`buildInputs` to `tests/oracles/` — used to verify our cleanroom output
+byte-for-byte, never linked into the shipped binary.
+
+Each Phase 2 milestone retires a chunk of the C dep. TDD throughout:
+the Tier 1 fixtures (above) provide the oracle expectations; the
+cleanroom impl must produce byte-equal output for every fixture. Order
+chosen to maximize impact per milestone (most-used codec first; share
+machinery where possible).
 
 - [ ] **M2.1 — Baseline cleanroom (sequential DCT, 8-bit).** Most-used
       path; biggest impact. zigimg `src/formats/jpeg.zig` (MIT,

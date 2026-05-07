@@ -72,6 +72,45 @@ test "jpeg2000.decode 8x8 RGB lossy 9/7 wavelet" {
     try std.testing.expect(@abs(@as(i16, image.pixels[2]) - 0xA0) < 16);
 }
 
+/// T1.6: 8×8 RGB JP2 with all components at dx=2, dy=2 (subsampled
+/// internally; canvas is 8×8). Generated via ImageMagick
+/// `convert ... -sampling-factor 4:2:0`. The current wrapper uses
+/// `comps[0].w/h` for output dimensions, which reports 4×4 instead
+/// of the actual 8×8 canvas. opj_decompress correctly emits 8×8 PPM.
+const fixture_jp2_8x8_subsampled = @embedFile("fixtures/jp2_8x8_subsampled.jp2");
+
+test "jpeg2000.decode 8x8 RGB JP2 with subsampled components (canvas size)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.jpeg2000.decode(allocator, fixture_jp2_8x8_subsampled);
+    defer image.deinit(allocator);
+
+    // Canvas is 8×8; components are 4×4 (dx=2,dy=2). Wrapper must
+    // report canvas dims, not component dims.
+    try std.testing.expectEqual(@as(u32, 8), image.width);
+    try std.testing.expectEqual(@as(u32, 8), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+    try std.testing.expectEqual(@as(usize, 8 * 8 * 3), image.pixels.len);
+}
+
+/// T1.6 hard case: 8×8 RGB JP2 with asymmetric chroma subsampling
+/// (Y at dx=1/dy=1, Cb/Cr at dx=2/dy=2 — true 4:2:0). Generated via
+/// ffmpeg `-pix_fmt yuv420p -c:v jpeg2000`. The current wrapper
+/// errors with BackendError because its all-comps-must-be-same-size
+/// check fires. Implementation needs nearest-neighbor upsample of
+/// subsampled components to canvas dims.
+const fixture_jp2_8x8_yuv420_asym = @embedFile("fixtures/jp2_8x8_yuv420_asym.jp2");
+
+test "jpeg2000.decode 8x8 RGB JP2 with asymmetric 4:2:0 chroma subsampling" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.jpeg2000.decode(allocator, fixture_jp2_8x8_yuv420_asym);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 8), image.width);
+    try std.testing.expectEqual(@as(u32, 8), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+    try std.testing.expectEqual(@as(usize, 8 * 8 * 3), image.pixels.len);
+}
+
 test "jpeg2000.decode rejects empty input" {
     const empty: []const u8 = &[_]u8{};
     try std.testing.expectError(

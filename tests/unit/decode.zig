@@ -130,6 +130,119 @@ test "decode 4x4 14-bit grayscale lossless (SOF3) JPEG (DNG path)" {
     for (px) |s| try std.testing.expectEqual(@as(u16, 0x2000), s);
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Tier 1 — wrapper coverage verification (per Peter, 2026-05-06).
+// Each of these fixtures is a real-world JPEG variant our wrapper
+// claims to handle but never had explicit test coverage. They
+// double as Phase 2 oracle test cases (cleanroom impl must produce
+// byte-equal output to libjpeg-turbo for these inputs).
+// ─────────────────────────────────────────────────────────────────────
+
+/// T1.1: arithmetic-coded baseline (SOF9). Patents expired in early
+/// 2000s; libjpeg-turbo decodes it via the same scanline path.
+const fixture_baseline_4x4_arithmetic = @embedFile("fixtures/baseline_4x4_arithmetic.jpg");
+
+test "decode 4x4 arithmetic-coded baseline JPEG (SOF9)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_baseline_4x4_arithmetic);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+    try std.testing.expectEqual(@as(u8, 8), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.rgb, image.layout);
+}
+
+/// T1.2: baseline JPEG with restart markers (DRI=2 every 2 MCUs).
+/// Tests entropy-stream RST handling.
+const fixture_baseline_16x16_restart = @embedFile("fixtures/baseline_16x16_restart.jpg");
+
+test "decode 16x16 baseline JPEG with restart markers (DRI=2)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_baseline_16x16_restart);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 16), image.width);
+    try std.testing.expectEqual(@as(u32, 16), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+    try std.testing.expectEqual(@as(usize, 16 * 16 * 3), image.pixels.len);
+}
+
+/// T1.3: 4×4 CMYK JPEG (4 components, Adobe APP14 colorspace = CMYK).
+const fixture_baseline_4x4_cmyk = @embedFile("fixtures/baseline_4x4_cmyk.jpg");
+
+test "decode 4x4 CMYK JPEG (Adobe APP14)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_baseline_4x4_cmyk);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 4), image.channels);
+    try std.testing.expectEqual(@as(u8, 8), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.cmyk, image.layout);
+    // source_color_space should be either .cmyk or .ycck (libjpeg-turbo
+    // sets one based on the Adobe APP14 transform byte).
+    const cs = image.source_color_space;
+    try std.testing.expect(cs == .cmyk or cs == .ycck);
+    try std.testing.expectEqual(@as(usize, 4 * 4 * 4), image.pixels.len);
+}
+
+/// T1.4: 4×4 grayscale baseline JPEG (1 component).
+const fixture_baseline_4x4_grayscale = @embedFile("fixtures/baseline_4x4_grayscale.jpg");
+
+test "decode 4x4 grayscale baseline JPEG (1 component)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_baseline_4x4_grayscale);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 1), image.channels);
+    try std.testing.expectEqual(@as(u8, 8), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.grayscale, image.layout);
+    try std.testing.expectEqual(jpegz.ColorSpace.grayscale, image.source_color_space);
+    try std.testing.expectEqual(@as(usize, 4 * 4), image.pixels.len);
+    // Input was uniform 0x80; quality=80 round-trip should keep all
+    // pixels close to 0x80 (within ±20).
+    for (image.pixels) |b| {
+        const delta = @as(i16, @intCast(b)) - 0x80;
+        try std.testing.expect(@abs(delta) < 20);
+    }
+}
+
+/// T1.5a: 8×8 RGB JPEG with 4:2:0 chroma subsampling. libjpeg-turbo
+/// upsamples to full-res RGB on output, so the consumer sees
+/// `width=8 height=8 channels=3` regardless of internal subsampling.
+const fixture_baseline_8x8_yuv420 = @embedFile("fixtures/baseline_8x8_yuv420.jpg");
+
+test "decode 8x8 baseline JPEG with 4:2:0 chroma subsampling" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_baseline_8x8_yuv420);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 8), image.width);
+    try std.testing.expectEqual(@as(u32, 8), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+    try std.testing.expectEqual(jpegz.PixelLayout.rgb, image.layout);
+    try std.testing.expectEqual(@as(usize, 8 * 8 * 3), image.pixels.len);
+}
+
+/// T1.5b: 8×8 RGB JPEG with 4:2:2 chroma subsampling.
+const fixture_baseline_8x8_yuv422 = @embedFile("fixtures/baseline_8x8_yuv422.jpg");
+
+test "decode 8x8 baseline JPEG with 4:2:2 chroma subsampling" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, fixture_baseline_8x8_yuv422);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 8), image.width);
+    try std.testing.expectEqual(@as(u32, 8), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+    try std.testing.expectEqual(jpegz.PixelLayout.rgb, image.layout);
+}
+
 /// 4×4 16-bit grayscale lossless. precision 16, all 0x8000.
 const fixture_lossless_4x4_gray16 = @embedFile("fixtures/lossless_4x4_gray16.jpg");
 
