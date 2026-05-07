@@ -366,6 +366,23 @@ test "decode 8x8 baseline JPEG with 4:2:2 chroma subsampling" {
     }
 }
 
+test "fancy upsampling matches libjpeg-turbo on 4:2:0 (cleanroom == wrapper)" {
+    // Tiny 2×2 4:2:0 fixture — chroma plane is 1×1 active in an 8×8
+    // MCU-padded plane. Without active-frame boundary clamping, fancy
+    // upsampling would pull garbage from padded chroma into visible
+    // pixels (cleanroom showed (1,1) as 229,255,231 vs wrapper's
+    // 247,246,251). After the fix every output pixel matches the
+    // libjpeg-turbo wrapper byte-for-byte.
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.cleanroomDecode(allocator, fixture_baseline_2x2_rgb);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_baseline_2x2_rgb);
+    defer wrapper.deinit(allocator);
+    try std.testing.expectEqual(wrapper.width, cleanroom.width);
+    try std.testing.expectEqual(wrapper.height, cleanroom.height);
+    try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+}
+
 /// 4×4 16-bit grayscale lossless. precision 16, all 0x8000.
 const fixture_lossless_4x4_gray16 = @embedFile("fixtures/lossless_4x4_gray16.jpg");
 

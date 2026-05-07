@@ -502,7 +502,7 @@ fn decodeBlock(
 
 /// Sample a component plane at canvas pixel (x, y) by mapping
 /// canvas coords → component coords using the sampling factors.
-/// Nearest-neighbor; no fancy chroma reconstruction filter.
+/// Nearest-neighbor fallback for ratios we don't fancy-upsample.
 inline fn sampleComponent(
     plane: []const u8,
     plane_w: u32,
@@ -519,6 +519,135 @@ inline fn sampleComponent(
     if (cx >= plane_w) cx = plane_w - 1;
     if (cy >= plane_h) cy = plane_h - 1;
     return plane[cy * plane_w + cx];
+}
+
+/// "Fancy" chroma upsampling matching libjpeg-turbo's default behavior.
+/// Allocates a new full-resolution plane (`out_w` × `out_h`) and fills
+/// it from the subsampled `src` plane (`src_w` × `src_h`) using the
+/// IJG cosited-center filter (T.81 informative; jdsample.c reference).
+/// Supports H2V2 (4:2:0), H2V1 (4:2:2), V2H1 (4:4:0). For other ratios,
+/// falls back to nearest-neighbor.
+///
+/// `active_w` / `active_h` are the chroma's IN-FRAME dimensions —
+/// libjpeg-turbo replicates at the frame boundary, not the MCU-padded
+/// boundary, so for tiny images (e.g. 2×2 with 4:2:0 → 1×1 active
+/// chroma in an 8×8 MCU-padded plane) the H/V/D neighbor samples must
+/// clamp to `active − 1`, not `src − 1`. Otherwise garbage padding
+/// chroma bleeds into visible pixels.
+///
+/// H2V2 weights (per output 2×2 from chroma center C, with H/V/D the
+/// horizontal/vertical/diagonal neighbors): (9·C + 3·H + 3·V + D + 8) / 16.
+/// Edges replicate the boundary chroma sample.
+fn fancyUpsample(
+    allocator: Allocator,
+    src: []const u8,
+    src_w: u32,
+    src_h: u32,
+    out_w: u32,
+    out_h: u32,
+    active_w: u32,
+    active_h: u32,
+    h_ratio: u32,
+    v_ratio: u32,
+) Error![]u8 {
+    const dst = try allocator.alloc(u8, @as(usize, out_w) * @as(usize, out_h));
+    errdefer allocator.free(dst);
+
+    // For boundary clamping, use the active (in-frame) chroma extent
+    // rather than the MCU-padded plane size — see fn doc.
+    const cw: u32 = @max(active_w, 1);
+    const ch: u32 = @max(active_h, 1);
+    if (h_ratio == 2 and v_ratio == 2) {
+        // H2V2 fancy — produce 2×2 output per chroma sample.
+        var cy: u32 = 0;
+        while (cy < ch) : (cy += 1) {
+            const cy_up: u32 = if (cy == 0) 0 else cy - 1;
+            const cy_dn: u32 = if (cy + 1 < ch) cy + 1 else cy;
+            var cx: u32 = 0;
+            while (cx < cw) : (cx += 1) {
+                const cx_lf: u32 = if (cx == 0) 0 else cx - 1;
+                const cx_rt: u32 = if (cx + 1 < cw) cx + 1 else cx;
+                const c: i32 = src[cy * src_w + cx];
+                const c_l: i32 = src[cy * src_w + cx_lf];
+                const c_r: i32 = src[cy * src_w + cx_rt];
+                const c_u: i32 = src[cy_up * src_w + cx];
+                const c_ul: i32 = src[cy_up * src_w + cx_lf];
+                const c_ur: i32 = src[cy_up * src_w + cx_rt];
+                const c_d: i32 = src[cy_dn * src_w + cx];
+                const c_dl: i32 = src[cy_dn * src_w + cx_lf];
+                const c_dr: i32 = src[cy_dn * src_w + cx_rt];
+                // Top-left output samples C with up/left neighbors.
+                const tl: i32 = (9 * c + 3 * c_l + 3 * c_u + c_ul + 8) >> 4;
+                const tr: i32 = (9 * c + 3 * c_r + 3 * c_u + c_ur + 8) >> 4;
+                const bl: i32 = (9 * c + 3 * c_l + 3 * c_d + c_dl + 8) >> 4;
+                const br: i32 = (9 * c + 3 * c_r + 3 * c_d + c_dr + 8) >> 4;
+                const ox: u32 = cx * 2;
+                const oy: u32 = cy * 2;
+                if (oy < out_h and ox < out_w) dst[oy * out_w + ox] = clampSampleI32(tl);
+                if (oy < out_h and ox + 1 < out_w) dst[oy * out_w + ox + 1] = clampSampleI32(tr);
+                if (oy + 1 < out_h and ox < out_w) dst[(oy + 1) * out_w + ox] = clampSampleI32(bl);
+                if (oy + 1 < out_h and ox + 1 < out_w) dst[(oy + 1) * out_w + ox + 1] = clampSampleI32(br);
+            }
+        }
+        return dst;
+    }
+    if (h_ratio == 2 and v_ratio == 1) {
+        // H2V1 fancy — horizontal interpolation only.
+        var cy: u32 = 0;
+        while (cy < ch and cy < out_h) : (cy += 1) {
+            var cx: u32 = 0;
+            while (cx < cw) : (cx += 1) {
+                const cx_lf: u32 = if (cx == 0) 0 else cx - 1;
+                const cx_rt: u32 = if (cx + 1 < cw) cx + 1 else cx;
+                const c: i32 = src[cy * src_w + cx];
+                const c_l: i32 = src[cy * src_w + cx_lf];
+                const c_r: i32 = src[cy * src_w + cx_rt];
+                const lf: i32 = (3 * c + c_l + 2) >> 2;
+                const rt: i32 = (3 * c + c_r + 2) >> 2;
+                const ox: u32 = cx * 2;
+                if (ox < out_w) dst[cy * out_w + ox] = clampSampleI32(lf);
+                if (ox + 1 < out_w) dst[cy * out_w + ox + 1] = clampSampleI32(rt);
+            }
+        }
+        return dst;
+    }
+    if (h_ratio == 1 and v_ratio == 2) {
+        // V2H1 fancy — vertical interpolation only.
+        var cy: u32 = 0;
+        while (cy < ch) : (cy += 1) {
+            const cy_up: u32 = if (cy == 0) 0 else cy - 1;
+            const cy_dn: u32 = if (cy + 1 < ch) cy + 1 else cy;
+            var cx: u32 = 0;
+            while (cx < cw and cx < out_w) : (cx += 1) {
+                const c: i32 = src[cy * src_w + cx];
+                const c_u: i32 = src[cy_up * src_w + cx];
+                const c_d: i32 = src[cy_dn * src_w + cx];
+                const up: i32 = (3 * c + c_u + 2) >> 2;
+                const dn: i32 = (3 * c + c_d + 2) >> 2;
+                const oy: u32 = cy * 2;
+                if (oy < out_h) dst[oy * out_w + cx] = clampSampleI32(up);
+                if (oy + 1 < out_h) dst[(oy + 1) * out_w + cx] = clampSampleI32(dn);
+            }
+        }
+        return dst;
+    }
+    // Fallback: nearest-neighbor for unusual ratios.
+    var y: u32 = 0;
+    while (y < out_h) : (y += 1) {
+        const sy: u32 = @min((y * src_h) / out_h, src_h - 1);
+        var x: u32 = 0;
+        while (x < out_w) : (x += 1) {
+            const sx: u32 = @min((x * src_w) / out_w, src_w - 1);
+            dst[y * out_w + x] = src[sy * src_w + sx];
+        }
+    }
+    return dst;
+}
+
+inline fn clampSampleI32(v: i32) u8 {
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return @intCast(v);
 }
 
 /// After all blocks are decoded into per-component planes, convert
@@ -554,16 +683,62 @@ fn assembleOutput(
         const c0 = &frame.components[0];
         const c1 = &frame.components[1];
         const c2 = &frame.components[2];
+        // Upsample each component to the canvas grid (max_h × max_v scale)
+        // using IJG fancy filter when the ratio is 2× in either axis;
+        // nearest-neighbor otherwise. Producing full-resolution per-component
+        // planes once is cheaper than per-pixel fancy interpolation, and
+        // matches libjpeg-turbo's default "fancy upsampling" output (matching
+        // is the non-obvious part: without this our pixels diverge by ~mean
+        // 0.5–3 from libjpeg's default decode in the chroma transition zones).
+        // Luma is at full canvas resolution; reuse its dimensions.
+        const canvas_w: u32 = plane_w[0];
+        const canvas_h: u32 = plane_h[0];
+        var canvas_planes: [3][]u8 = undefined;
+        var canvas_owned: [3]bool = .{ false, false, false };
+        defer {
+            for (canvas_planes, canvas_owned) |p, owned| {
+                if (owned) allocator.free(p);
+            }
+        }
+        for (0..3) |ci_idx| {
+            const comp = &frame.components[ci_idx];
+            const h_ratio: u32 = max_h / @as(u32, comp.h_factor);
+            const v_ratio: u32 = max_v / @as(u32, comp.v_factor);
+            if (h_ratio == 1 and v_ratio == 1) {
+                // No upsampling needed — alias the existing plane.
+                canvas_planes[ci_idx] = planes[ci_idx];
+                canvas_owned[ci_idx] = false;
+            } else {
+                // Active in-frame chroma extent: ceil(width * h_factor / max_h)
+                // (width here is the FRAME width, not MCU-padded plane width).
+                const active_w: u32 = (width * @as(u32, comp.h_factor) + max_h - 1) / max_h;
+                const active_h: u32 = (height * @as(u32, comp.v_factor) + max_v - 1) / max_v;
+                canvas_planes[ci_idx] = try fancyUpsample(
+                    allocator,
+                    planes[ci_idx],
+                    plane_w[ci_idx],
+                    plane_h[ci_idx],
+                    canvas_w,
+                    canvas_h,
+                    active_w,
+                    active_h,
+                    h_ratio,
+                    v_ratio,
+                );
+                canvas_owned[ci_idx] = true;
+            }
+        }
+        _ = c0;
+        _ = c1;
+        _ = c2;
         var y: u32 = 0;
         while (y < height) : (y += 1) {
             var x: u32 = 0;
             while (x < width) : (x += 1) {
-                const Ys = sampleComponent(planes[0], plane_w[0], plane_h[0], x, y,
-                    @intCast(c0.h_factor), @intCast(c0.v_factor), max_h, max_v);
-                const Cbs = sampleComponent(planes[1], plane_w[1], plane_h[1], x, y,
-                    @intCast(c1.h_factor), @intCast(c1.v_factor), max_h, max_v);
-                const Crs = sampleComponent(planes[2], plane_w[2], plane_h[2], x, y,
-                    @intCast(c2.h_factor), @intCast(c2.v_factor), max_h, max_v);
+                const off_in: usize = y * canvas_w + x;
+                const Ys: u8 = canvas_planes[0][off_in];
+                const Cbs: u8 = canvas_planes[1][off_in];
+                const Crs: u8 = canvas_planes[2][off_in];
                 const Y: f32 = @floatFromInt(Ys);
                 const Cb: f32 = @floatFromInt(Cbs);
                 const Cr: f32 = @floatFromInt(Crs);

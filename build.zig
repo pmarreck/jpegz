@@ -264,4 +264,19 @@ pub fn build(b: *std.Build) void {
         const diag_step = b.step("diag-one", "Single-file decoder diagnostic (scratch/diag_one.zig)");
         diag_step.dependOn(&b.addInstallArtifact(diag_exe, .{}).step);
     } else |_| {}
+
+    if (std.fs.cwd().access("scratch/pixel_diff.zig", .{})) {
+        const pd_mod = b.createModule(.{
+            .root_source_file = b.path("scratch/pixel_diff.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        pd_mod.addImport("jpegz", jpegz_mod);
+        const pd_exe = b.addExecutable(.{
+            .name = "pixel-diff",
+            .root_module = pd_mod,
+        });
+        const pd_step = b.step("pixel-diff", "Per-pixel cleanroom-vs-wrapper diff (scratch/pixel_diff.zig)");
+        pd_step.dependOn(&b.addInstallArtifact(pd_exe, .{}).step);
+    } else |_| {}
 }
