@@ -108,6 +108,29 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(jpegz_inline_tests).step);
 
+    // (2b) Cleanroom decode unit tests (each module owns its own tests).
+    const bitstream_mod = b.createModule(.{
+        .root_source_file = b.path("src/decode/bitstream.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const bitstream_tests = b.addTest(.{
+        .name = "decode_bitstream",
+        .root_module = bitstream_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(bitstream_tests).step);
+
+    const huffman_mod = b.createModule(.{
+        .root_source_file = b.path("src/decode/huffman.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const huffman_tests = b.addTest(.{
+        .name = "decode_huffman",
+        .root_module = huffman_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(huffman_tests).step);
+
     // (3) Decode test suite (M1.3 — baseline + progressive wrap).
     const decode_mod = b.createModule(.{
         .root_source_file = b.path("tests/unit/decode.zig"),
