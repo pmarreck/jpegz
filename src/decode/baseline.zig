@@ -99,11 +99,23 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
 
     // ── Marker walk until we reach SOS ─────────────────────────
     while (pos + 1 < data.len) {
-        if (data[pos] != 0xFF) return fail("walker_expected_ff", error.InvalidMarker);
-        // Skip 0xFF padding.
+        // Tolerate "extraneous bytes before marker" — djpeg/libjpeg-turbo
+        // recover from this and so do we (per T.81 §B.1.1.2 markers are
+        // self-synchronizing). Scan forward to the next 0xFF byte.
+        while (pos < data.len and data[pos] != 0xFF) pos += 1;
+        if (pos + 1 >= data.len) return fail("walker_eof_after_ff", error.TruncatedStream);
+        // Skip 0xFF padding bytes.
         while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
         if (pos + 1 >= data.len) return fail("walker_eof_after_ff", error.TruncatedStream);
         const marker = data[pos + 1];
+        // 0xFF 0x00 here would be byte-stuffing inside an entropy stream —
+        // we shouldn't see it during the marker walk (entropy data is
+        // consumed by decodeScan after SOS, not here). Treat as garbage
+        // and advance one byte.
+        if (marker == 0x00) {
+            pos += 1;
+            continue;
+        }
         pos += 2;
 
         switch (marker) {
@@ -300,9 +312,15 @@ fn decodeScan(
     // define the MCU size in pixels: max_h*8 wide × max_v*8 tall.
     // Per-component plane is sized at the component's natural
     // resolution: mcu_cols * comp.h_factor * 8 wide, etc.
+    //
+    // T.81 §A.2.2 carve-out: for a non-interleaved scan (Ns=1), the MCU
+    // is always a single 8×8 block regardless of the component's
+    // declared H/V factors — those factors are informational only and
+    // don't change the entropy stream layout. So we force max_h = max_v
+    // = 1 here, which makes the MCU loop iterate one block at a time.
     var max_h: u32 = 1;
     var max_v: u32 = 1;
-    {
+    if (channels > 1) {
         var i: usize = 0;
         while (i < channels) : (i += 1) {
             const c = &frame.components[i];
@@ -316,13 +334,17 @@ fn decodeScan(
     const mcu_rows: u32 = (height + mcu_pixel_h - 1) / mcu_pixel_h;
 
     // Per-component plane dimensions (at component's natural resolution).
+    // For non-interleaved scans (channels==1) the H/V factors are ignored
+    // and the plane is just one block per MCU — matches the MCU loop.
     var plane_w: [3]u32 = .{ 0, 0, 0 };
     var plane_h: [3]u32 = .{ 0, 0, 0 };
     {
         var i: usize = 0;
         while (i < channels) : (i += 1) {
-            plane_w[i] = mcu_cols * @as(u32, frame.components[i].h_factor) * 8;
-            plane_h[i] = mcu_rows * @as(u32, frame.components[i].v_factor) * 8;
+            const eff_h: u32 = if (channels == 1) 1 else @as(u32, frame.components[i].h_factor);
+            const eff_v: u32 = if (channels == 1) 1 else @as(u32, frame.components[i].v_factor);
+            plane_w[i] = mcu_cols * eff_h * 8;
+            plane_h[i] = mcu_rows * eff_v * 8;
         }
     }
 
@@ -382,8 +404,11 @@ fn decodeScan(
             var ci: usize = 0;
             while (ci < channels) : (ci += 1) {
                 const comp = &frame.components[ci];
-                const blocks_v: u32 = @intCast(comp.v_factor);
-                const blocks_h: u32 = @intCast(comp.h_factor);
+                // Per T.81 §A.2.2: non-interleaved scans (Ns=1) ignore the
+                // component's declared H/V factors and emit one 8×8 block
+                // per MCU. Otherwise honor the component's factors.
+                const blocks_v: u32 = if (channels == 1) 1 else @intCast(comp.v_factor);
+                const blocks_h: u32 = if (channels == 1) 1 else @intCast(comp.h_factor);
                 var block_v: u32 = 0;
                 while (block_v < blocks_v) : (block_v += 1) {
                     var block_h: u32 = 0;
