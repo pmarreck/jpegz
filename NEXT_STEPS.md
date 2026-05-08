@@ -74,37 +74,62 @@ Three concrete bugs fixed:
    then stops without advancing k past the 16th. Previous code
    advanced k unconditionally on inner break.
 
-**Result:**
+**Result (2026-05-08, four commits):**
 - Both synthetic fixtures (`progressive_8x8_gray.jpg`,
   `progressive_8x8_rgb.jpg`) decode byte-perfect.
-- Real corpus (sampled 27 progressive JPEGs from `/Volumes/Fileserver/clips-image/`):
-  - 7 byte-perfect (delta=0)
-  - 3 with ≤1 LSB rounding noise (delta=1) — sub-LSB; close enough
-  - 7 with deltas 20–253 — systematic decode bugs remain
-  - 4 BackendError, 4 TruncatedStream — entropy stream bugs
+- Real corpus (sampled 27 progressive JPEGs):
+  - **10 byte-perfect** (delta=0)
+  - **18 within ≤2 LSB** (the existing baseline-cleanroom threshold)
+  - 1 delta=92 + 4 BackendError + 4 TruncatedStream remain.
+
+**Five concrete bugs fixed (commits dbb9e97, 26dcc15, 1cd54ed, c1b7f32):**
+1. End-of-scan marker detection (markerHit→seekToMarker, mirrors
+   baseline RST handling).
+2. libjpeg-turbo `insufficient_data` parity (premature-end tolerance).
+3. AC refinement ZRL off-by-one (was advancing 17 zeros, not 16).
+4. YCbCr→RGB float→fixed-point (collapsed delta=1 → delta=0).
+5. Single-component scan iteration uses xi/yi per T.81 §A.2.4
+   (was using MCU-padded `blocks_w[i]` — desyncs Y AC for
+   non-block-aligned widths like 549×304 4:2:0).
+6. IJG fancy chroma upsampling (replaces nearest-neighbor
+   `samplePlane`; ports baseline's helper into shared
+   `src/decode/color.zig`).
+
+**Diagnostic tooling shipped:**
+- `scratch/dump_coefs_jpegz.zig` + `scratch/dump_coefs_libjpeg.c`:
+  byte-equal comparator of post-entropy quantized coefficients via
+  libjpeg-turbo's `jpeg_read_coefficients()`. THIS is what found
+  bugs #5 and #6 — universalsign.jpg's coefs were already byte-equal,
+  pinning the divergence to the upsampling/color step.
+- `scratch/pixel_diff.zig`: per-pixel diff with 8×8-cell heatmap.
+- `internal.progressiveDecodeAndDumpCoefs` exposes the coefs in
+  natural order for diff. Not part of stable ABI.
 
 **Not yet wired into dispatch.** Cleanroom-diff against full corpus
-needs the byte-perfect-or-error rate higher than current 30% before
-removing the wrapper backstop. Tests in `tests/unit/decode.zig`
-exercise the cleanroom directly via `internal.progressiveDecode` —
-the public `decode()` still routes progressive to the wrapper.
+needs the BackendError + TruncatedStream cases resolved (8 of 27)
+before removing the wrapper backstop. Tests in `tests/unit/decode.zig`
+exercise the cleanroom directly via `internal.progressiveDecode`.
 
 **Remaining work (priority order):**
-- a. **Investigate large-delta cases** (e.g.,
-  `cyclonegraham02.jpg` BackendError at AC refine `byte_pos=4269
-  k=5`). Per-block coefficient state likely corrupted by an
-  earlier scan, then AC refine hits the wrong byte alignment.
-  Suspect: AC first pass with run-only RS codes, or
-  multi-component DC scan refinement state across blocks.
-- b. **Add scan/block-level instrumentation** behind a
-  comptime-Debug `dbg()` (already in place — toggle
-  `PROG_DEBUG=true` in `src/decode/progressive.zig`). Compare
-  RS code stream against a libjpeg-turbo trace of the same
-  file to pinpoint where they diverge.
-- c. **DRI in progressive scans** — currently returns
-  NotImplemented. Add the same RST handling baseline has
-  (entropy stream realignment + prev_dc reset + RST cycle).
-- d. **Once corpus byte-perfect rate ≥ 95%**, wire into dispatch
+- a. **Scan-level coef diff tooling.** Modify
+  `dump_coefs_jpegz.zig` to dump after EACH scan (not just at end)
+  so we can identify the first scan that diverges from libjpeg.
+  Combined with libjpeg-turbo modifications to dump after each
+  scan, this localizes the bug to a single scan.
+- b. **Track down AC refinement subtle bugs.** Files like
+  `gary gygax tribute by penny arcade.jpg` (delta=92): Y and Cb
+  coefs byte-equal, Cr only differs at ~1 in 6 blocks (989/6003)
+  starting at block (27,32) k=7. Pattern looks like a refinement
+  walk off-by-one or sign-flip on specific block-state shapes.
+- c. **Track down BackendError cases.** Files like
+  `cyclonegraham02.jpg`: AC refine fails mid-stream at
+  `byte_pos=4269` with bits exhausted (no marker, 29904 bytes
+  remaining in slice). Likely an earlier scan's coef state
+  diverged from libjpeg, causing the refine walk to advance by
+  the wrong amount, putting us out of bit-sync.
+- d. **DRI in progressive scans** — currently returns
+  NotImplemented. Add baseline-style RST handling.
+- e. **Once corpus byte-perfect rate ≥ 95%**, wire into dispatch
   per the snippet below and run cleanroom-diff against the full
   4,125-file corpus.
 

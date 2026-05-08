@@ -764,7 +764,9 @@ fn decodeProgressiveAcRefine(
     while (k <= scan.se) {
         const rs: u8 = ac_t.decode(br) catch |e| {
             if (br.markerHit()) return;
-            dbg("[prog:ac_refine] huff fail ac_table={d} k={d} ss={d} se={d} byte_pos={d} bits_valid={d} buf=0x{x} err={s}\n", .{ comp.ac_table, k, scan.ss, scan.se, br.byte_pos, br.bits_valid, br.buf, @errorName(e) });
+            const remaining: usize = if (br.byte_pos < br.data.len) br.data.len - br.byte_pos else 0;
+            const next3: [3]u8 = if (br.byte_pos + 2 < br.data.len) .{ br.data[br.byte_pos], br.data[br.byte_pos + 1], br.data[br.byte_pos + 2] } else .{ 0, 0, 0 };
+            dbg("[prog:ac_refine] huff fail ac_table={d} k={d} byte_pos={d} bytes_left={d} next3={x:0>2}{x:0>2}{x:0>2} buf=0x{x} bits_valid={d} marker_seen={} err={s}\n", .{ comp.ac_table, k, br.byte_pos, remaining, next3[0], next3[1], next3[2], br.buf, br.bits_valid, br.marker_seen, @errorName(e) });
             return error.BackendError;
         };
         const run_field: u8 = rs >> 4;
