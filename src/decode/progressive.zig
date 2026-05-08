@@ -808,12 +808,20 @@ fn decodeProgressiveAcRefine(
             return;
         }
 
-        // Walk forward: refine existing nonzeros, decrement zeros_remaining
-        // for each zero seen, place new_val at the position AFTER zeros
-        // are exhausted (if pending). Per libjpeg-turbo jdphuff.c
-        // decode_mcu_AC_refine: ZRL (run=15, size=0) walks exactly 16
-        // zeros and STOPS — k must NOT advance past the 16th zero.
-        // Non-ZRL with new_val advances past the placement position.
+        // Walk forward refining existing nonzeros, decrement zeros_remaining
+        // for each zero seen. Per libjpeg-turbo jdphuff.c
+        // decode_mcu_AC_refine, the inner loop breaks when `--r < 0` —
+        // i.e., AFTER decrementing on the (run+1)-th zero. For ZRL
+        // (run=15, size=0) this is the 16th zero. For non-ZRL with new
+        // value, this is the (R+1)-th zero where the new value is
+        // placed.
+        //
+        // Critical: for ZRL, we must break IMMEDIATELY after the 16th
+        // zero is decremented — without iterating once more. Otherwise,
+        // a nonzero appearing right after the 16-zero window would be
+        // refined here even though the encoder wrote no refinement bit
+        // for it (it belongs to the NEXT RS code).
+        const is_zrl = (size == 0 and run_field == 15);
         while (k <= scan.se) {
             if (block[k] != 0) {
                 try refineExistingNonzero(br, block, k, positive, negative);
@@ -826,6 +834,13 @@ fn decodeProgressiveAcRefine(
                     break;
                 }
                 zeros_remaining -= 1;
+                if (is_zrl and zeros_remaining == 0) {
+                    // 16th zero just decremented for ZRL — break before
+                    // refining any nonzero that follows. Advance past
+                    // this zero so the outer RS loop resumes after it.
+                    k += 1;
+                    break;
+                }
             }
             k += 1;
         }
