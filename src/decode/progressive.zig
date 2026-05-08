@@ -790,6 +790,13 @@ fn assembleProgressive(
             }
         }
     } else {
+        // libjpeg-turbo fixed-point YCbCr→RGB (jdcolor.c, 16-bit
+        // SCALEBITS, FIX(x) = round(x * 2^16)). Cred=91881,
+        // Cgreen_cb=-22554, Cgreen_cr=-46802, Cblue=116130,
+        // ONE_HALF=32768. Bit-identical to libjpeg's ycc_rgb_convert.
+        // Same constants baseline cleanroom uses (src/decode/baseline.zig
+        // ycbcrRowToRgb), ported here for byte-equal output between
+        // baseline and progressive paths.
         const c0 = &frame.components[0];
         const c1 = &frame.components[1];
         const c2 = &frame.components[2];
@@ -797,16 +804,16 @@ fn assembleProgressive(
         while (y < height) : (y += 1) {
             var x: u32 = 0;
             while (x < width) : (x += 1) {
-                const Y: f32 = @floatFromInt(samplePlane(planes[0], plane_w[0], plane_h[0], x, y, c0.h_factor, c0.v_factor, max_h, max_v));
-                const Cb: f32 = @floatFromInt(samplePlane(planes[1], plane_w[1], plane_h[1], x, y, c1.h_factor, c1.v_factor, max_h, max_v));
-                const Cr: f32 = @floatFromInt(samplePlane(planes[2], plane_w[2], plane_h[2], x, y, c2.h_factor, c2.v_factor, max_h, max_v));
-                const r = Y + 1.402 * (Cr - 128.0);
-                const g = Y - 0.344136 * (Cb - 128.0) - 0.714136 * (Cr - 128.0);
-                const b = Y + 1.772 * (Cb - 128.0);
+                const Y: i32 = @intCast(samplePlane(planes[0], plane_w[0], plane_h[0], x, y, c0.h_factor, c0.v_factor, max_h, max_v));
+                const Cb: i32 = @as(i32, samplePlane(planes[1], plane_w[1], plane_h[1], x, y, c1.h_factor, c1.v_factor, max_h, max_v)) - 128;
+                const Cr: i32 = @as(i32, samplePlane(planes[2], plane_w[2], plane_h[2], x, y, c2.h_factor, c2.v_factor, max_h, max_v)) - 128;
+                const r: i32 = Y + ((Cr * 91881 + 32768) >> 16);
+                const g: i32 = Y + ((Cb * -22554 + Cr * -46802 + 32768) >> 16);
+                const b: i32 = Y + ((Cb * 116130 + 32768) >> 16);
                 const out_off: usize = (y * width + x) * 3;
-                pixels[out_off + 0] = clampU8(r);
-                pixels[out_off + 1] = clampU8(g);
-                pixels[out_off + 2] = clampU8(b);
+                pixels[out_off + 0] = clampSampleI32(r);
+                pixels[out_off + 1] = clampSampleI32(g);
+                pixels[out_off + 2] = clampSampleI32(b);
             }
         }
     }
@@ -843,9 +850,8 @@ inline fn samplePlane(
     return plane[cy * plane_w + cx];
 }
 
-fn clampU8(v: f32) u8 {
-    const r = @round(v);
-    if (r < 0) return 0;
-    if (r > 255) return 255;
-    return @intFromFloat(r);
+inline fn clampSampleI32(v: i32) u8 {
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return @intCast(v);
 }
