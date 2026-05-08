@@ -114,22 +114,37 @@ export fn jpegz_image_free(image: ?*CImage) void {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// jpegz_decode / jpegz_jp2_decode
+// jpegz_decode / jpegz_jp2_decode (+ _ex variants for caller-controlled
+// options — cross-project threading-control convention, agreed
+// 2026-05-07; see jpegz_core.h docstring on jpegz_decode_options_t).
 // ─────────────────────────────────────────────────────────────────────
 
-fn doDecode(
-    decoder: *const fn (std.mem.Allocator, []const u8) errors.DecodeError!jpegz.Image,
+/// Mirrors `jpegz_decode_options_t` in include/jpegz_core.h.
+/// Layout: `threads: u8` followed by 7 reserved zero bytes for forward
+/// compatibility. Existing fields never shift; new fields append.
+const CDecodeOptions = extern struct {
+    threads: u8,
+    reserved: [7]u8,
+};
+
+fn doDecodeWithOptions(
+    decoder: *const fn (std.mem.Allocator, []const u8, jpegz.DecodeOptions) errors.DecodeError!jpegz.Image,
     data: [*c]const u8,
     len: usize,
+    c_options: ?*const CDecodeOptions,
     out_image: ?*CImage,
 ) c_int {
     clearLastError();
     const out = out_image orelse {
         setLastError("out_image must not be NULL", .{});
-        return -3; // UnsupportedPrecision is wrong; let's be explicit:
+        return -3;
     };
     const slice: []const u8 = if (data == null or len == 0) &[_]u8{} else data[0..len];
-    const img = decoder(c_allocator, slice) catch |err| {
+    const opts: jpegz.DecodeOptions = if (c_options) |co|
+        .{ .threads = co.threads }
+    else
+        .{};
+    const img = decoder(c_allocator, slice, opts) catch |err| {
         setLastError("decode failed: {s}", .{@errorName(err)});
         return toCStatus(err);
     };
@@ -138,11 +153,29 @@ fn doDecode(
 }
 
 export fn jpegz_decode(data: [*c]const u8, len: usize, out_image: ?*CImage) c_int {
-    return doDecode(jpegz.decode, data, len, out_image);
+    return doDecodeWithOptions(jpegz.decodeWithOptions, data, len, null, out_image);
+}
+
+export fn jpegz_decode_ex(
+    data: [*c]const u8,
+    len: usize,
+    options: ?*const CDecodeOptions,
+    out_image: ?*CImage,
+) c_int {
+    return doDecodeWithOptions(jpegz.decodeWithOptions, data, len, options, out_image);
 }
 
 export fn jpegz_jp2_decode(data: [*c]const u8, len: usize, out_image: ?*CImage) c_int {
-    return doDecode(jpegz.jpeg2000.decode, data, len, out_image);
+    return doDecodeWithOptions(jpegz.jpeg2000.decodeWithOptions, data, len, null, out_image);
+}
+
+export fn jpegz_jp2_decode_ex(
+    data: [*c]const u8,
+    len: usize,
+    options: ?*const CDecodeOptions,
+    out_image: ?*CImage,
+) c_int {
+    return doDecodeWithOptions(jpegz.jpeg2000.decodeWithOptions, data, len, options, out_image);
 }
 
 // ─────────────────────────────────────────────────────────────────────

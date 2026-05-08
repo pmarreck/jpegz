@@ -93,19 +93,69 @@ typedef struct {
 void jpegz_image_free(jpegz_image_t *image);
 
 /* Decode any T.81 / T.87 JPEG (sequential / progressive / lossless /
- * arithmetic / JPEG-LS) into a fully-realized image. */
+ * arithmetic / JPEG-LS) into a fully-realized image.
+ *
+ * Convenience wrapper around jpegz_decode_ex with default options
+ * (single-threaded). For caller-controlled threading, use
+ * jpegz_decode_ex. */
 jpegz_status_t jpegz_decode(
     const uint8_t  *data,
     size_t          len,
     jpegz_image_t  *out_image
 );
 
+/* Caller-controlled decode parameters. Cross-project convention
+ * (validate / jpegz / tiffz, agreed 2026-05-07).
+ *
+ * threads:
+ *   1 (default) — sequential decode in the calling thread. No threads
+ *     spawned, no oversubscription with caller-side worker pools.
+ *   0           — explicit caller opt-in to library-side auto-detection
+ *     (CPU count, capped at independent decode units). Library may use
+ *     fewer threads than the cap if work doesn't amortize setup.
+ *   >1          — explicit budget; same caveat as 0.
+ *
+ * No globals, no env vars, no implicit auto-detection. Today's
+ * implementation accepts the value but the cleanroom decoder runs
+ * sequentially regardless; pipeline parallelism lands in M2.1d
+ * follow-up. Wrapper paths pass `threads` through where the
+ * underlying C lib supports it (openjpeg → opj_codec_set_threads;
+ * libjpeg-turbo's traditional API has no thread param). */
+typedef struct {
+    uint8_t threads;
+    /* Reserved for forward compatibility — must be zero. Future fields
+     * will be added here only by appending; existing layout never
+     * shifts. */
+    uint8_t reserved[7];
+} jpegz_decode_options_t;
+
+/* Decode with caller-controlled options. Pass NULL for `options` to
+ * use defaults (equivalent to jpegz_decode). */
+jpegz_status_t jpegz_decode_ex(
+    const uint8_t                       *data,
+    size_t                               len,
+    const jpegz_decode_options_t        *options,
+    jpegz_image_t                       *out_image
+);
+
 /* Decode JPEG 2000 (J2K codestream or JP2 file) into a fully-realized
- * image. Whole-image only in v1; tile/resolution streaming = v2. */
+ * image. Whole-image only in v1; tile/resolution streaming = v2.
+ *
+ * Convenience wrapper around jpegz_jp2_decode_ex. */
 jpegz_status_t jpegz_jp2_decode(
     const uint8_t  *data,
     size_t          len,
     jpegz_image_t  *out_image
+);
+
+/* Decode JP2 with caller-controlled options. Same convention as
+ * jpegz_decode_ex. JP2 path passes `options.threads` through to
+ * `opj_codec_set_threads`. */
+jpegz_status_t jpegz_jp2_decode_ex(
+    const uint8_t                       *data,
+    size_t                               len,
+    const jpegz_decode_options_t        *options,
+    jpegz_image_t                       *out_image
 );
 
 /* ── Validation ────────────────────────────────────────────────── */

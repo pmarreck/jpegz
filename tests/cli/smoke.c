@@ -57,6 +57,36 @@ int main(void) {
     rc = jpegz_decode((const unsigned char *)"", 0, &empty_out);
     ASSERT(rc == JPEGZ_ERR_TRUNCATED_STREAM, "empty input -> TRUNCATED_STREAM");
 
+    /* M2.1d threading-control surface: jpegz_decode_ex with NULL options
+     * is equivalent to jpegz_decode (default threads=1). */
+    jpegz_image_t img_ex_null = {0};
+    rc = jpegz_decode_ex(baseline_2x2_rgb, baseline_2x2_rgb_len, NULL, &img_ex_null);
+    ASSERT(rc == JPEGZ_OK, "jpegz_decode_ex(NULL options) returns OK");
+    ASSERT(img_ex_null.width == 2 && img_ex_null.height == 2,
+           "jpegz_decode_ex(NULL) shape matches");
+    jpegz_image_free(&img_ex_null);
+
+    /* jpegz_decode_ex with explicit options: threads=4 currently no-op
+     * but contract is "any value still decodes correctly". Reserved
+     * bytes must be zero-initialized — the {0} struct initializer
+     * handles that by setting `reserved` to all zeros. */
+    jpegz_decode_options_t opts4 = {0};
+    opts4.threads = 4;
+    jpegz_image_t img_t4 = {0};
+    rc = jpegz_decode_ex(baseline_2x2_rgb, baseline_2x2_rgb_len, &opts4, &img_t4);
+    ASSERT(rc == JPEGZ_OK, "jpegz_decode_ex(threads=4) returns OK");
+    ASSERT(img_t4.pixels_len == 12, "jpegz_decode_ex(threads=4) pixels_len == 12");
+    jpegz_image_free(&img_t4);
+
+    /* threads=0 is the explicit caller-opt-in to library-side
+     * auto-detection. Today no-op but must produce same output. */
+    jpegz_decode_options_t opts_auto = {0};
+    opts_auto.threads = 0;
+    jpegz_image_t img_auto = {0};
+    rc = jpegz_decode_ex(baseline_2x2_rgb, baseline_2x2_rgb_len, &opts_auto, &img_auto);
+    ASSERT(rc == JPEGZ_OK, "jpegz_decode_ex(threads=0 auto) returns OK");
+    jpegz_image_free(&img_auto);
+
     /* Validate the same fixture: PASS, baseline_huffman, 2x2. */
     jpegz_validation_report_t rpt = {0};
     rc = jpegz_validate(baseline_2x2_rgb, baseline_2x2_rgb_len, &rpt);
@@ -90,6 +120,6 @@ int main(void) {
     ASSERT(found_missing_soi, "empty -> MISSING_SOI finding present");
     jpegz_validation_report_free(&rpt_empty);
 
-    printf("PASS: jpegz C FFI smoke (8 assertions across 4 calls)\n");
+    printf("PASS: jpegz C FFI smoke (14 assertions across 7 calls)\n");
     return 0;
 }

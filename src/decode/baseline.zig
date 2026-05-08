@@ -78,13 +78,38 @@ const FrameInfo = struct {
 
 pub const Error = errors.DecodeError;
 
-/// Decode an 8-bit baseline JPEG.
+/// Caller-controlled options for the cleanroom decoder. Mirrors the
+/// public `jpegz.DecodeOptions` shape so we can plumb it through
+/// without depending on the parent module (avoids an import cycle).
+/// Today only `threads` is honored; struct can grow more knobs.
+pub const DecodeOptions = struct {
+    threads: u8 = 1,
+};
+
+/// Decode an 8-bit baseline JPEG. Sequential / single-threaded.
 ///
 /// Returns `error.NotImplemented` for any feature the v1 cleanroom
-/// doesn't yet support (subsampling != 1×1, restart markers, etc.) —
+/// doesn't yet support (progressive, lossless, arithmetic, etc.) —
 /// the caller (`src/jpegz.zig`) is expected to fall back to the
 /// libjpeg-turbo wrapper in that case.
 pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
+    return decodeWithOptions(allocator, data, .{});
+}
+
+/// Same as `decode` but accepts `DecodeOptions`. M2.1d landed the
+/// caller-controlled threading surface; the parallelism implementation
+/// is a follow-up — for now `threads` is accepted but the cleanroom
+/// runs sequentially regardless. Default behavior unchanged.
+pub fn decodeWithOptions(
+    allocator: Allocator,
+    data: []const u8,
+    options: DecodeOptions,
+) Error!types.Image {
+    _ = options;
+    return decodeImpl(allocator, data);
+}
+
+fn decodeImpl(allocator: Allocator, data: []const u8) Error!types.Image {
     if (data.len < 4) return fail("entry_too_short", error.TruncatedStream);
     if (data[0] != 0xFF or data[1] != 0xD8) return fail("entry_no_soi", error.InvalidMarker);
 

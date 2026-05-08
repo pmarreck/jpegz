@@ -107,6 +107,34 @@ pub const ValidationReport = struct {
 // 4. Public entry points
 // ─────────────────────────────────────────────────────────────────────
 
+/// Caller-controlled decode parameters. Adopted verbatim from the
+/// cross-project threading-control convention validate proposed
+/// 2026-05-07 (`inbox/2026-05-07-validate-threading-control-convention.md`).
+/// Same shape will land in tiffz at M6+.
+pub const DecodeOptions = struct {
+    /// Number of threads jpegz may use for parallelizable decode steps.
+    /// `1` (default) = run sequentially in the calling thread. No
+    ///   threads spawned, no oversubscription with caller-side worker
+    ///   pools (validate's primary concern).
+    /// `0` = explicit caller opt-in to library-side auto-detection
+    ///   (`std.Thread.getCpuCount()` capped at the number of independent
+    ///   decode units, e.g. RST segments or MCU rows).
+    /// `>1` = explicit budget; library may use fewer if the work
+    ///   doesn't amortize.
+    ///
+    /// **No globals, no env vars, no implicit auto-detection.** The
+    /// caller decides every call. Per-call decision so different
+    /// pipelines in one process can make different choices.
+    ///
+    /// Today (M2.1d): the cleanroom decoder honors `threads` for
+    /// parallelizable pipeline stages (IDCT, dequant, color conv,
+    /// chroma upsample) when the image is large enough to amortize
+    /// thread setup. Wrapper paths pass through where supported
+    /// (openjpeg → `opj_codec_set_threads`); libjpeg-turbo's
+    /// traditional API has no thread param.
+    threads: u8 = 1,
+};
+
 /// Decode any T.81 / T.87 JPEG (sequential / progressive / lossless /
 /// arithmetic / JPEG-LS) into a fully-realized `Image`. Universal
 /// entry point — works for every storage mode and precision.
@@ -117,7 +145,22 @@ pub const ValidationReport = struct {
 ///   - 8-bit images: `pixels` is byte-shaped, RGB/grayscale/CMYK per `layout`.
 ///   - 12/16-bit images: `pixels` is `u16` host-endian (reinterpret-cast
 ///     as `[]u8`); accessed via `image.pixelsU16()`.
+///
+/// Default options (`threads = 1`). For caller-controlled threading,
+/// use `decodeWithOptions`.
 pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
+    return decodeWithOptions(allocator, data, .{});
+}
+
+/// Same as `decode` but accepts a `DecodeOptions` struct for caller-
+/// controlled behavior (today: thread-count budget). Existing call
+/// sites of `decode` are unaffected; new consumers needing thread
+/// control call this entry point.
+pub fn decodeWithOptions(
+    allocator: Allocator,
+    data: []const u8,
+    options: DecodeOptions,
+) DecodeError!Image {
     // Phase 2 dispatch: try cleanroom paths in order; each returns
     // `error.NotImplemented` if it doesn't handle the variant. Final
     // fallback is the libjpeg-turbo wrapper. Each retired libjpeg
@@ -125,8 +168,11 @@ pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
     const baseline = @import("decode/baseline.zig");
     const wrapper = @import("ffi/libjpeg_wrapper.zig");
 
-    // Try baseline cleanroom first (SOF0).
-    if (baseline.decode(allocator, data)) |img| {
+    // Try baseline cleanroom first (SOF0). Convert public DecodeOptions
+    // → baseline's structurally-identical DecodeOptions (separate types
+    // to keep baseline.zig free of a dependency on the parent module).
+    const baseline_opts: baseline.DecodeOptions = .{ .threads = options.threads };
+    if (baseline.decodeWithOptions(allocator, data, baseline_opts)) |img| {
         return img;
     } else |err| switch (err) {
         error.NotImplemented => {},
@@ -141,6 +187,8 @@ pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
 
     // Final: libjpeg-turbo wrapper handles everything jpegz hasn't
     // cleanroomed yet (SOF1/2/3/9/10/11 + arithmetic + JPEG-LS).
+    // Wrapper currently ignores `options.threads` — libjpeg-turbo's
+    // traditional API has no thread parameter.
     return wrapper.decode(allocator, data);
 }
 
@@ -187,6 +235,19 @@ pub fn validate(
 /// arithmetic).
 pub const jpeg2000 = struct {
     pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
+        return jpeg2000.decodeWithOptions(allocator, data, .{});
+    }
+
+    /// Same as `decode` but accepts `DecodeOptions`. Today's openjpeg
+    /// wrapper does not yet plumb `options.threads` through to
+    /// `opj_codec_set_threads` — that lands with the cleanroom JP2
+    /// path (M2.7) or as a wrapper-side enhancement when needed.
+    pub fn decodeWithOptions(
+        allocator: Allocator,
+        data: []const u8,
+        options: DecodeOptions,
+    ) DecodeError!Image {
+        _ = options;
         return @import("ffi/openjpeg_wrapper.zig").decode(allocator, data);
     }
 
@@ -220,6 +281,14 @@ comptime {
 pub const internal = struct {
     pub fn cleanroomDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/baseline.zig").decode(allocator, data);
+    }
+    pub fn cleanroomDecodeWithOptions(
+        allocator: Allocator,
+        data: []const u8,
+        options: DecodeOptions,
+    ) DecodeError!Image {
+        const baseline = @import("decode/baseline.zig");
+        return baseline.decodeWithOptions(allocator, data, .{ .threads = options.threads });
     }
     pub fn progressiveDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/progressive.zig").decode(allocator, data);

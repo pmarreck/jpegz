@@ -388,6 +388,39 @@ test "islow IDCT + fixed-point YCbCr matches libjpeg-turbo on 4:2:0 (max delta �
     try std.testing.expect(max_delta <= 2);
 }
 
+test "decodeWithOptions threading API: default options match decode()" {
+    // M2.1d threading-control surface: jpegz.decode(..) and
+    // jpegz.decodeWithOptions(.., .{}) must produce byte-identical
+    // results. The options struct is additive; default `threads = 1`
+    // is the same path the original `decode` always took.
+    const allocator = std.testing.allocator;
+    var a = try jpegz.decode(allocator, fixture_baseline_2x2_rgb);
+    defer a.deinit(allocator);
+    var b = try jpegz.decodeWithOptions(allocator, fixture_baseline_2x2_rgb, .{});
+    defer b.deinit(allocator);
+    try std.testing.expectEqual(a.width, b.width);
+    try std.testing.expectEqual(a.height, b.height);
+    try std.testing.expectEqual(a.channels, b.channels);
+    try std.testing.expectEqualSlices(u8, a.pixels, b.pixels);
+}
+
+test "decodeWithOptions threading API: threads > 1 currently no-op (parallelism is M2.1d follow-up)" {
+    // Surface contract: `threads = N` for any N is accepted today and
+    // produces correct output. Parallel execution lands later; for
+    // now the value is recorded but not acted on. This test guards
+    // against regressions where someone wires `threads` through and
+    // accidentally breaks the contract that "any value still decodes".
+    const allocator = std.testing.allocator;
+    var t1 = try jpegz.decodeWithOptions(allocator, fixture_baseline_2x2_rgb, .{ .threads = 1 });
+    defer t1.deinit(allocator);
+    var t4 = try jpegz.decodeWithOptions(allocator, fixture_baseline_2x2_rgb, .{ .threads = 4 });
+    defer t4.deinit(allocator);
+    var auto = try jpegz.decodeWithOptions(allocator, fixture_baseline_2x2_rgb, .{ .threads = 0 });
+    defer auto.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, t1.pixels, t4.pixels);
+    try std.testing.expectEqualSlices(u8, t1.pixels, auto.pixels);
+}
+
 test "fancy upsampling matches libjpeg-turbo on 4:2:0 (cleanroom == wrapper)" {
     // Tiny 2×2 4:2:0 fixture — chroma plane is 1×1 active in an 8×8
     // MCU-padded plane. Without active-frame boundary clamping, fancy
