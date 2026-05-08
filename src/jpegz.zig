@@ -293,6 +293,15 @@ pub const internal = struct {
     pub fn progressiveDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/progressive.zig").decode(allocator, data);
     }
+    /// Diagnostic-only: decode a progressive JPEG and return the post-
+    /// entropy quantized coefficients in natural order (un-zig-zagged),
+    /// matching the layout of libjpeg-turbo's `jpeg_read_coefficients()`.
+    /// Used by scratch/dump_coefs_jpegz.zig for byte-level diff against
+    /// libjpeg's output. NOT part of the stable ABI.
+    pub const ProgCoefDump = @import("decode/progressive.zig").CoefDump;
+    pub fn progressiveDecodeAndDumpCoefs(allocator: Allocator, data: []const u8) DecodeError!ProgCoefDump {
+        return @import("decode/progressive.zig").decodeAndDumpCoefs(allocator, data);
+    }
     pub fn wrapperDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("ffi/libjpeg_wrapper.zig").decode(allocator, data);
     }

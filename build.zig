@@ -280,6 +280,21 @@ pub fn build(b: *std.Build) void {
         pd_step.dependOn(&b.addInstallArtifact(pd_exe, .{}).step);
     } else |_| {}
 
+    if (std.fs.cwd().access("scratch/dump_coefs_jpegz.zig", .{})) {
+        const dc_mod = b.createModule(.{
+            .root_source_file = b.path("scratch/dump_coefs_jpegz.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        dc_mod.addImport("jpegz", jpegz_mod);
+        const dc_exe = b.addExecutable(.{
+            .name = "dump-coefs-jpegz",
+            .root_module = dc_mod,
+        });
+        const dc_step = b.step("dump-coefs-jpegz", "Dump progressive cleanroom natural-order coefs (scratch/dump_coefs_jpegz.zig)");
+        dc_step.dependOn(&b.addInstallArtifact(dc_exe, .{}).step);
+    } else |_| {}
+
     if (std.fs.cwd().access("scratch/bench_one.zig", .{})) {
         const b1_mod = b.createModule(.{
             .root_source_file = b.path("scratch/bench_one.zig"),

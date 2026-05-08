@@ -31,6 +31,7 @@ const types = @import("../core/types.zig");
 const bitstream = @import("bitstream.zig");
 const huffman = @import("huffman.zig");
 const idct = @import("idct.zig");
+const color = @import("color.zig");
 
 const PROG_DEBUG: bool = false;
 inline fn dbg(comptime fmt: []const u8, args: anytype) void {
@@ -77,6 +78,141 @@ const ScanInfo = struct {
 };
 
 pub const Error = errors.DecodeError;
+
+/// Diagnostic-only: progressive decode result with natural-order quantized
+/// coefficients per component (post-entropy, pre-IDCT). For byte-level diff
+/// against libjpeg-turbo's `jpeg_read_coefficients()` output (which is also
+/// natural-order). Caller must `freeCoefDump(allocator, dump)` after use.
+pub const CoefDump = struct {
+    num_components: u8,
+    blocks_w: [3]u32,
+    blocks_h: [3]u32,
+    coefs: [3][]i16, // natural-order, length blocks_w[i]*blocks_h[i]*64
+
+    pub fn deinit(self: *CoefDump, allocator: Allocator) void {
+        var i: usize = 0;
+        while (i < self.num_components) : (i += 1) {
+            if (self.coefs[i].len > 0) allocator.free(self.coefs[i]);
+        }
+        self.* = undefined;
+    }
+};
+
+/// Decode the bitstream as far as `decode()` does, but instead of running
+/// IDCT + color conversion, return the per-block dequantized coefficients
+/// in NATURAL order (un-zig-zagged). The dequantization step IS applied
+/// (matching libjpeg's `jpeg_read_coefficients` output, which is also
+/// post-entropy but PRE-dequant — so the caller of this function should
+/// know which one they want; here we dequant for parity with our own
+/// `assembleProgressive` intermediate state).
+///
+/// Actually: libjpeg's `jpeg_read_coefficients` returns RAW (post-entropy,
+/// PRE-dequant) coefficients in natural order. To match, we skip the
+/// dequant step here and return the raw zig-zag-then-natural-permuted
+/// coefficients.
+pub fn decodeAndDumpCoefs(allocator: Allocator, data: []const u8) Error!CoefDump {
+    // Same body as decode() up through the SOS scan-loop, but skip the
+    // assembleProgressive step. Then un-zig-zag the per-block coefficients
+    // into natural order to match libjpeg's `jpeg_read_coefficients`.
+    if (data.len < 4) return error.TruncatedStream;
+    if (data[0] != 0xFF or data[1] != 0xD8) return error.InvalidMarker;
+
+    var pos: usize = 2;
+    var frame: ?FrameInfo = null;
+    var quant_tables: [4]?[64]u16 = .{ null, null, null, null };
+    var dc_tables: [4]?huffman.HuffmanTable = .{ null, null, null, null };
+    var ac_tables: [4]?huffman.HuffmanTable = .{ null, null, null, null };
+    var coefs: [3][]i16 = .{ &.{}, &.{}, &.{} };
+    var blocks_w: [3]u32 = .{ 0, 0, 0 };
+    var blocks_h: [3]u32 = .{ 0, 0, 0 };
+    var max_h: u32 = 1;
+    var max_v: u32 = 1;
+    var saw_eoi = false;
+    var seen_sof = false;
+
+    errdefer {
+        var i: usize = 0;
+        while (i < 3) : (i += 1) if (coefs[i].len > 0) allocator.free(coefs[i]);
+    }
+
+    while (pos + 1 < data.len and !saw_eoi) {
+        if (data[pos] != 0xFF) return error.InvalidMarker;
+        while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
+        if (pos + 1 >= data.len) return error.TruncatedStream;
+        const marker = data[pos + 1];
+        pos += 2;
+        switch (marker) {
+            0xD9 => { saw_eoi = true; break; },
+            0xC2 => {
+                frame = try parseSof(data, pos);
+                if (frame.?.precision != 8) return error.UnsupportedPrecision;
+                if (frame.?.num_components != 1 and frame.?.num_components != 3) return error.NotImplemented;
+                seen_sof = true;
+                var i: usize = 0;
+                while (i < frame.?.num_components) : (i += 1) {
+                    const c = &frame.?.components[i];
+                    if (c.h_factor < 1 or c.h_factor > 4 or c.v_factor < 1 or c.v_factor > 4)
+                        return error.NotImplemented;
+                    if (@as(u32, c.h_factor) > max_h) max_h = @intCast(c.h_factor);
+                    if (@as(u32, c.v_factor) > max_v) max_v = @intCast(c.v_factor);
+                }
+                const mcu_pixel_w: u32 = max_h * 8;
+                const mcu_pixel_h: u32 = max_v * 8;
+                const mcu_cols: u32 = (frame.?.width + mcu_pixel_w - 1) / mcu_pixel_w;
+                const mcu_rows: u32 = (frame.?.height + mcu_pixel_h - 1) / mcu_pixel_h;
+                i = 0;
+                while (i < frame.?.num_components) : (i += 1) {
+                    const c = &frame.?.components[i];
+                    blocks_w[i] = mcu_cols * @as(u32, c.h_factor);
+                    blocks_h[i] = mcu_rows * @as(u32, c.v_factor);
+                    const total: usize = @as(usize, blocks_w[i]) * @as(usize, blocks_h[i]) * 64;
+                    coefs[i] = try allocator.alloc(i16, total);
+                    @memset(coefs[i], 0);
+                }
+                pos += parseSegmentLength(data, pos);
+            },
+            0xC0, 0xC1, 0xC3 => return error.NotImplemented,
+            0xC9, 0xCA, 0xCB => return error.NotImplemented,
+            0xC4 => { try parseDht(data, pos, &dc_tables, &ac_tables); pos += parseSegmentLength(data, pos); },
+            0xDB => { try parseDqt(data, pos, &quant_tables); pos += parseSegmentLength(data, pos); },
+            0xDD => return error.NotImplemented,
+            0xDA => {
+                if (!seen_sof) return error.InvalidMarker;
+                const scan = try parseSos(data, pos, &frame.?);
+                pos += parseSegmentLength(data, pos);
+                pos = try decodeOneScan(data, pos, &frame.?, &dc_tables, &ac_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, &scan);
+            },
+            0x01, 0xD0...0xD7 => continue,
+            else => pos += parseSegmentLength(data, pos),
+        }
+    }
+    if (!seen_sof) return error.InvalidMarker;
+
+    // Un-zig-zag each block in place: coefs[ci][block_off..+64] is in
+    // zig-zag order; rewrite as natural order so it matches libjpeg's
+    // `jpeg_read_coefficients` output (which IS in natural order).
+    var ci: u8 = 0;
+    while (ci < frame.?.num_components) : (ci += 1) {
+        const total_blocks: usize = @as(usize, blocks_w[ci]) * @as(usize, blocks_h[ci]);
+        var bi: usize = 0;
+        while (bi < total_blocks) : (bi += 1) {
+            const off = bi * 64;
+            var zz: [64]i16 = undefined;
+            @memcpy(&zz, coefs[ci][off..][0..64]);
+            var n: usize = 0;
+            while (n < 64) : (n += 1) {
+                coefs[ci][off + ZIGZAG[n]] = zz[n];
+            }
+        }
+    }
+
+    return CoefDump{
+        .num_components = frame.?.num_components,
+        .blocks_w = blocks_w,
+        .blocks_h = blocks_h,
+        .coefs = coefs,
+    };
+}
 
 /// Decode an 8-bit progressive JPEG (T.81 SOF2). Returns
 /// `error.NotImplemented` for any feature this v1 cleanroom doesn't
@@ -790,31 +926,49 @@ fn assembleProgressive(
             }
         }
     } else {
-        // libjpeg-turbo fixed-point YCbCr→RGB (jdcolor.c, 16-bit
-        // SCALEBITS, FIX(x) = round(x * 2^16)). Cred=91881,
-        // Cgreen_cb=-22554, Cgreen_cr=-46802, Cblue=116130,
-        // ONE_HALF=32768. Bit-identical to libjpeg's ycc_rgb_convert.
-        // Same constants baseline cleanroom uses (src/decode/baseline.zig
-        // ycbcrRowToRgb), ported here for byte-equal output between
-        // baseline and progressive paths.
+        // Three-component path: produce a canvas at MCU resolution
+        // (canvas_w/canvas_h), upsample each chroma plane via IJG fancy
+        // upsampling so it lines up with Y, then convert row-by-row to
+        // RGB using libjpeg-turbo's fixed-point math. Mirrors baseline
+        // cleanroom's `assembleOutput` so the two paths produce
+        // byte-equal output for the same coefficient buffer.
         const c0 = &frame.components[0];
         const c1 = &frame.components[1];
         const c2 = &frame.components[2];
+        const canvas_w: u32 = plane_w[0]; // Y plane is at full res
+        const canvas_h: u32 = plane_h[0];
+
+        // Active chroma extent — per-component, in chroma-pixel units.
+        // Used by fancyUpsample to clamp at the visible-frame boundary
+        // so MCU-padded chroma never bleeds into visible pixels.
+        const active_w0: u32 = (width * @as(u32, c0.h_factor) + max_h - 1) / max_h;
+        const active_h0: u32 = (height * @as(u32, c0.v_factor) + max_v - 1) / max_v;
+        _ = active_w0; _ = active_h0; // c0 (Y) doesn't get upsampled
+        const active_w1: u32 = (width * @as(u32, c1.h_factor) + max_h - 1) / max_h;
+        const active_h1: u32 = (height * @as(u32, c1.v_factor) + max_v - 1) / max_v;
+        const active_w2: u32 = (width * @as(u32, c2.h_factor) + max_h - 1) / max_h;
+        const active_h2: u32 = (height * @as(u32, c2.v_factor) + max_v - 1) / max_v;
+
+        const h_ratio_1: u32 = max_h / @as(u32, c1.h_factor);
+        const v_ratio_1: u32 = max_v / @as(u32, c1.v_factor);
+        const h_ratio_2: u32 = max_h / @as(u32, c2.h_factor);
+        const v_ratio_2: u32 = max_v / @as(u32, c2.v_factor);
+
+        const cb_canvas: []u8 = if (h_ratio_1 == 1 and v_ratio_1 == 1)
+            planes[1]
+        else
+            try color.fancyUpsample(allocator, planes[1], plane_w[1], plane_h[1], canvas_w, canvas_h, active_w1, active_h1, h_ratio_1, v_ratio_1);
+        defer if (h_ratio_1 != 1 or v_ratio_1 != 1) allocator.free(cb_canvas);
+
+        const cr_canvas: []u8 = if (h_ratio_2 == 1 and v_ratio_2 == 1)
+            planes[2]
+        else
+            try color.fancyUpsample(allocator, planes[2], plane_w[2], plane_h[2], canvas_w, canvas_h, active_w2, active_h2, h_ratio_2, v_ratio_2);
+        defer if (h_ratio_2 != 1 or v_ratio_2 != 1) allocator.free(cr_canvas);
+
         var y: u32 = 0;
         while (y < height) : (y += 1) {
-            var x: u32 = 0;
-            while (x < width) : (x += 1) {
-                const Y: i32 = @intCast(samplePlane(planes[0], plane_w[0], plane_h[0], x, y, c0.h_factor, c0.v_factor, max_h, max_v));
-                const Cb: i32 = @as(i32, samplePlane(planes[1], plane_w[1], plane_h[1], x, y, c1.h_factor, c1.v_factor, max_h, max_v)) - 128;
-                const Cr: i32 = @as(i32, samplePlane(planes[2], plane_w[2], plane_h[2], x, y, c2.h_factor, c2.v_factor, max_h, max_v)) - 128;
-                const r: i32 = Y + ((Cr * 91881 + 32768) >> 16);
-                const g: i32 = Y + ((Cb * -22554 + Cr * -46802 + 32768) >> 16);
-                const b: i32 = Y + ((Cb * 116130 + 32768) >> 16);
-                const out_off: usize = (y * width + x) * 3;
-                pixels[out_off + 0] = clampSampleI32(r);
-                pixels[out_off + 1] = clampSampleI32(g);
-                pixels[out_off + 2] = clampSampleI32(b);
-            }
+            color.ycbcrRowToRgb(planes[0], cb_canvas, cr_canvas, canvas_w, width, pixels, y);
         }
     }
 
@@ -832,26 +986,3 @@ fn assembleProgressive(
     };
 }
 
-inline fn samplePlane(
-    plane: []const u8,
-    plane_w: u32,
-    plane_h: u32,
-    x: u32,
-    y: u32,
-    h_factor: u4,
-    v_factor: u4,
-    max_h: u32,
-    max_v: u32,
-) u8 {
-    var cx: u32 = (x * @as(u32, h_factor)) / max_h;
-    var cy: u32 = (y * @as(u32, v_factor)) / max_v;
-    if (cx >= plane_w) cx = plane_w - 1;
-    if (cy >= plane_h) cy = plane_h - 1;
-    return plane[cy * plane_w + cx];
-}
-
-inline fn clampSampleI32(v: i32) u8 {
-    if (v < 0) return 0;
-    if (v > 255) return 255;
-    return @intCast(v);
-}
