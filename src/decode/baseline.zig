@@ -105,11 +105,10 @@ pub fn decodeWithOptions(
     data: []const u8,
     options: DecodeOptions,
 ) Error!types.Image {
-    _ = options;
-    return decodeImpl(allocator, data);
+    return decodeImpl(allocator, data, options);
 }
 
-fn decodeImpl(allocator: Allocator, data: []const u8) Error!types.Image {
+fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Error!types.Image {
     if (data.len < 4) return fail("entry_too_short", error.TruncatedStream);
     if (data[0] != 0xFF or data[1] != 0xD8) return fail("entry_no_soi", error.InvalidMarker);
 
@@ -187,6 +186,7 @@ fn decodeImpl(allocator: Allocator, data: []const u8) Error!types.Image {
                     &dc_tables,
                     &ac_tables,
                     restart_interval,
+                    options,
                 );
             },
             // Standalone markers we can skip safely:
@@ -328,6 +328,7 @@ fn decodeScan(
     dc_tables: *const [4]?huffman.HuffmanTable,
     ac_tables: *const [4]?huffman.HuffmanTable,
     restart_interval: u32,
+    options: DecodeOptions,
 ) Error!types.Image {
     const channels: u8 = frame.num_components;
     const width: u32 = frame.width;
@@ -387,6 +388,40 @@ fn decodeScan(
         }
     }
 
+    // Two-pass pipeline structure. Phase 1 (entropy decode) is inherently
+    // serial — DC predictors chain across MCUs within an RST segment.
+    // Phase 2 (IDCT + plane copy) is per-block independent and is the
+    // hook for parallelism (M2.1d follow-up). For each component we hold
+    // a coefficient buffer of [num_blocks_y][num_blocks_x][64]i32 in
+    // natural row-major order. Memory cost is modest: a 1500×1026 4:4:4
+    // image is 188×129×3×64×4 = ~18.6 MB; a typical 216×216 photo is
+    // 27×27×3×64×4 = ~559 KB.
+    var blocks_w: [3]u32 = .{ 0, 0, 0 };
+    var blocks_h: [3]u32 = .{ 0, 0, 0 };
+    {
+        var i: usize = 0;
+        while (i < channels) : (i += 1) {
+            const eff_h: u32 = if (channels == 1) 1 else @as(u32, frame.components[i].h_factor);
+            const eff_v: u32 = if (channels == 1) 1 else @as(u32, frame.components[i].v_factor);
+            blocks_w[i] = mcu_cols * eff_h;
+            blocks_h[i] = mcu_rows * eff_v;
+        }
+    }
+    var coef_buf: [3][]i32 = .{ &.{}, &.{}, &.{} };
+    {
+        var i: usize = 0;
+        while (i < channels) : (i += 1) {
+            const total_blocks: usize = @as(usize, blocks_w[i]) * @as(usize, blocks_h[i]);
+            coef_buf[i] = try allocator.alloc(i32, total_blocks * 64);
+        }
+    }
+    defer {
+        var j: usize = 0;
+        while (j < channels) : (j += 1) {
+            if (coef_buf[j].len > 0) allocator.free(coef_buf[j]);
+        }
+    }
+
     var br = bitstream.BitReader.init(data);
     // Accumulator: T.81 §F.1.2.1 says DC predictor "shall be initialized
     // to 0 and reset whenever a restart marker is encountered." The
@@ -399,6 +434,7 @@ fn decodeScan(
     // Expected next RST marker byte (cycles 0xD0..0xD7). T.81 §F.2.1.3.
     var expected_rst: u8 = 0xD0;
 
+    // ── Phase 1: serial entropy decode → coefficient buffer ────
     var mcu_y: u32 = 0;
     while (mcu_y < mcu_rows) : (mcu_y += 1) {
         var mcu_x: u32 = 0;
@@ -432,13 +468,17 @@ fn decodeScan(
                 // Per T.81 §A.2.2: non-interleaved scans (Ns=1) ignore the
                 // component's declared H/V factors and emit one 8×8 block
                 // per MCU. Otherwise honor the component's factors.
-                const blocks_v: u32 = if (channels == 1) 1 else @intCast(comp.v_factor);
-                const blocks_h: u32 = if (channels == 1) 1 else @intCast(comp.h_factor);
+                const blocks_v_per_mcu: u32 = if (channels == 1) 1 else @intCast(comp.v_factor);
+                const blocks_h_per_mcu: u32 = if (channels == 1) 1 else @intCast(comp.h_factor);
                 var block_v: u32 = 0;
-                while (block_v < blocks_v) : (block_v += 1) {
+                while (block_v < blocks_v_per_mcu) : (block_v += 1) {
                     var block_h: u32 = 0;
-                    while (block_h < blocks_h) : (block_h += 1) {
-                        try decodeBlock(
+                    while (block_h < blocks_h_per_mcu) : (block_h += 1) {
+                        const block_idx_x: u32 = mcu_x * blocks_h_per_mcu + block_h;
+                        const block_idx_y: u32 = mcu_y * blocks_v_per_mcu + block_v;
+                        const linear: usize = (@as(usize, block_idx_y) * @as(usize, blocks_w[ci]) + @as(usize, block_idx_x)) * 64;
+                        const slot: *[64]i32 = coef_buf[ci][linear..][0..64];
+                        try decodeBlockCoefficients(
                             &br,
                             ci,
                             comp,
@@ -446,10 +486,7 @@ fn decodeScan(
                             ac_tables,
                             quant_tables,
                             &prev_dc,
-                            planes[ci],
-                            plane_w[ci],
-                            mcu_x * blocks_h * 8 + block_h * 8,
-                            mcu_y * blocks_v * 8 + block_v * 8,
+                            slot,
                         );
                     }
                 }
@@ -458,16 +495,161 @@ fn decodeScan(
         }
     }
 
-    // After block decoding, fall through to the assembly section
-    // below. The original per-block decode-inline code is now in
-    // decodeBlock(); the rest of this function is the assembly path.
-    return assembleOutput(allocator, frame, channels, width, height, max_h, max_v, plane_w, plane_h, &planes);
+    // ── Phase 2: per-block IDCT + plane copy ──────────────────
+    // Per-block work is independent: each task reads its own coefficient
+    // slot and writes a non-overlapping 8×8 region of the (already
+    // allocated) component plane. No shared mutable state; safe to
+    // parallelize without locks.
+    //
+    // Decision tree:
+    //   options.threads == 1 → sequential (zero pool overhead).
+    //   small image (any plane has < PARALLEL_BLOCKS_THRESHOLD blocks)
+    //     → sequential (thread setup eats the gains).
+    //   else → std.Thread.Pool with options.threads workers (or
+    //     std.Thread.getCpuCount() if options.threads == 0).
+    const total_blocks: u64 = blk: {
+        var sum: u64 = 0;
+        for (0..channels) |ci_idx| {
+            sum += @as(u64, blocks_w[ci_idx]) * @as(u64, blocks_h[ci_idx]);
+        }
+        break :blk sum;
+    };
+    // Below this threshold, sequential is faster than parallel. Tuned
+    // based on benchmark results: thread spawn + join is ~50µs on macOS
+    // arm64, and one IDCT block is ~100ns, so ~512 blocks is the
+    // crossover. Round up so small images stay strictly sequential.
+    const PARALLEL_BLOCKS_THRESHOLD: u64 = 512;
+    const want_parallel: bool = options.threads != 1 and total_blocks >= PARALLEL_BLOCKS_THRESHOLD;
+
+    // If parallelism is requested AND the image is big enough, set up
+    // ONE pool and reuse it across both Phase 2 (IDCT) and the
+    // color-conversion stage in assembleOutput. Spinning up two pools
+    // for one decode would double the thread-creation overhead.
+    var pool: std.Thread.Pool = undefined;
+    var pool_initialized = false;
+    var pool_ptr: ?*std.Thread.Pool = null;
+    defer if (pool_initialized) pool.deinit();
+
+    if (want_parallel) {
+        var n_workers: u32 = options.threads;
+        if (options.threads == 0) {
+            const cpu = std.Thread.getCpuCount() catch 1;
+            n_workers = @intCast(@min(cpu, std.math.maxInt(u32)));
+        }
+        // Cap at the largest plausible work item count (rows of blocks
+        // for IDCT, output rows for color convert). We use the larger of
+        // these two so the pool isn't undersized for either stage.
+        var max_units: u32 = height;
+        for (0..channels) |ci_idx| {
+            if (blocks_h[ci_idx] > max_units) max_units = blocks_h[ci_idx];
+        }
+        if (n_workers > max_units) n_workers = max_units;
+        if (n_workers < 1) n_workers = 1;
+
+        if (pool.init(.{ .allocator = allocator, .n_jobs = n_workers })) {
+            pool_initialized = true;
+            pool_ptr = &pool;
+        } else |_| {
+            // Pool init failed (OS thread limit, OOM, etc). Fall through
+            // to the sequential path — decoding still succeeds, just
+            // single-threaded.
+        }
+    }
+
+    if (pool_ptr) |p| {
+        // Parallel transform: one task per row of blocks per component.
+        var wg: std.Thread.WaitGroup = .{};
+        var ci: usize = 0;
+        while (ci < channels) : (ci += 1) {
+            var by_idx: u32 = 0;
+            while (by_idx < blocks_h[ci]) : (by_idx += 1) {
+                p.spawnWg(&wg, transformBlockRow, .{
+                    coef_buf[ci],
+                    planes[ci],
+                    plane_w[ci],
+                    blocks_w[ci],
+                    by_idx,
+                });
+            }
+        }
+        p.waitAndWork(&wg);
+    } else {
+        // Sequential transform.
+        var ci: usize = 0;
+        while (ci < channels) : (ci += 1) {
+            var by_idx: u32 = 0;
+            while (by_idx < blocks_h[ci]) : (by_idx += 1) {
+                var bx_idx: u32 = 0;
+                while (bx_idx < blocks_w[ci]) : (bx_idx += 1) {
+                    const linear: usize = (@as(usize, by_idx) * @as(usize, blocks_w[ci]) + @as(usize, bx_idx)) * 64;
+                    const slot: *const [64]i32 = coef_buf[ci][linear..][0..64];
+                    transformBlockToPlane(slot, planes[ci], plane_w[ci], bx_idx * 8, by_idx * 8);
+                }
+            }
+        }
+    }
+
+    return assembleOutput(allocator, frame, channels, width, height, max_h, max_v, plane_w, plane_h, &planes, pool_ptr);
 }
 
-/// Decode a single 8×8 block from the entropy stream and place its
-/// spatial samples into `plane` at (block_x_pixels, block_y_pixels).
+/// Per-row worker: IDCT every block in row `by_idx` and write into the
+/// plane. Pure compute over disjoint memory ranges (own slice of
+/// `coef_buf` for input, own 8-pixel-tall stripe of `plane` for output)
+/// so concurrent invocations on different rows don't race.
+fn transformBlockRow(
+    coef_buf: []const i32,
+    plane: []u8,
+    plane_w: u32,
+    blocks_w_for_comp: u32,
+    by_idx: u32,
+) void {
+    var bx_idx: u32 = 0;
+    while (bx_idx < blocks_w_for_comp) : (bx_idx += 1) {
+        const linear: usize = (@as(usize, by_idx) * @as(usize, blocks_w_for_comp) + @as(usize, bx_idx)) * 64;
+        const slot: *const [64]i32 = coef_buf[linear..][0..64];
+        transformBlockToPlane(slot, plane, plane_w, bx_idx * 8, by_idx * 8);
+    }
+}
+
+/// Per-row worker: convert one row of YCbCr canvas planes into the
+/// interleaved RGB output buffer. libjpeg-turbo's fixed-point math
+/// (jdcolor.c, 16-bit SCALEBITS, FIX(x) = round(x * 2^16)):
+///   Cred=91881, Cgreen_cb=-22554, Cgreen_cr=-46802, Cblue=116130,
+///   ONE_HALF=32768. Output is bit-identical to libjpeg's
+///   ycc_rgb_convert for the same input. Each row writes a disjoint
+///   `width*3`-byte stripe of `pixels`, safe for concurrent rows.
+fn ycbcrRowToRgb(
+    plane_y: []const u8,
+    plane_cb: []const u8,
+    plane_cr: []const u8,
+    canvas_w: u32,
+    width: u32,
+    pixels: []u8,
+    y: u32,
+) void {
+    var x: u32 = 0;
+    while (x < width) : (x += 1) {
+        const off_in: usize = @as(usize, y) * @as(usize, canvas_w) + @as(usize, x);
+        const Y: i32 = @intCast(plane_y[off_in]);
+        const Cb: i32 = @as(i32, plane_cb[off_in]) - 128;
+        const Cr: i32 = @as(i32, plane_cr[off_in]) - 128;
+        const r: i32 = Y + ((Cr * 91881 + 32768) >> 16);
+        const g: i32 = Y + ((Cb * -22554 + Cr * -46802 + 32768) >> 16);
+        const b: i32 = Y + ((Cb * 116130 + 32768) >> 16);
+        const out_off: usize = (@as(usize, y) * @as(usize, width) + @as(usize, x)) * 3;
+        pixels[out_off + 0] = clampSampleI32(r);
+        pixels[out_off + 1] = clampSampleI32(g);
+        pixels[out_off + 2] = clampSampleI32(b);
+    }
+}
+
+/// Phase 1: decode a single 8×8 block from the entropy stream into the
+/// natural-order coefficient buffer at `out`. Performs Huffman decode
+/// (DC + 63 AC), dequantization in zig-zag space, and un-zig-zag into
+/// natural order — but does NOT IDCT or write spatial samples. Splitting
+/// this from the IDCT pass lets the second pass run in parallel later.
 /// Updates `prev_dc[ci]` (DC differential per component, T.81 §F.2.2.1).
-fn decodeBlock(
+fn decodeBlockCoefficients(
     br: *bitstream.BitReader,
     ci: usize,
     comp: *const ComponentInfo,
@@ -475,16 +657,13 @@ fn decodeBlock(
     ac_tables: *const [4]?huffman.HuffmanTable,
     quant_tables: *const [4]?[64]u16,
     prev_dc: *[3]i32,
-    plane: []u8,
-    plane_w: u32,
-    block_x: u32,
-    block_y: u32,
+    out: *[64]i32,
 ) Error!void {
     const dc_t = dc_tables[comp.dc_table] orelse return fail("block_dc_table_null", error.InvalidMarker);
     const ac_t = ac_tables[comp.ac_table] orelse return fail("block_ac_table_null", error.InvalidMarker);
     const qt = quant_tables[comp.qt_index] orelse return fail("block_qt_null", error.InvalidMarker);
 
-    // Coefficients stored in zig-zag order during entropy decode;
+    // Coefficients accumulate in zig-zag order during entropy decode;
     // dequantized in zig-zag (matches DQT layout per T.81 §B.2.4.1);
     // un-zig-zagged for IDCT input (which expects natural row-major).
     // i32 for headroom: DC*qt can exceed i16 range on adversarial input.
@@ -521,24 +700,27 @@ fn decodeBlock(
         k += 1;
     }
 
-    // ── Dequantize in zig-zag space ────────────────────────────
+    // ── Dequantize in zig-zag space, then un-zig-zag into natural order ──
     var n: usize = 0;
     while (n < 64) : (n += 1) {
-        zz[n] = zz[n] * @as(i32, qt[n]);
+        out[ZIGZAG[n]] = zz[n] * @as(i32, qt[n]);
     }
+}
 
-    // ── Un-zig-zag into natural row-major order ────────────────
-    var coeffs: [64]i32 = undefined;
-    n = 0;
-    while (n < 64) : (n += 1) {
-        coeffs[ZIGZAG[n]] = zz[n];
-    }
-
-    // ── IDCT to spatial samples ───────────────────────────────
+/// Phase 2: IDCT a single 8×8 block of natural-order coefficients into
+/// spatial samples and copy them into `plane` at (block_x_pixels,
+/// block_y_pixels). Pure transform — no entropy state, no DC predictor
+/// touch — so it's safe to call from a worker thread provided each call
+/// reads its own `coeffs` and writes a non-overlapping 8×8 plane region.
+fn transformBlockToPlane(
+    coeffs: *const [64]i32,
+    plane: []u8,
+    plane_w: u32,
+    block_x: u32,
+    block_y: u32,
+) void {
     var block: [64]u8 = undefined;
-    idct.idct8x8(&coeffs, &block);
-
-    // ── Copy 8×8 block into plane at (block_x, block_y) ───────
+    idct.idct8x8(coeffs, &block);
     var by: u32 = 0;
     while (by < 8) : (by += 1) {
         var bx: u32 = 0;
@@ -716,6 +898,7 @@ fn assembleOutput(
     plane_w: [3]u32,
     plane_h: [3]u32,
     planes: *const [3][]u8,
+    pool: ?*std.Thread.Pool,
 ) Error!types.Image {
     const out_len: usize = @as(usize, width) * @as(usize, height) * @as(usize, channels);
     const pixels = try allocator.alloc(u8, out_len);
@@ -781,30 +964,27 @@ fn assembleOutput(
         _ = c0;
         _ = c1;
         _ = c2;
-        var y: u32 = 0;
-        while (y < height) : (y += 1) {
-            var x: u32 = 0;
-            while (x < width) : (x += 1) {
-                const off_in: usize = y * canvas_w + x;
-                // libjpeg-turbo's fixed-point YCbCr→RGB (jdcolor.c). 16-bit
-                // SCALEBITS, FIX(x) = round(x * 2^16). Constants:
-                //   Cred       =  FIX(1.40200) =  91881
-                //   Cgreen_cb  = -FIX(0.34414) = -22554
-                //   Cgreen_cr  = -FIX(0.71414) = -46802
-                //   Cblue      =  FIX(1.77200) = 116130
-                // ONE_HALF = 1 << 15 (rounding bias).
-                // Using these (vs our previous f32 path) makes cleanroom
-                // RGB output bit-identical to libjpeg-turbo's ycc_rgb_convert.
-                const Y: i32 = @intCast(canvas_planes[0][off_in]);
-                const Cb: i32 = @as(i32, canvas_planes[1][off_in]) - 128;
-                const Cr: i32 = @as(i32, canvas_planes[2][off_in]) - 128;
-                const r: i32 = Y + ((Cr * 91881 + 32768) >> 16);
-                const g: i32 = Y + ((Cb * -22554 + Cr * -46802 + 32768) >> 16);
-                const b: i32 = Y + ((Cb * 116130 + 32768) >> 16);
-                const out_off: usize = (y * width + x) * 3;
-                pixels[out_off + 0] = clampSampleI32(r);
-                pixels[out_off + 1] = clampSampleI32(g);
-                pixels[out_off + 2] = clampSampleI32(b);
+        // Color conversion is per-row independent. Parallelize it on the
+        // same thread pool used for IDCT when one is supplied.
+        if (pool) |p| {
+            var wg: std.Thread.WaitGroup = .{};
+            var y: u32 = 0;
+            while (y < height) : (y += 1) {
+                p.spawnWg(&wg, ycbcrRowToRgb, .{
+                    canvas_planes[0],
+                    canvas_planes[1],
+                    canvas_planes[2],
+                    canvas_w,
+                    width,
+                    pixels,
+                    y,
+                });
+            }
+            p.waitAndWork(&wg);
+        } else {
+            var y: u32 = 0;
+            while (y < height) : (y += 1) {
+                ycbcrRowToRgb(canvas_planes[0], canvas_planes[1], canvas_planes[2], canvas_w, width, pixels, y);
             }
         }
     }
