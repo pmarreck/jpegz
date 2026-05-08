@@ -533,17 +533,33 @@ fn decodeOneScan(
                 }
             }
         }
-        _ = max_h; _ = max_v;
     } else {
         const comp_idx = scan.comp_indices[0];
         const comp = &frame.components[comp_idx];
-        const bw: u32 = blocks_w[comp_idx];
-        const bh: u32 = blocks_h[comp_idx];
+        // T.81 §A.2.4: For single-component (Ns=1) scans, the iteration
+        // bounds use the COMPONENT's own image-aligned block grid, NOT
+        // the MCU-padded grid used by multi-component scans:
+        //   xi = ceil(W * Hi / (8 * Hmax))
+        //   yi = ceil(H * Vi / (8 * Vmax))
+        // For 4:2:0 luma at 549×304: blocks_w[0]=70 (MCU-padded) but
+        // single-component xi=69. Walking all 70 columns mis-syncs the
+        // bitstream because the encoder only wrote 69 blocks per row in
+        // this scan — the 70th column gets coefficient updates ONLY in
+        // multi-component (DC interleaved) scans. Iteration: stride is
+        // still `blocks_w[comp_idx]` (the buffer width), but the inner
+        // loop bound is the per-spec component image extent.
+        const W: u32 = frame.width;
+        const H_full: u32 = frame.height;
+        const xi: u32 = (W * @as(u32, comp.h_factor) + (8 * max_h) - 1) / (8 * max_h);
+        const yi: u32 = (H_full * @as(u32, comp.v_factor) + (8 * max_v) - 1) / (8 * max_v);
+        const bw: u32 = xi;
+        const bh: u32 = yi;
+        const stride: u32 = blocks_w[comp_idx];
         var by: u32 = 0;
         while (by < bh) : (by += 1) {
             var bx: u32 = 0;
             while (bx < bw) : (bx += 1) {
-                const off: usize = (@as(usize, by) * @as(usize, bw) +
+                const off: usize = (@as(usize, by) * @as(usize, stride) +
                     @as(usize, bx)) * 64;
                 const block = coefs[comp_idx][off .. off + 64];
                 try decodeProgressiveBlock(
@@ -552,7 +568,6 @@ fn decodeOneScan(
                 );
             }
         }
-        _ = max_h; _ = max_v;
     }
 
     // After the scan's blocks are decoded, the bit buffer may still hold
