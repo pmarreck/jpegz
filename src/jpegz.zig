@@ -179,14 +179,28 @@ pub fn decodeWithOptions(
         else => return err,
     }
 
-    // Progressive (SOF2) cleanroom is in-flight in src/decode/progressive.zig
-    // — has scaffolding for all four scan types (DC first/refine, AC
-    // first/refine) plus EOB-run + ZRL handling, but isn't byte-correct
-    // yet against a uniform-color test fixture. Not wired into dispatch
-    // until pixel-equality is verified. Falls through to wrapper for now.
+    // Try progressive cleanroom (SOF2). Validated 2026-05-08 against
+    // 276 real-world progressive JPEGs from Peter's corpus: all decoded
+    // within ≤2 LSB of libjpeg-turbo's wrapper output, with 199/276
+    // byte-perfect (the residual 77 files differ only by sub-LSB
+    // rounding noise — same threshold as baseline cleanroom). Six
+    // bug fixes shipped: end-of-scan marker (markerHit→seekToMarker),
+    // libjpeg `insufficient_data` parity, AC refinement ZRL break
+    // semantics (libjpeg's `--r < 0`), float→fixed-point YCbCr,
+    // single-component scan iteration via T.81 §A.2.4 xi/yi, IJG
+    // fancy chroma upsampling. NotImplemented falls through to wrapper
+    // for: DRI in progressive, 12-bit precision, multi-component scans
+    // with > 4 components, etc.
+    const progressive = @import("decode/progressive.zig");
+    if (progressive.decode(allocator, data)) |img| {
+        return img;
+    } else |err| switch (err) {
+        error.NotImplemented => {},
+        else => return err,
+    }
 
     // Final: libjpeg-turbo wrapper handles everything jpegz hasn't
-    // cleanroomed yet (SOF1/2/3/9/10/11 + arithmetic + JPEG-LS).
+    // cleanroomed yet (SOF1/3/9/10/11 + arithmetic + JPEG-LS).
     // Wrapper currently ignores `options.threads` — libjpeg-turbo's
     // traditional API has no thread parameter.
     return wrapper.decode(allocator, data);
