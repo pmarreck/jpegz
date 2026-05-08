@@ -61,30 +61,59 @@ everything-libjpeg-can gap.
 **Files:** `src/decode/progressive.zig`, `src/jpegz.zig` (dispatch),
 `tests/unit/decode.zig`, possibly `tests/unit/fixtures/`.
 
-**Status:** Scaffolding exists — all 4 scan-type variants (DC first,
-DC refinement, AC first, AC refinement) plus EOB-run + ZRL handling
-are written. Last known issue (memory observation S139, May 6):
-output diverges from libjpeg-turbo on uniform-color test fixture.
+**Status (2026-05-08, commit `dbb9e97` — M2.2a partial):**
+Three concrete bugs fixed:
+1. **End-of-scan marker detection** — replaced bare `markerHit()`
+   check with `seekToMarker()`. Mirrors baseline RST handling.
+2. **libjpeg-turbo `insufficient_data` parity** — when entropy
+   exhausts at a marker, leave current/remaining blocks at their
+   current value (zero for first-pass scans). Wired into all six
+   error sites (DC first/refine, AC first/refine, EOB-run extra
+   bits, refineExistingNonzero).
+3. **AC refinement ZRL off-by-one** — ZRL walks exactly 16 zeros
+   then stops without advancing k past the 16th. Previous code
+   advanced k unconditionally on inner break.
 
-**Likely now-fixable:** the Huffman zero-count gap bug (`557569b`)
-that crippled baseline almost certainly cripples progressive too —
-they share the Huffman code via `src/decode/huffman.zig`. Try wiring
-progressive into dispatch immediately:
+**Result:**
+- Both synthetic fixtures (`progressive_8x8_gray.jpg`,
+  `progressive_8x8_rgb.jpg`) decode byte-perfect.
+- Real corpus (sampled 27 progressive JPEGs from `/Volumes/Fileserver/clips-image/`):
+  - 7 byte-perfect (delta=0)
+  - 3 with ≤1 LSB rounding noise (delta=1) — sub-LSB; close enough
+  - 7 with deltas 20–253 — systematic decode bugs remain
+  - 4 BackendError, 4 TruncatedStream — entropy stream bugs
+
+**Not yet wired into dispatch.** Cleanroom-diff against full corpus
+needs the byte-perfect-or-error rate higher than current 30% before
+removing the wrapper backstop. Tests in `tests/unit/decode.zig`
+exercise the cleanroom directly via `internal.progressiveDecode` —
+the public `decode()` still routes progressive to the wrapper.
+
+**Remaining work (priority order):**
+- a. **Investigate large-delta cases** (e.g.,
+  `cyclonegraham02.jpg` BackendError at AC refine `byte_pos=4269
+  k=5`). Per-block coefficient state likely corrupted by an
+  earlier scan, then AC refine hits the wrong byte alignment.
+  Suspect: AC first pass with run-only RS codes, or
+  multi-component DC scan refinement state across blocks.
+- b. **Add scan/block-level instrumentation** behind a
+  comptime-Debug `dbg()` (already in place — toggle
+  `PROG_DEBUG=true` in `src/decode/progressive.zig`). Compare
+  RS code stream against a libjpeg-turbo trace of the same
+  file to pinpoint where they diverge.
+- c. **DRI in progressive scans** — currently returns
+  NotImplemented. Add the same RST handling baseline has
+  (entropy stream realignment + prev_dc reset + RST cycle).
+- d. **Once corpus byte-perfect rate ≥ 95%**, wire into dispatch
+  per the snippet below and run cleanroom-diff against the full
+  4,125-file corpus.
 
 ```zig
-// in src/jpegz.zig decode dispatcher, after baseline cleanroom:
+// in src/jpegz.zig decodeWithOptions, after baseline cleanroom:
 const progressive = @import("decode/progressive.zig");
 if (progressive.decode(allocator, data)) |img| return img
 else |err| switch (err) { error.NotImplemented => {}, else => return err };
 ```
-
-Then run `cleanroom-diff` against the corpus's 277 progressive files
-to see how many decode cleanly. If most pass, write a TDD test for
-the synthetic fixtures and ship it. If many fail, debug like we did
-for baseline — the same `[baseline:tag]` instrumentation pattern
-(comptime-Debug-only `fail()` helper) works for progressive too.
-
-**Win:** closes the largest cleanroom gap in the corpus.
 
 ### 2. DRI fast path (parallelism win)
 
