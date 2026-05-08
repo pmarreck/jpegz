@@ -279,4 +279,19 @@ pub fn build(b: *std.Build) void {
         const pd_step = b.step("pixel-diff", "Per-pixel cleanroom-vs-wrapper diff (scratch/pixel_diff.zig)");
         pd_step.dependOn(&b.addInstallArtifact(pd_exe, .{}).step);
     } else |_| {}
+
+    if (std.fs.cwd().access("scratch/bench_one.zig", .{})) {
+        const b1_mod = b.createModule(.{
+            .root_source_file = b.path("scratch/bench_one.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        b1_mod.addImport("jpegz", jpegz_mod);
+        const b1_exe = b.addExecutable(.{
+            .name = "bench-one",
+            .root_module = b1_mod,
+        });
+        const b1_step = b.step("bench-one", "Single-file decode timing harness (scratch/bench_one.zig)");
+        b1_step.dependOn(&b.addInstallArtifact(b1_exe, .{}).step);
+    } else |_| {}
 }
