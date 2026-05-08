@@ -32,6 +32,11 @@ const bitstream = @import("bitstream.zig");
 const huffman = @import("huffman.zig");
 const idct = @import("idct.zig");
 
+const PROG_DEBUG: bool = false;
+inline fn dbg(comptime fmt: []const u8, args: anytype) void {
+    if (comptime PROG_DEBUG) std.debug.print(fmt, args);
+}
+
 /// JPEG zig-zag scan order (T.81 Figure A.6). Same table baseline uses.
 const ZIGZAG: [64]u8 = .{
     0,  1,  8,  16, 9,  2,  3,  10,
@@ -414,12 +419,16 @@ fn decodeOneScan(
         _ = max_h; _ = max_v;
     }
 
-    // Return byte position past the scan's entropy data (at the next
-    // 0xFF marker prefix). br.byte_pos is relative to data[entropy_start..]
-    // and points to the 0xFF byte (BitReader.refill steps back when it
-    // sees a real marker).
-    if (!br.markerHit()) {
-        // Stream ended without a marker — likely truncation.
+    // After the scan's blocks are decoded, the bit buffer may still hold
+    // padding bits from the last byte that the encoder inserted before
+    // emitting the next marker. `markerHit` won't be true unless the
+    // refill logic walked into the marker. Force-look-ahead with
+    // `seekToMarker` — drops the padding bits, then peeks at byte_pos
+    // to detect `FF NN` (NN != 00). This mirrors baseline's RST handling
+    // at restart-interval boundaries (src/decode/baseline.zig:451).
+    br.seekToMarker();
+    if (!br.marker_seen) {
+        dbg("[prog:scan_end] no marker after scan: byte_pos={d} bits_valid={d}\n", .{ br.byte_pos, br.bits_valid });
         return error.TruncatedStream;
     }
     return entropy_start + br.byte_pos;
@@ -436,6 +445,13 @@ fn decodeProgressiveBlock(
     block: []i16,
     scan: *const ScanInfo,
 ) Error!void {
+    // libjpeg-turbo `insufficient_data` parity: if the entropy stream has
+    // already hit the next marker and the bit buffer is empty, leave this
+    // and all remaining blocks at their current value (zero for first-pass
+    // scans, prior coefficients for refinement scans). Per
+    // libjpeg-turbo/jdphuff.c decode_mcu_AC_first: "If we've run out of
+    // data, just leave the MCU set to zeroes."
+    if (br.markerHit() and br.bits_valid == 0) return;
     if (scan.ss == 0) {
         // DC scan
         if (scan.ah == 0) try decodeProgressiveDcFirst(br, comp, dc_tables, prev_dc, comp_idx, block, scan)
@@ -460,11 +476,22 @@ fn decodeProgressiveDcFirst(
     scan: *const ScanInfo,
 ) Error!void {
     const dc_t = dc_tables[comp.dc_table] orelse return error.InvalidMarker;
-    const dc_size: u8 = dc_t.decode(br) catch return error.BackendError;
-    if (dc_size > 11) return error.BackendError;
+    const dc_size: u8 = dc_t.decode(br) catch |e| {
+        if (br.markerHit()) return; // insufficient_data tolerance
+        dbg("[prog:dc_first] huff fail comp={d} dc_table={d} byte_pos={d} bits_valid={d} buf=0x{x} err={s}\n", .{ comp_idx, comp.dc_table, br.byte_pos, br.bits_valid, br.buf, @errorName(e) });
+        return error.BackendError;
+    };
+    if (dc_size > 11) {
+        if (br.markerHit()) return; // garbage bits from past-marker buffer
+        dbg("[prog:dc_first] dc_size>11 ({d}) comp={d} byte_pos={d}\n", .{ dc_size, comp_idx, br.byte_pos });
+        return error.BackendError;
+    }
     var dc_diff: i16 = 0;
     if (dc_size > 0) {
-        const bits = br.readBits(@intCast(dc_size)) catch return error.TruncatedStream;
+        const bits = br.readBits(@intCast(dc_size)) catch {
+            if (br.markerHit()) return;
+            return error.TruncatedStream;
+        };
         dc_diff = huffman.extendSign(bits, @intCast(dc_size));
     }
     prev_dc[comp_idx] += dc_diff;
@@ -478,7 +505,10 @@ fn decodeProgressiveDcRefine(
     block: []i16,
     scan: *const ScanInfo,
 ) Error!void {
-    const bit = br.readBits(1) catch return error.TruncatedStream;
+    const bit = br.readBits(1) catch {
+        if (br.markerHit()) return;
+        return error.TruncatedStream;
+    };
     if (bit == 1) {
         block[0] = @as(i16, @intCast(@as(i32, block[0]) | (@as(i32, 1) << @intCast(scan.al))));
     }
@@ -504,7 +534,11 @@ fn decodeProgressiveAcFirst(
 
     var k: u8 = scan.ss;
     while (k <= scan.se) {
-        const rs: u8 = ac_t.decode(br) catch return error.BackendError;
+        const rs: u8 = ac_t.decode(br) catch |e| {
+            if (br.markerHit()) return; // insufficient_data tolerance
+            dbg("[prog:ac_first] huff fail ac_table={d} k={d} ss={d} se={d} byte_pos={d} bits_valid={d} buf=0x{x} err={s}\n", .{ comp.ac_table, k, scan.ss, scan.se, br.byte_pos, br.bits_valid, br.buf, @errorName(e) });
+            return error.BackendError;
+        };
         const run: u8 = rs >> 4;
         const size: u8 = rs & 0x0F;
         if (size == 0) {
@@ -516,7 +550,10 @@ fn decodeProgressiveAcFirst(
                 // EOB run: 2^run + extra `run` bits more blocks
                 eob_run.* = (@as(u32, 1) << @intCast(run));
                 if (run > 0) {
-                    const extra = br.readBits(@intCast(run)) catch return error.TruncatedStream;
+                    const extra = br.readBits(@intCast(run)) catch {
+                        if (br.markerHit()) return;
+                        return error.TruncatedStream;
+                    };
                     eob_run.* += @intCast(extra);
                 }
                 eob_run.* -= 1;
@@ -524,8 +561,15 @@ fn decodeProgressiveAcFirst(
             }
         }
         k += run;
-        if (k > scan.se) return error.BackendError;
-        const bits = br.readBits(@intCast(size)) catch return error.TruncatedStream;
+        if (k > scan.se) {
+            if (br.markerHit()) return;
+            dbg("[prog:ac_first] k>se after run k={d} se={d} byte_pos={d}\n", .{ k, scan.se, br.byte_pos });
+            return error.BackendError;
+        }
+        const bits = br.readBits(@intCast(size)) catch {
+            if (br.markerHit()) return;
+            return error.TruncatedStream;
+        };
         const val = huffman.extendSign(bits, @intCast(size));
         block[k] = @as(i16, @intCast(@as(i32, val) << @intCast(scan.al)));
         k += 1;
@@ -567,7 +611,11 @@ fn decodeProgressiveAcRefine(
     }
 
     while (k <= scan.se) {
-        const rs: u8 = ac_t.decode(br) catch return error.BackendError;
+        const rs: u8 = ac_t.decode(br) catch |e| {
+            if (br.markerHit()) return;
+            dbg("[prog:ac_refine] huff fail ac_table={d} k={d} ss={d} se={d} byte_pos={d} bits_valid={d} buf=0x{x} err={s}\n", .{ comp.ac_table, k, scan.ss, scan.se, br.byte_pos, br.bits_valid, br.buf, @errorName(e) });
+            return error.BackendError;
+        };
         const run_field: u8 = rs >> 4;
         const size: u8 = rs & 0x0F;
         var zeros_remaining: u8 = run_field;
@@ -575,8 +623,15 @@ fn decodeProgressiveAcRefine(
         var new_val: i16 = 0;
 
         if (size != 0) {
-            if (size != 1) return error.BackendError; // refinement always ±1 LSB
-            const bit = br.readBits(1) catch return error.TruncatedStream;
+            if (size != 1) {
+                if (br.markerHit()) return;
+                dbg("[prog:ac_refine] size!=1 (size={d}) k={d} se={d} byte_pos={d}\n", .{ size, k, scan.se, br.byte_pos });
+                return error.BackendError; // refinement always ±1 LSB
+            }
+            const bit = br.readBits(1) catch {
+                if (br.markerHit()) return;
+                return error.TruncatedStream;
+            };
             new_val = if (bit == 1) positive else negative;
             has_pending_new = true;
         } else if (run_field == 15) {
@@ -587,8 +642,10 @@ fn decodeProgressiveAcRefine(
             // nonzeros in this block, mark eob_run for following blocks.
             var count: u32 = (@as(u32, 1) << @intCast(run_field));
             if (run_field > 0) {
-                const extra = br.readBits(@intCast(run_field)) catch
+                const extra = br.readBits(@intCast(run_field)) catch {
+                    if (br.markerHit()) return;
                     return error.TruncatedStream;
+                };
                 count += @intCast(extra);
             }
             eob_run.* = count - 1; // current block consumed inline below
@@ -600,14 +657,19 @@ fn decodeProgressiveAcRefine(
 
         // Walk forward: refine existing nonzeros, decrement zeros_remaining
         // for each zero seen, place new_val at the position AFTER zeros
-        // are exhausted (if pending).
+        // are exhausted (if pending). Per libjpeg-turbo jdphuff.c
+        // decode_mcu_AC_refine: ZRL (run=15, size=0) walks exactly 16
+        // zeros and STOPS — k must NOT advance past the 16th zero.
+        // Non-ZRL with new_val advances past the placement position.
         while (k <= scan.se) {
             if (block[k] != 0) {
                 try refineExistingNonzero(br, block, k, positive, negative);
             } else {
                 if (zeros_remaining == 0) {
-                    if (has_pending_new) block[k] = new_val;
-                    k += 1;
+                    if (has_pending_new) {
+                        block[k] = new_val;
+                        k += 1;
+                    }
                     break;
                 }
                 zeros_remaining -= 1;
@@ -625,7 +687,10 @@ inline fn refineExistingNonzero(
     negative: i16,
 ) Error!void {
     if (block[k] == 0) return;
-    const bit = br.readBits(1) catch return error.TruncatedStream;
+    const bit = br.readBits(1) catch {
+        if (br.markerHit()) return;
+        return error.TruncatedStream;
+    };
     if (bit == 0) return;
     // Refinement: add ±positive in the direction of the existing sign.
     if (block[k] > 0) {

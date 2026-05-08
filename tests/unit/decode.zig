@@ -499,3 +499,54 @@ test "decode 8x8 progressive grayscale (currently wrapper; cleanroom WIP)" {
         try std.testing.expect(@abs(@as(i16, b) - 0x80) < 15);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// M2.2 — progressive cleanroom validation (gap-closer #1).
+// These tests exercise `internal.progressiveDecode` directly, separate
+// from the public dispatcher. They go green when the SOF2 code path in
+// `src/decode/progressive.zig` matches libjpeg-turbo wrapper output
+// closely enough to wire into dispatch.
+// ─────────────────────────────────────────────────────────────────────
+
+test "M2.2: progressive cleanroom decodes 8x8 grayscale fixture" {
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.progressiveDecode(allocator, fixture_progressive_8x8_gray);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_progressive_8x8_gray);
+    defer wrapper.deinit(allocator);
+
+    try std.testing.expectEqual(wrapper.width, cleanroom.width);
+    try std.testing.expectEqual(wrapper.height, cleanroom.height);
+    try std.testing.expectEqual(wrapper.channels, cleanroom.channels);
+    try std.testing.expectEqual(wrapper.pixels.len, cleanroom.pixels.len);
+
+    // ≤2 LSB tolerance, the same threshold baseline cleanroom uses
+    // against wrapper output (sub-pixel rounding from float vs fixed-
+    // point IDCT/color rounding).
+    var max_delta: u8 = 0;
+    for (cleanroom.pixels, wrapper.pixels) |a, b| {
+        const d: u8 = @intCast(@abs(@as(i32, a) - @as(i32, b)));
+        if (d > max_delta) max_delta = d;
+    }
+    try std.testing.expect(max_delta <= 2);
+}
+
+test "M2.2: progressive cleanroom decodes 8x8 RGB fixture" {
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.progressiveDecode(allocator, fixture_progressive_8x8);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_progressive_8x8);
+    defer wrapper.deinit(allocator);
+
+    try std.testing.expectEqual(wrapper.width, cleanroom.width);
+    try std.testing.expectEqual(wrapper.height, cleanroom.height);
+    try std.testing.expectEqual(wrapper.channels, cleanroom.channels);
+    try std.testing.expectEqual(wrapper.pixels.len, cleanroom.pixels.len);
+
+    var max_delta: u8 = 0;
+    for (cleanroom.pixels, wrapper.pixels) |a, b| {
+        const d: u8 = @intCast(@abs(@as(i32, a) - @as(i32, b)));
+        if (d > max_delta) max_delta = d;
+    }
+    try std.testing.expect(max_delta <= 2);
+}
