@@ -538,6 +538,63 @@ test "M2.2: progressive cleanroom decodes 8x8 grayscale fixture" {
 /// decoder to accept SOF1 the same as SOF0 at 8-bit precision.
 const fixture_extended_2x2_rgb_sof1 = @embedFile("fixtures/extended_2x2_rgb_sof1.jpg");
 
+/// 4×4 gradient (0x00,0x10,…,0xF0) encoded with `cjpeg -lossless 1`
+/// (predictor 1 = Pa, left neighbor). Exercises the actual predictor +
+/// difference math, not just the all-zero-diff trivial case.
+const fixture_lossless_gradient_pred1 = @embedFile("fixtures/lossless_4x4_gradient_pred1.jpg");
+
+/// All 7 predictors (T.81 §H.1.2.1) on the same 4×4 gradient. Each
+/// fixture: `cjpeg -lossless <psv> /tmp/gradient.pgm`. Tests that
+/// every predictor selector produces byte-identical pixels to the
+/// wrapper's libjpeg-turbo decode of the same input. Lossless is
+/// exact reconstruction by definition — any rounding mismatch is
+/// a real bug in our predictor formula.
+const fixture_lossless_gradient_pred2 = @embedFile("fixtures/lossless_4x4_gradient_pred2.jpg");
+const fixture_lossless_gradient_pred3 = @embedFile("fixtures/lossless_4x4_gradient_pred3.jpg");
+const fixture_lossless_gradient_pred4 = @embedFile("fixtures/lossless_4x4_gradient_pred4.jpg");
+const fixture_lossless_gradient_pred5 = @embedFile("fixtures/lossless_4x4_gradient_pred5.jpg");
+const fixture_lossless_gradient_pred6 = @embedFile("fixtures/lossless_4x4_gradient_pred6.jpg");
+const fixture_lossless_gradient_pred7 = @embedFile("fixtures/lossless_4x4_gradient_pred7.jpg");
+
+test "M2.4: lossless SOF3 cleanroom decodes 4x4 gradient with predictors 2..7 byte-for-byte" {
+    const allocator = std.testing.allocator;
+    const expected = [_]u8{ 0x00, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0 };
+    const fixtures = [_][]const u8{
+        fixture_lossless_gradient_pred2,
+        fixture_lossless_gradient_pred3,
+        fixture_lossless_gradient_pred4,
+        fixture_lossless_gradient_pred5,
+        fixture_lossless_gradient_pred6,
+        fixture_lossless_gradient_pred7,
+    };
+    inline for (fixtures, 2..) |fix, psv| {
+        var cleanroom = try jpegz.internal.losslessDecode(allocator, fix);
+        defer cleanroom.deinit(allocator);
+        var wrapper = try jpegz.internal.wrapperDecode(allocator, fix);
+        defer wrapper.deinit(allocator);
+        std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels) catch |e| {
+            std.debug.print("predictor {d} mismatch vs wrapper\n", .{psv});
+            return e;
+        };
+        std.testing.expectEqualSlices(u8, &expected, cleanroom.pixels) catch |e| {
+            std.debug.print("predictor {d} mismatch vs original gradient\n", .{psv});
+            return e;
+        };
+    }
+}
+
+test "M2.4: lossless SOF3 cleanroom decodes 4x4 gradient byte-for-byte (predictor 1)" {
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.losslessDecode(allocator, fixture_lossless_gradient_pred1);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_lossless_gradient_pred1);
+    defer wrapper.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+    // Sanity: original pattern preserved.
+    const expected = [_]u8{ 0x00, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0 };
+    try std.testing.expectEqualSlices(u8, &expected, cleanroom.pixels);
+}
+
 test "M2.4: lossless 8-bit grayscale SOF3 cleanroom matches wrapper byte-for-byte" {
     // T.81 §H — Lossless predictive coding. Sample values reconstructed
     // exactly via predictor + Huffman-coded difference; no DCT, no
