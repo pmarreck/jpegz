@@ -144,9 +144,13 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
 
         switch (marker) {
             0xD9 => return fail("eoi_before_sos", error.TruncatedStream),
-            0xC0 => { // SOF0 — baseline DCT
+            0xC0, 0xC1 => { // SOF0 baseline DCT or SOF1 extended sequential DCT
+                // Per T.81 §A.4.2 / F.1.1: at 8-bit precision the SOF1
+                // bitstream is byte-identical to SOF0; only the marker
+                // byte differs. SOF1 12-bit precision needs the wrapper
+                // route until the cleanroom 12-bit pipeline lands.
                 frame = try parseSof(data, pos);
-                if (frame.?.precision != 8) return fail("sof_precision_not_8", error.UnsupportedPrecision);
+                if (frame.?.precision != 8) return fail("sof_precision_not_8", error.NotImplemented);
                 if (frame.?.num_components != 1 and frame.?.num_components != 3)
                     return fail("sof_unsupported_ncomp", error.NotImplemented);
                 var i: usize = 0;
@@ -157,7 +161,7 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                 }
                 pos += parseSegmentLength(data, pos);
             },
-            0xC1, 0xC2, 0xC3 => return fail("sof_not_baseline", error.NotImplemented),
+            0xC2, 0xC3 => return fail("sof_not_baseline", error.NotImplemented),
             0xC9, 0xCA, 0xCB => return fail("sof_arithmetic", error.NotImplemented),
             0xC4 => { // DHT
                 try parseDht(data, pos, &dc_tables, &ac_tables);
