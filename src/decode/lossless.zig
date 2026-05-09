@@ -84,11 +84,16 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
             0xC3 => { // SOF3 — lossless predictive
                 frame = try parseSof(data, pos);
                 if (frame.?.precision != 8) return error.NotImplemented;
-                if (frame.?.num_components != 1) return error.NotImplemented;
+                if (frame.?.num_components != 1 and frame.?.num_components != 3)
+                    return error.NotImplemented;
                 seen_sof = true;
-                // For lossless, sampling factors are usually 1×1; reject otherwise.
-                const c = &frame.?.components[0];
-                if (c.h_factor != 1 or c.v_factor != 1) return error.NotImplemented;
+                // v1: require 1×1 sampling on every component (no subsampling
+                // in lossless is the common case; cjpeg writes RGB this way).
+                var i: usize = 0;
+                while (i < frame.?.num_components) : (i += 1) {
+                    const c = &frame.?.components[i];
+                    if (c.h_factor != 1 or c.v_factor != 1) return error.NotImplemented;
+                }
                 pos += parseSegmentLength(data, pos);
             },
             0xC0, 0xC1, 0xC2 => return error.NotImplemented, // not lossless
@@ -104,7 +109,10 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
             0xDA => { // SOS
                 if (!seen_sof) return error.InvalidMarker;
                 const scan = try parseSos(data, pos, &frame.?);
-                if (scan.num_components != 1) return error.NotImplemented;
+                // Scan must cover all frame components in a single pass
+                // (no progressive concept of "scan refines a subset"
+                // exists in lossless; T.81 §H.1.2.1).
+                if (scan.num_components != frame.?.num_components) return error.NotImplemented;
                 if (scan.predictor < 1 or scan.predictor > 7) return error.NotImplemented;
                 pos += parseSegmentLength(data, pos);
                 pixels = try decodeScan(allocator, data, pos, &frame.?, &dc_tables, &scan);
@@ -119,14 +127,19 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
     if (!seen_sof) return error.InvalidMarker;
     if (pixels == null) return error.TruncatedStream;
 
+    const nc = frame.?.num_components;
     return types.Image{
         .pixels = pixels.?,
         .width = frame.?.width,
         .height = frame.?.height,
-        .channels = 1,
+        .channels = nc,
         .bits_per_sample = 8,
-        .source_color_space = .grayscale,
-        .layout = .grayscale,
+        // For lossless, libjpeg-turbo does NO YCbCr→RGB conversion: the
+        // raw component samples ARE the output. cjpeg with PPM input
+        // writes R, G, B as-is. Mark as RGB for 3 components, grayscale
+        // for 1; consumers reading `image.layout` get the right shape.
+        .source_color_space = if (nc == 1) .grayscale else .rgb,
+        .layout = if (nc == 1) .grayscale else .rgb,
     };
 }
 
@@ -237,16 +250,31 @@ fn decodeScan(
 ) Error![]u8 {
     const width: usize = frame.width;
     const height: usize = frame.height;
-    const out = try allocator.alloc(u8, width * height);
+    const nc: usize = scan.num_components;
+    // Output is interleaved per-pixel: pixel(x,y) = nc bytes at
+    // out[(y*width + x)*nc + ci]. Same shape libjpeg-turbo emits.
+    const out = try allocator.alloc(u8, width * height * nc);
     errdefer allocator.free(out);
     @memset(out, 0);
 
-    const comp_idx = scan.comp_indices[0];
-    const comp = &frame.components[comp_idx];
-    const dc_t = dc_tables[comp.dc_table] orelse return error.InvalidMarker;
+    // Per-component Huffman table pointers (indexed by scan-component
+    // position 0..nc-1, NOT by frame component index). Predictor state
+    // is per-component too.
+    var dc_tables_per_comp: [4]*const huffman.HuffmanTable = undefined;
+    {
+        var i: usize = 0;
+        while (i < nc) : (i += 1) {
+            const ci = scan.comp_indices[i];
+            const comp = &frame.components[ci];
+            // Take a pointer to the optional's payload after verifying
+            // it's set. Lifetime is the parent decode function's locals.
+            if (dc_tables[comp.dc_table] == null) return error.InvalidMarker;
+            dc_tables_per_comp[i] = &dc_tables[comp.dc_table].?;
+        }
+    }
 
     // Initial predictor for the very first sample: 2^(P - Pt - 1).
-    // For 8-bit, Pt=0: initial = 128.
+    // For 8-bit Pt=0: initial = 128.
     const precision: u8 = frame.precision;
     const pt: u4 = scan.point_transform;
     const initial_pred: i32 = @as(i32, 1) << @intCast(@as(u8, precision) - @as(u8, pt) - 1);
@@ -254,55 +282,68 @@ fn decodeScan(
 
     var br = bitstream.BitReader.init(data[entropy_start..]);
 
+    // For multi-component scans, per T.81 §A.2.4 / §H.1.2.1, samples are
+    // interleaved per-MCU. With 1×1 sampling everywhere (our v1 limit),
+    // each MCU = 1 sample per component, in scan-component order. So the
+    // outer iteration is the same as single-component (per-pixel walk),
+    // with an inner loop over components.
     var y: usize = 0;
     while (y < height) : (y += 1) {
         var x: usize = 0;
         while (x < width) : (x += 1) {
-            const predictor: i32 = if (x == 0 and y == 0)
-                initial_pred
-            else if (y == 0)
-                // First row, x > 0 — predictor 1 (left neighbor) regardless of selector.
-                @intCast(out[x - 1])
-            else if (x == 0)
-                // First column, y > 0 — predictor 2 (above neighbor).
-                @intCast(out[(y - 1) * width])
-            else
-                computePredictor(scan.predictor, out, x, y, width);
+            var ci_scan: usize = 0;
+            while (ci_scan < nc) : (ci_scan += 1) {
+                // Predictor uses neighbors in THE SAME COMPONENT — read
+                // out[(y, x±1, ci_scan)] etc. The interleaved layout means
+                // strides are nc bytes per pixel.
+                const pred: i32 = if (x == 0 and y == 0)
+                    initial_pred
+                else if (y == 0)
+                    @intCast(out[((y) * width + (x - 1)) * nc + ci_scan])
+                else if (x == 0)
+                    @intCast(out[((y - 1) * width + x) * nc + ci_scan])
+                else
+                    computePredictorInterleaved(scan.predictor, out, x, y, width, nc, ci_scan);
 
-            // Decode magnitude category SSSS via DC Huffman table.
-            const ssss: u8 = dc_t.decode(&br) catch return error.BackendError;
-            // Per T.81 §H.1.2.1, SSSS=16 means "diff = 32768" (used only for
-            // 16-bit precision; we don't support that yet).
-            if (ssss > 16) return error.BackendError;
-            var diff: i32 = 0;
-            if (ssss == 16) {
-                // Special case for 16-bit precision; not in our v1 scope.
-                return error.NotImplemented;
-            } else if (ssss > 0) {
-                const bits = br.readBits(@intCast(ssss)) catch return error.TruncatedStream;
-                diff = @intCast(huffman.extendSign(bits, @intCast(ssss)));
+                const ssss: u8 = dc_tables_per_comp[ci_scan].decode(&br) catch return error.BackendError;
+                if (ssss > 16) return error.BackendError;
+                var diff: i32 = 0;
+                if (ssss == 16) {
+                    return error.NotImplemented; // 16-bit precision case
+                } else if (ssss > 0) {
+                    const bits = br.readBits(@intCast(ssss)) catch return error.TruncatedStream;
+                    diff = @intCast(huffman.extendSign(bits, @intCast(ssss)));
+                }
+                const sample: i32 = (pred + diff) & sample_mask;
+                out[(y * width + x) * nc + ci_scan] = @intCast(sample);
             }
-
-            const sample: i32 = (predictor + diff) & sample_mask;
-            out[y * width + x] = @intCast(sample);
         }
     }
 
     return out;
 }
 
-inline fn computePredictor(selector: u8, out: []const u8, x: usize, y: usize, w: usize) i32 {
-    const a: i32 = @intCast(out[y * w + (x - 1)]);
-    const b: i32 = @intCast(out[(y - 1) * w + x]);
-    const c: i32 = @intCast(out[(y - 1) * w + (x - 1)]);
+inline fn computePredictorInterleaved(
+    selector: u8,
+    out: []const u8,
+    x: usize,
+    y: usize,
+    w: usize,
+    nc: usize,
+    ci: usize,
+) i32 {
+    const a: i32 = @intCast(out[(y * w + (x - 1)) * nc + ci]);
+    const b: i32 = @intCast(out[((y - 1) * w + x) * nc + ci]);
+    const c: i32 = @intCast(out[((y - 1) * w + (x - 1)) * nc + ci]);
     return switch (selector) {
-        1 => a, // T.81 §H.1.2.1.1.1: Pa = a
-        2 => b, // Pb = b
-        3 => c, // Pc = c
-        4 => a + b - c, // a + b - c
-        5 => a + ((b - c) >> 1), // a + (b - c) / 2
-        6 => b + ((a - c) >> 1), // b + (a - c) / 2
-        7 => (a + b) >> 1, // (a + b) / 2
-        else => unreachable, // pre-validated 1..7
+        1 => a,
+        2 => b,
+        3 => c,
+        4 => a + b - c,
+        5 => a + ((b - c) >> 1),
+        6 => b + ((a - c) >> 1),
+        7 => (a + b) >> 1,
+        else => unreachable,
     };
 }
+

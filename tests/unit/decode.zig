@@ -579,6 +579,26 @@ test "M2.5: progressive cleanroom decodes a JPEG with DRI > 0" {
     try std.testing.expect(max_delta <= 2);
 }
 
+/// 4×4 RGB lossless (SOF3, 3 components, 1×1 sampling each, predictor 1).
+/// Generated via `cjpeg -lossless 1 grad_rgb.ppm`. Component IDs are
+/// the ASCII codes for R/G/B (82/71/66) rather than the more common
+/// 1/2/3 — exercises ID-agnostic component lookup. v1 single-component
+/// scope returned NotImplemented for 3-component SOF3.
+const fixture_lossless_4x4_rgb = @embedFile("fixtures/lossless_4x4_rgb_pred1.jpg");
+
+test "M2.6: lossless SOF3 cleanroom decodes 3-component RGB byte-for-byte" {
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.losslessDecode(allocator, fixture_lossless_4x4_rgb);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_lossless_4x4_rgb);
+    defer wrapper.deinit(allocator);
+    try std.testing.expectEqual(wrapper.width, cleanroom.width);
+    try std.testing.expectEqual(wrapper.height, cleanroom.height);
+    try std.testing.expectEqual(wrapper.channels, cleanroom.channels);
+    // Lossless = exact reconstruction; ANY pixel mismatch is a real bug.
+    try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+}
+
 test "M2.4: lossless SOF3 cleanroom decodes 4x4 gradient with predictors 2..7 byte-for-byte" {
     const allocator = std.testing.allocator;
     const expected = [_]u8{ 0x00, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0 };
