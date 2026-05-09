@@ -586,6 +586,21 @@ test "M2.5: progressive cleanroom decodes a JPEG with DRI > 0" {
 /// scope returned NotImplemented for 3-component SOF3.
 const fixture_lossless_4x4_rgb = @embedFile("fixtures/lossless_4x4_rgb_pred1.jpg");
 
+/// 16×16 grayscale lossless with restart-interval = 64 MCUs (4 rows of 16).
+/// Generated via `cjpeg -lossless 1 -restart 4`. Three RSTm markers fall
+/// within the entropy stream (at samples 64, 128, 192). Exercises lossless
+/// cleanroom's RST handling, mirroring the M2.5 progressive+DRI fix.
+const fixture_lossless_dri = @embedFile("fixtures/lossless_16x16_gray_dri.jpg");
+
+test "M2.7: lossless SOF3 cleanroom decodes a JPEG with DRI > 0 byte-for-byte" {
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.losslessDecode(allocator, fixture_lossless_dri);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_lossless_dri);
+    defer wrapper.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+}
+
 test "M2.6: lossless SOF3 cleanroom decodes 3-component RGB byte-for-byte" {
     const allocator = std.testing.allocator;
     var cleanroom = try jpegz.internal.losslessDecode(allocator, fixture_lossless_4x4_rgb);

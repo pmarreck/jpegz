@@ -35,6 +35,18 @@ const huffman = @import("huffman.zig");
 
 pub const Error = errors.DecodeError;
 
+/// State threaded into decodeScan for restart-marker handling.
+const RestartCtx = struct {
+    interval: u16, // 0 = no restarts
+    samples_since: u32 = 0,
+    expected_rst: u8 = 0xD0,
+    /// True when the next sample(s) — one per scan-component for the
+    /// MCU after RST — must use the initial predictor 2^(P-Pt-1) per
+    /// T.81 §H.1.2.2. Cleared after each component's first sample of
+    /// the next restart interval is emitted.
+    force_initial: bool = false,
+};
+
 const ComponentInfo = struct {
     id: u8,
     h_factor: u4,
@@ -71,6 +83,7 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
     var saw_eoi = false;
     var seen_sof = false;
     var pixels: ?[]u8 = null;
+    var restart_interval: u16 = 0;
     errdefer if (pixels) |p| allocator.free(p);
 
     while (pos + 1 < data.len and !saw_eoi) {
@@ -105,7 +118,12 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
             0xDB => { // DQT — irrelevant for lossless; skip body
                 pos += parseSegmentLength(data, pos);
             },
-            0xDD => return error.NotImplemented, // DRI in lossless — v1.x follow-up
+            0xDD => { // DRI — restart interval (T.81 §F.2.1.3)
+                const seg_len = parseSegmentLength(data, pos);
+                if (seg_len != 4 or pos + seg_len > data.len) return error.TruncatedStream;
+                restart_interval = (@as(u16, data[pos + 2]) << 8) | data[pos + 3];
+                pos += seg_len;
+            },
             0xDA => { // SOS
                 if (!seen_sof) return error.InvalidMarker;
                 const scan = try parseSos(data, pos, &frame.?);
@@ -115,7 +133,7 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
                 if (scan.num_components != frame.?.num_components) return error.NotImplemented;
                 if (scan.predictor < 1 or scan.predictor > 7) return error.NotImplemented;
                 pos += parseSegmentLength(data, pos);
-                pixels = try decodeScan(allocator, data, pos, &frame.?, &dc_tables, &scan);
+                pixels = try decodeScan(allocator, data, pos, &frame.?, &dc_tables, &scan, restart_interval);
                 // Lossless decode is single-pass; assume EOI follows.
                 break;
             },
@@ -247,6 +265,7 @@ fn decodeScan(
     frame: *const FrameInfo,
     dc_tables: *const [4]?huffman.HuffmanTable,
     scan: *const ScanInfo,
+    restart_interval: u16,
 ) Error![]u8 {
     const width: usize = frame.width;
     const height: usize = frame.height;
@@ -281,6 +300,7 @@ fn decodeScan(
     const sample_mask: i32 = (@as(i32, 1) << @intCast(precision)) - 1;
 
     var br = bitstream.BitReader.init(data[entropy_start..]);
+    var rst: RestartCtx = .{ .interval = restart_interval };
 
     // For multi-component scans, per T.81 §A.2.4 / §H.1.2.1, samples are
     // interleaved per-MCU. With 1×1 sampling everywhere (our v1 limit),
@@ -291,12 +311,25 @@ fn decodeScan(
     while (y < height) : (y += 1) {
         var x: usize = 0;
         while (x < width) : (x += 1) {
+            // Per T.81 §F.2.1.3: every `restart_interval` MCUs the
+            // entropy stream realigns. For lossless 1×1, each MCU = 1
+            // sample per component. After RST, the next MCU's first
+            // sample uses the initial predictor (per §H.1.2.2).
+            if (rst.interval > 0 and rst.samples_since == rst.interval) {
+                br.seekToMarker();
+                if (!br.marker_seen) return error.InvalidMarker;
+                if (br.marker_byte != rst.expected_rst) return error.InvalidMarker;
+                rst.expected_rst = 0xD0 + ((rst.expected_rst - 0xD0 + 1) & 0x07);
+                br.skipPastMarker();
+                rst.samples_since = 0;
+                rst.force_initial = true;
+            }
             var ci_scan: usize = 0;
             while (ci_scan < nc) : (ci_scan += 1) {
                 // Predictor uses neighbors in THE SAME COMPONENT — read
                 // out[(y, x±1, ci_scan)] etc. The interleaved layout means
                 // strides are nc bytes per pixel.
-                const pred: i32 = if (x == 0 and y == 0)
+                const pred: i32 = if ((x == 0 and y == 0) or rst.force_initial)
                     initial_pred
                 else if (y == 0)
                     @intCast(out[((y) * width + (x - 1)) * nc + ci_scan])
@@ -317,6 +350,10 @@ fn decodeScan(
                 const sample: i32 = (pred + diff) & sample_mask;
                 out[(y * width + x) * nc + ci_scan] = @intCast(sample);
             }
+            // After the MCU's components are all decoded, clear the
+            // initial-predictor flag and bump the per-RST counter.
+            rst.force_initial = false;
+            rst.samples_since += 1;
         }
     }
 
