@@ -199,8 +199,19 @@ pub fn decodeWithOptions(
         else => return err,
     }
 
+    // Try lossless cleanroom (SOF3, T.81 §H — predictive coding).
+    // v1 handles 8-bit single-component only; 12/16-bit and multi-
+    // component lossless fall through to wrapper via NotImplemented.
+    const lossless = @import("decode/lossless.zig");
+    if (lossless.decode(allocator, data)) |img| {
+        return img;
+    } else |err| switch (err) {
+        error.NotImplemented => {},
+        else => return err,
+    }
+
     // Final: libjpeg-turbo wrapper handles everything jpegz hasn't
-    // cleanroomed yet (SOF1/3/9/10/11 + arithmetic + JPEG-LS).
+    // cleanroomed yet (SOF1 12-bit, SOF3 12/16-bit, SOF9/10/11 + JPEG-LS).
     // Wrapper currently ignores `options.threads` — libjpeg-turbo's
     // traditional API has no thread parameter.
     return wrapper.decode(allocator, data);
@@ -306,6 +317,9 @@ pub const internal = struct {
     }
     pub fn progressiveDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/progressive.zig").decode(allocator, data);
+    }
+    pub fn losslessDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
+        return @import("decode/lossless.zig").decode(allocator, data);
     }
     /// Diagnostic-only: decode a progressive JPEG and return the post-
     /// entropy quantized coefficients in natural order (un-zig-zagged),

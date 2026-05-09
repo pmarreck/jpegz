@@ -538,6 +538,23 @@ test "M2.2: progressive cleanroom decodes 8x8 grayscale fixture" {
 /// decoder to accept SOF1 the same as SOF0 at 8-bit precision.
 const fixture_extended_2x2_rgb_sof1 = @embedFile("fixtures/extended_2x2_rgb_sof1.jpg");
 
+test "M2.4: lossless 8-bit grayscale SOF3 cleanroom matches wrapper byte-for-byte" {
+    // T.81 §H — Lossless predictive coding. Sample values reconstructed
+    // exactly via predictor + Huffman-coded difference; no DCT, no
+    // quantization, no IDCT rounding. Cleanroom output MUST be
+    // byte-identical to wrapper for any SOF3 input we accept.
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.losslessDecode(allocator, fixture_lossless_4x4_gray8);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_lossless_4x4_gray8);
+    defer wrapper.deinit(allocator);
+    try std.testing.expectEqual(wrapper.width, cleanroom.width);
+    try std.testing.expectEqual(wrapper.height, cleanroom.height);
+    try std.testing.expectEqual(wrapper.channels, cleanroom.channels);
+    try std.testing.expectEqual(wrapper.bits_per_sample, cleanroom.bits_per_sample);
+    try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+}
+
 test "M2.3: extended sequential 8-bit SOF1 cleanroom decode matches wrapper" {
     const allocator = std.testing.allocator;
     var cleanroom = try jpegz.internal.cleanroomDecode(allocator, fixture_extended_2x2_rgb_sof1);
