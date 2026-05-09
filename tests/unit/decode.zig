@@ -592,6 +592,26 @@ const fixture_lossless_4x4_rgb = @embedFile("fixtures/lossless_4x4_rgb_pred1.jpg
 /// cleanroom's RST handling, mirroring the M2.5 progressive+DRI fix.
 const fixture_lossless_dri = @embedFile("fixtures/lossless_16x16_gray_dri.jpg");
 
+test "M2.8: lossless SOF3 cleanroom decodes 12/14/16-bit grayscale precision byte-for-byte" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { data: []const u8, bps: u8, expected: u16 }{
+        .{ .data = fixture_lossless_4x4_gray12, .bps = 12, .expected = 0x0800 },
+        .{ .data = fixture_lossless_4x4_gray14, .bps = 14, .expected = 0x2000 },
+        .{ .data = fixture_lossless_4x4_gray16, .bps = 16, .expected = 0x8000 },
+    };
+    inline for (cases) |c| {
+        var cleanroom = try jpegz.internal.losslessDecode(allocator, c.data);
+        defer cleanroom.deinit(allocator);
+        var wrapper = try jpegz.internal.wrapperDecode(allocator, c.data);
+        defer wrapper.deinit(allocator);
+        try std.testing.expectEqual(c.bps, cleanroom.bits_per_sample);
+        try std.testing.expectEqual(wrapper.bits_per_sample, cleanroom.bits_per_sample);
+        try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+        const px = cleanroom.pixelsU16();
+        for (px) |s| try std.testing.expectEqual(c.expected, s);
+    }
+}
+
 test "M2.7: lossless SOF3 cleanroom decodes a JPEG with DRI > 0 byte-for-byte" {
     const allocator = std.testing.allocator;
     var cleanroom = try jpegz.internal.losslessDecode(allocator, fixture_lossless_dri);

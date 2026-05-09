@@ -96,12 +96,15 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
             0xD9 => { saw_eoi = true; break; },
             0xC3 => { // SOF3 — lossless predictive
                 frame = try parseSof(data, pos);
-                if (frame.?.precision != 8) return error.NotImplemented;
+                // v1 supports 8/12/14/16-bit precision (any P in 2..16
+                // per T.81 §H.1, but cjpeg only emits 8/12/16; 14 lands
+                // via DNG raw). Output is u8-packed for P≤8 and
+                // u16 host-endian for P>8.
+                if (frame.?.precision < 2 or frame.?.precision > 16)
+                    return error.NotImplemented;
                 if (frame.?.num_components != 1 and frame.?.num_components != 3)
                     return error.NotImplemented;
                 seen_sof = true;
-                // v1: require 1×1 sampling on every component (no subsampling
-                // in lossless is the common case; cjpeg writes RGB this way).
                 var i: usize = 0;
                 while (i < frame.?.num_components) : (i += 1) {
                     const c = &frame.?.components[i];
@@ -151,7 +154,7 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
         .width = frame.?.width,
         .height = frame.?.height,
         .channels = nc,
-        .bits_per_sample = 8,
+        .bits_per_sample = frame.?.precision,
         // For lossless, libjpeg-turbo does NO YCbCr→RGB conversion: the
         // raw component samples ARE the output. cjpeg with PPM input
         // writes R, G, B as-is. Mark as RGB for 3 components, grayscale
@@ -270,9 +273,11 @@ fn decodeScan(
     const width: usize = frame.width;
     const height: usize = frame.height;
     const nc: usize = scan.num_components;
-    // Output is interleaved per-pixel: pixel(x,y) = nc bytes at
-    // out[(y*width + x)*nc + ci]. Same shape libjpeg-turbo emits.
-    const out = try allocator.alloc(u8, width * height * nc);
+    const sample_bytes: usize = if (frame.precision <= 8) 1 else 2;
+    // Output is interleaved per-pixel: pixel(x,y) starts at
+    // out[(y*width + x)*nc*sample_bytes]. For P>8 each sample is
+    // u16 host-endian — same shape libjpeg-turbo's jpeg16_ path emits.
+    const out = try allocator.alloc(u8, width * height * nc * sample_bytes);
     errdefer allocator.free(out);
     @memset(out, 0);
 
@@ -326,29 +331,29 @@ fn decodeScan(
             }
             var ci_scan: usize = 0;
             while (ci_scan < nc) : (ci_scan += 1) {
-                // Predictor uses neighbors in THE SAME COMPONENT — read
-                // out[(y, x±1, ci_scan)] etc. The interleaved layout means
-                // strides are nc bytes per pixel.
                 const pred: i32 = if ((x == 0 and y == 0) or rst.force_initial)
                     initial_pred
                 else if (y == 0)
-                    @intCast(out[((y) * width + (x - 1)) * nc + ci_scan])
+                    sampleAt(out, sample_bytes, y, x - 1, width, nc, ci_scan)
                 else if (x == 0)
-                    @intCast(out[((y - 1) * width + x) * nc + ci_scan])
+                    sampleAt(out, sample_bytes, y - 1, x, width, nc, ci_scan)
                 else
-                    computePredictorInterleaved(scan.predictor, out, x, y, width, nc, ci_scan);
+                    computePredictorAt(scan.predictor, out, sample_bytes, x, y, width, nc, ci_scan);
 
                 const ssss: u8 = dc_tables_per_comp[ci_scan].decode(&br) catch return error.BackendError;
                 if (ssss > 16) return error.BackendError;
                 var diff: i32 = 0;
                 if (ssss == 16) {
-                    return error.NotImplemented; // 16-bit precision case
+                    // T.81 §H.1.2.1: SSSS=16 represents diff = 32768 with
+                    // no extra bits. Only legal at 16-bit precision.
+                    if (frame.precision != 16) return error.BackendError;
+                    diff = 32768;
                 } else if (ssss > 0) {
                     const bits = br.readBits(@intCast(ssss)) catch return error.TruncatedStream;
                     diff = @intCast(huffman.extendSign(bits, @intCast(ssss)));
                 }
                 const sample: i32 = (pred + diff) & sample_mask;
-                out[(y * width + x) * nc + ci_scan] = @intCast(sample);
+                writeSample(out, sample_bytes, y, x, width, nc, ci_scan, @intCast(sample));
             }
             // After the MCU's components are all decoded, clear the
             // initial-predictor flag and bump the per-RST counter.
@@ -360,18 +365,59 @@ fn decodeScan(
     return out;
 }
 
-inline fn computePredictorInterleaved(
+/// Read a single sample from the interleaved output buffer at (y, x, ci).
+/// Sample is u8 for sample_bytes==1, u16 host-endian for sample_bytes==2.
+inline fn sampleAt(
+    out: []const u8,
+    sample_bytes: usize,
+    y: usize,
+    x: usize,
+    w: usize,
+    nc: usize,
+    ci: usize,
+) i32 {
+    const off = ((y * w + x) * nc + ci) * sample_bytes;
+    if (sample_bytes == 1) return @intCast(out[off]);
+    // Host-endian u16 read
+    const lo: u16 = out[off];
+    const hi: u16 = out[off + 1];
+    const v: u16 = lo | (hi << 8);
+    _ = .{}; // silence
+    return @intCast(v);
+}
+
+inline fn writeSample(
+    out: []u8,
+    sample_bytes: usize,
+    y: usize,
+    x: usize,
+    w: usize,
+    nc: usize,
+    ci: usize,
+    value: u16,
+) void {
+    const off = ((y * w + x) * nc + ci) * sample_bytes;
+    if (sample_bytes == 1) {
+        out[off] = @intCast(value & 0xFF);
+    } else {
+        out[off] = @intCast(value & 0xFF);
+        out[off + 1] = @intCast(value >> 8);
+    }
+}
+
+inline fn computePredictorAt(
     selector: u8,
     out: []const u8,
+    sample_bytes: usize,
     x: usize,
     y: usize,
     w: usize,
     nc: usize,
     ci: usize,
 ) i32 {
-    const a: i32 = @intCast(out[(y * w + (x - 1)) * nc + ci]);
-    const b: i32 = @intCast(out[((y - 1) * w + x) * nc + ci]);
-    const c: i32 = @intCast(out[((y - 1) * w + (x - 1)) * nc + ci]);
+    const a: i32 = sampleAt(out, sample_bytes, y, x - 1, w, nc, ci);
+    const b: i32 = sampleAt(out, sample_bytes, y - 1, x, w, nc, ci);
+    const c: i32 = sampleAt(out, sample_bytes, y - 1, x - 1, w, nc, ci);
     return switch (selector) {
         1 => a,
         2 => b,
