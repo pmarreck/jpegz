@@ -16,7 +16,9 @@ who picks this up. Anchored to commits on `yolo`.
 | Progressive DCT (SOF2)   | G             | ✅ 100% ≤2 LSB | —  | 276/276 (199 byte-perfect)     |
 | Progressive + DRI (SOF2+RST) | G + F.2.1.3 | ✅ M2.5    | —       | 0 corpus; spec coverage        |
 | Lossless 8-bit (SOF3)    | H §H.1        | ✅ M2.4   | —       | 0 corpus; DICOM/DNG fixture    |
-| Lossless 12/16-bit       | H §H.1        | ❌        | ✅      | rare; via wrapper              |
+| Lossless 8-bit RGB (SOF3, 3-comp) | H §H.1 | ✅ M2.6  | —       | 0 corpus; spec coverage        |
+| Lossless + DRI (SOF3+RST) | H + F.2.1.3  | ✅ M2.7   | —       | 0 corpus; spec coverage        |
+| Lossless 12/14/16-bit (SOF3) | H §H.1    | ✅ M2.8   | —       | DICOM/DNG fixture; byte-perfect |
 | Differential variants (SOF5–7) | H §H.2  | ❌        | ❌      | extremely rare; deferred       |
 | Arithmetic-coded (SOF9–11) | F §F.1.4    | ❌        | partial | rare in modern wild            |
 | JPEG-LS (T.87)           | T.87          | ❌        | charls? | medical imaging; future        |
@@ -50,10 +52,10 @@ everything-libjpeg-can gap.
 
 ### What's still using the wrapper at runtime
 
-- **SOF1 12-bit precision**, **SOF3 12/16-bit precision**,
-  **SOF3 multi-component**, **SOF3 with DRI**, **SOF3 lossless
-  with non-1×1 sampling**: small/zero corpus presence; wrapper
-  handles them transparently.
+- **SOF1 12-bit precision** (needs 12-bit DCT/IDCT pipeline —
+  separate from cleanroom's 8-bit islow path).
+- **SOF3 lossless with non-1×1 sampling** (extremely rare in
+  practice; DICOM/DNG default to 1×1).
 - **arithmetic (SOF9–11)**, **JPEG-LS (T.87)**, **JP2 (T.800)**:
   no cleanroom yet (substantial future work).
 - **Progressive features cleanroom doesn't yet handle**: 12-bit
