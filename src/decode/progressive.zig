@@ -129,6 +129,7 @@ pub fn decodeAndDumpCoefs(allocator: Allocator, data: []const u8) Error!CoefDump
     var max_v: u32 = 1;
     var saw_eoi = false;
     var seen_sof = false;
+    var restart_interval: u16 = 0;
 
     errdefer {
         var i: usize = 0;
@@ -175,12 +176,17 @@ pub fn decodeAndDumpCoefs(allocator: Allocator, data: []const u8) Error!CoefDump
             0xC9, 0xCA, 0xCB => return error.NotImplemented,
             0xC4 => { try parseDht(data, pos, &dc_tables, &ac_tables); pos += parseSegmentLength(data, pos); },
             0xDB => { try parseDqt(data, pos, &quant_tables); pos += parseSegmentLength(data, pos); },
-            0xDD => return error.NotImplemented,
+            0xDD => { // DRI — restart interval
+                const seg_len = parseSegmentLength(data, pos);
+                if (seg_len != 4 or pos + seg_len > data.len) return error.TruncatedStream;
+                restart_interval = (@as(u16, data[pos + 2]) << 8) | data[pos + 3];
+                pos += seg_len;
+            },
             0xDA => {
                 if (!seen_sof) return error.InvalidMarker;
                 const scan = try parseSos(data, pos, &frame.?);
                 pos += parseSegmentLength(data, pos);
-                pos = try decodeOneScan(data, pos, &frame.?, &dc_tables, &ac_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, &scan);
+                pos = try decodeOneScan(data, pos, &frame.?, &dc_tables, &ac_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, &scan, restart_interval);
             },
             0x01, 0xD0...0xD7 => continue,
             else => pos += parseSegmentLength(data, pos),
@@ -238,6 +244,7 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
     // §G.1.2.2 EOBRUN counter). Reset to zero at scan start.
     var eob_run: u32 = 0;
     _ = &eob_run; // populated inside scan-decoders
+    var restart_interval: u16 = 0;
 
     errdefer {
         var i: usize = 0;
@@ -300,7 +307,12 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
                 try parseDqt(data, pos, &quant_tables);
                 pos += parseSegmentLength(data, pos);
             },
-            0xDD => return error.NotImplemented, // DRI in progressive — v1.x follow-up
+            0xDD => { // DRI — restart interval
+                const seg_len = parseSegmentLength(data, pos);
+                if (seg_len != 4 or pos + seg_len > data.len) return error.TruncatedStream;
+                restart_interval = (@as(u16, data[pos + 2]) << 8) | data[pos + 3];
+                pos += seg_len;
+            }, // DRI in progressive — v1.x follow-up
             0xDA => { // SOS
                 if (!seen_sof) return error.InvalidMarker;
                 const scan = try parseSos(data, pos, &frame.?);
@@ -320,6 +332,7 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
                     max_h,
                     max_v,
                     &scan,
+                    restart_interval,
                 );
             },
             // Standalone markers we can skip safely.
@@ -474,6 +487,27 @@ fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
     return info;
 }
 
+/// T.81 §F.2.1.3.2: at every restart-interval boundary, the entropy
+/// stream is realigned: bit buffer flushed to the next byte boundary,
+/// the upcoming RSTm marker (FF D0..D7) consumed, predictors reset.
+/// For progressive scans, we additionally reset `eob_run` (an
+/// EOB-run state that persists ACROSS blocks within a scan but
+/// MUST NOT cross a restart marker).
+fn handleRestart(
+    br: *bitstream.BitReader,
+    prev_dc: *[3]i16,
+    eob_run: *u32,
+    expected_rst: *u8,
+) Error!void {
+    br.seekToMarker();
+    if (!br.marker_seen) return error.InvalidMarker;
+    if (br.marker_byte != expected_rst.*) return error.InvalidMarker;
+    prev_dc.* = .{ 0, 0, 0 };
+    eob_run.* = 0;
+    expected_rst.* = 0xD0 + ((expected_rst.* - 0xD0 + 1) & 0x07);
+    br.skipPastMarker();
+}
+
 /// Decode one progressive scan and return the byte position immediately
 /// after the entropy data (at the next marker's 0xFF byte).
 fn decodeOneScan(
@@ -488,10 +522,18 @@ fn decodeOneScan(
     max_h: u32,
     max_v: u32,
     scan: *const ScanInfo,
+    restart_interval: u16,
 ) Error!usize {
     var br = bitstream.BitReader.init(data[entropy_start..]);
     var prev_dc: [3]i16 = .{ 0, 0, 0 };
     var eob_run: u32 = 0;
+    // RST handling state. T.81 §F.2.1.3: every `restart_interval` MCUs
+    // (or blocks for single-component scans), the encoder emits an
+    // RSTm marker (FF D0..D7), the decoder flushes the bit buffer to a
+    // byte boundary, resets `prev_dc` (and our progressive `eob_run`),
+    // and consumes the RST marker. RSTm cycles 0..7.
+    var units_since_rst: u32 = 0;
+    var expected_rst: u8 = 0xD0;
 
     // Two iteration shapes:
     //   - Multi-component (interleaved) scan: walk MCUs the same way
@@ -508,6 +550,10 @@ fn decodeOneScan(
         while (my < mcu_rows) : (my += 1) {
             var mx: u32 = 0;
             while (mx < mcu_cols) : (mx += 1) {
+                if (restart_interval > 0 and units_since_rst == restart_interval) {
+                    try handleRestart(&br, &prev_dc, &eob_run, &expected_rst);
+                    units_since_rst = 0;
+                }
                 var ci: usize = 0;
                 while (ci < scan.num_components) : (ci += 1) {
                     const comp_idx = scan.comp_indices[ci];
@@ -531,6 +577,7 @@ fn decodeOneScan(
                         }
                     }
                 }
+                units_since_rst += 1;
             }
         }
     } else {
@@ -559,6 +606,10 @@ fn decodeOneScan(
         while (by < bh) : (by += 1) {
             var bx: u32 = 0;
             while (bx < bw) : (bx += 1) {
+                if (restart_interval > 0 and units_since_rst == restart_interval) {
+                    try handleRestart(&br, &prev_dc, &eob_run, &expected_rst);
+                    units_since_rst = 0;
+                }
                 const off: usize = (@as(usize, by) * @as(usize, stride) +
                     @as(usize, bx)) * 64;
                 const block = coefs[comp_idx][off .. off + 64];
@@ -566,6 +617,7 @@ fn decodeOneScan(
                     &br, comp, dc_tables, ac_tables,
                     &prev_dc, &eob_run, comp_idx, block, scan,
                 );
+                units_since_rst += 1;
             }
         }
     }

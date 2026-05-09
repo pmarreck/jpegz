@@ -556,6 +556,29 @@ const fixture_lossless_gradient_pred5 = @embedFile("fixtures/lossless_4x4_gradie
 const fixture_lossless_gradient_pred6 = @embedFile("fixtures/lossless_4x4_gradient_pred6.jpg");
 const fixture_lossless_gradient_pred7 = @embedFile("fixtures/lossless_4x4_gradient_pred7.jpg");
 
+/// 32×32 grayscale progressive JPEG with DRI=8 (restart every 8 MCUs).
+/// Generated via `cjpeg -progressive -restart 2 grad32.pgm`. Exercises
+/// progressive cleanroom's DRI handling, which previously returned
+/// NotImplemented for any 0xFF DD marker.
+const fixture_progressive_32x32_dri = @embedFile("fixtures/progressive_32x32_gray_dri.jpg");
+
+test "M2.5: progressive cleanroom decodes a JPEG with DRI > 0" {
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.progressiveDecode(allocator, fixture_progressive_32x32_dri);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_progressive_32x32_dri);
+    defer wrapper.deinit(allocator);
+    try std.testing.expectEqual(wrapper.width, cleanroom.width);
+    try std.testing.expectEqual(wrapper.height, cleanroom.height);
+    try std.testing.expectEqual(wrapper.channels, cleanroom.channels);
+    var max_delta: u8 = 0;
+    for (cleanroom.pixels, wrapper.pixels) |a, b| {
+        const d: u8 = @intCast(@abs(@as(i32, a) - @as(i32, b)));
+        if (d > max_delta) max_delta = d;
+    }
+    try std.testing.expect(max_delta <= 2);
+}
+
 test "M2.4: lossless SOF3 cleanroom decodes 4x4 gradient with predictors 2..7 byte-for-byte" {
     const allocator = std.testing.allocator;
     const expected = [_]u8{ 0x00, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0 };
