@@ -14,6 +14,7 @@ who picks this up. Anchored to commits on `yolo`.
 | Extended Sequential (SOF1, 8-bit) | F    | ✅ M2.3   | —       | 0 corpus; spec coverage        |
 | Extended Sequential (SOF1, 12-bit) | F   | ❌        | ✅      | very rare; deferred            |
 | Progressive DCT (SOF2)   | G             | ✅ 100% ≤2 LSB | —  | 276/276 (199 byte-perfect)     |
+| Progressive + DRI (SOF2+RST) | G + F.2.1.3 | ✅ M2.5    | —       | 0 corpus; spec coverage        |
 | Lossless 8-bit (SOF3)    | H §H.1        | ✅ M2.4   | —       | 0 corpus; DICOM/DNG fixture    |
 | Lossless 12/16-bit       | H §H.1        | ❌        | ✅      | rare; via wrapper              |
 | Differential variants (SOF5–7) | H §H.2  | ❌        | ❌      | extremely rare; deferred       |
@@ -55,8 +56,8 @@ everything-libjpeg-can gap.
   handles them transparently.
 - **arithmetic (SOF9–11)**, **JPEG-LS (T.87)**, **JP2 (T.800)**:
   no cleanroom yet (substantial future work).
-- **Progressive features cleanroom doesn't yet handle**: DRI in
-  progressive scans, 12-bit precision SOF2.
+- **Progressive features cleanroom doesn't yet handle**: 12-bit
+  precision SOF2.
 
 ## Gap-closers (in priority order)
 
