@@ -10,15 +10,16 @@ who picks this up. Anchored to commits on `yolo`.
 
 | Variant                  | T.81 §        | Cleanroom | Wrapper | Corpus impact                  |
 |--------------------------|---------------|-----------|---------|--------------------------------|
-| Baseline DCT (SOF0)      | F             | ✅ 99.7%  | —       | 3837/3848 pixel-perfect        |
-| Extended Sequential (SOF1)| F            | ❌        | ✅      | very rare; deferred            |
+| Baseline DCT (SOF0)      | F             | ✅ 99.7%  | —       | 3844/3846 pixel-perfect        |
+| Extended Sequential (SOF1, 8-bit) | F    | ✅ M2.3   | —       | 0 corpus; spec coverage        |
+| Extended Sequential (SOF1, 12-bit) | F   | ❌        | ✅      | very rare; deferred            |
 | Progressive DCT (SOF2)   | G             | ✅ 100% ≤2 LSB | —  | 276/276 (199 byte-perfect)     |
-| Lossless 8-bit (SOF3)    | H §13         | ✅        | ✅      | DICOM/DNG covered              |
-| Lossless 12/16-bit       | H §13         | ✅ via M1.4b precision-routing | ✅ | rare; ships today |
-| Differential variants (SOF5–7) | H §14   | ❌        | ❌      | extremely rare; deferred       |
+| Lossless 8-bit (SOF3)    | H §H.1        | ✅ M2.4   | —       | 0 corpus; DICOM/DNG fixture    |
+| Lossless 12/16-bit       | H §H.1        | ❌        | ✅      | rare; via wrapper              |
+| Differential variants (SOF5–7) | H §H.2  | ❌        | ❌      | extremely rare; deferred       |
 | Arithmetic-coded (SOF9–11) | F §F.1.4    | ❌        | partial | rare in modern wild            |
-| JPEG-LS (T.87)           | T.87          | ❌        | charls? | medical imaging; future         |
-| JPEG 2000 (T.800)        | T.800         | ❌        | ✅ openjpeg | separate ABI namespace      |
+| JPEG-LS (T.87)           | T.87          | ❌        | charls? | medical imaging; future        |
+| JPEG 2000 (T.800)        | T.800         | ❌        | ✅ openjpeg | separate ABI namespace     |
 
 **Reality check:** the corpus shows 99.7% pixel-perfect *because* the
 wrapper backstops every variant the cleanroom hasn't shipped. When
@@ -48,12 +49,14 @@ everything-libjpeg-can gap.
 
 ### What's still using the wrapper at runtime
 
-- **Extended sequential (SOF1)**, **arithmetic (SOF9–11)**, **JPEG-LS
-  (T.87)**, **JP2 (T.800)**: small corpus presence; wrapper handles
-  them transparently.
+- **SOF1 12-bit precision**, **SOF3 12/16-bit precision**,
+  **SOF3 multi-component**, **SOF3 with DRI**, **SOF3 lossless
+  with non-1×1 sampling**: small/zero corpus presence; wrapper
+  handles them transparently.
+- **arithmetic (SOF9–11)**, **JPEG-LS (T.87)**, **JP2 (T.800)**:
+  no cleanroom yet (substantial future work).
 - **Progressive features cleanroom doesn't yet handle**: DRI in
-  progressive scans, 12-bit precision SOF2, multi-component scans
-  with > 4 components.
+  progressive scans, 12-bit precision SOF2.
 
 ## Gap-closers (in priority order)
 
