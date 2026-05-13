@@ -33,8 +33,8 @@ failures into more code.
 |-----------------------------------|---------------|--------------|---------|--------------------------------------|
 | Baseline DCT (SOF0)               | F             | ✅ 99.7%     | —       | 3844/3846 byte-perfect               |
 | Extended Sequential (SOF1, 8-bit) | F             | ✅ M2.3      | —       | 0 corpus; spec coverage              |
-| Extended Sequential (SOF1, 12-bit, gray) | F      | ✅ A1 (Part A) | —     | 0 corpus; DICOM/DNG analogue         |
-| Extended Sequential (SOF1, 12-bit, RGB)  | F      | ❌           | ✅      | very rare; A1 Part B follow-on        |
+| Extended Sequential (SOF1, 12-bit, gray) | F      | ✅ A1 Part A | —     | 0 corpus; DICOM/DNG analogue         |
+| Extended Sequential (SOF1, 12-bit, RGB)  | F      | ✅ A1 Part B | —     | 0 corpus; all 4 sampling factors      |
 | Progressive DCT (SOF2)            | G             | ✅ 100% ≤2 LSB | —     | 276/276 (199 byte-perfect)           |
 | Progressive + DRI (SOF2+RST)      | G + F.2.1.3   | ✅ M2.5      | —       | 0 corpus; spec coverage              |
 | Lossless (SOF3) 8-bit grayscale   | H §H.1        | ✅ M2.4      | —       | 0 corpus; DICOM/DNG synth fixtures   |
@@ -82,30 +82,32 @@ NotImplemented from each cleanroom falls through to the next layer.
 
 ### Tier A — Smaller, finish T.81 cleanroom faster
 
-#### A1. SOF1 12-bit precision (extended sequential 12-bit)
+#### A1. SOF1 12-bit precision (extended sequential 12-bit) — ✅ shipped
 
-**Status:** Part A (grayscale) **shipped**. Part B (3-comp RGB) pending.
+Both parts shipped. SOF1 12-bit row of the cleanroom matrix is **closed**.
 
-- **Part A — grayscale (1-component), shipped:**
-  - Spec at `docs/superpowers/specs/2026-05-13-sof1-12bit-precision-design.md`.
-  - IDCT comptime-parameterized over P in `src/decode/idct.zig`:
-    `idct8x8Generic(comptime P, ...)` with P ∈ {8, 12}; 8-bit thin
-    wrapper preserves libjpeg-turbo byte-identical output.
-  - Entropy decoder (`decodeBlockCoefficients`) now takes a precision
+- **Part A — grayscale (1-component):**
+  - Spec: `docs/superpowers/specs/2026-05-13-sof1-12bit-precision-design.md`.
+  - IDCT comptime-parameterized over P ∈ {8, 12} in `src/decode/idct.zig`:
+    `idct8x8Generic(comptime P, ...)`; 8-bit thin wrapper preserves
+    libjpeg-turbo byte-identical output.
+  - Entropy decoder (`decodeBlockCoefficients`) takes a precision
     parameter and accepts T.81 §F.1.4 SSSS limits at P=12 (DC ≤ 15,
-    AC ≤ 14) as well as the P=8 limits.
-  - Dispatched in `baseline.zig` via a focused `decodeScan12Gray`
-    function for SOF1@P=12@Nf=1. Output is u16 host-endian.
-  - Fixture: `baseline_4x4_gray12_dct.jpg` (uniform 0x800). Test
-    asserts byte-equal-to-wrapper ≤2 LSB.
-- **Part B — 3-component RGB 12-bit (next):**
-  - Effort: medium. Needs YCbCr→RGB at 12-bit precision with the
-    fixed-point color constants widened (or scaled), producing a u16
-    RGB output buffer.
-  - Plan: brainstorm separately, mirror M2.4→M2.6 cadence (gray first,
-    color follow-on).
-  - Fixture: generate via `cjpeg -baseline -precision 12 -sample 1x1
-    grad_rgb.ppm` on a small PPM.
+    AC ≤ 14) as well as P=8 limits.
+  - Dispatched via `decodeScan12Gray` for SOF1@P=12@Nf=1. Output is
+    u16 host-endian. Fixture: `baseline_4x4_gray12_dct.jpg`.
+- **Part B — 3-component RGB:**
+  - Spec: `docs/superpowers/specs/2026-05-13-sof1-12bit-rgb-design.md`.
+  - u16 color helpers added in `src/decode/color.zig`:
+    `ycbcrRowToRgb12`, `fancyUpsample12` (with libjpeg-matching
+    asymmetric `+8/+7` rounding), `clampSample12I32`.
+  - Dispatched via `decodeScan12Rgb` for SOF1@P=12@Nf=3. Output is
+    u16 host-endian interleaved RGB.
+  - Coverage: all 4 common chroma sampling factors (4:4:4, 4:2:0,
+    4:2:2, 4:4:0).
+  - Fixtures: `baseline_16x16_rgb12_{444,420,422,440}.jpg`.
+  - Tolerance: ≤4 LSB vs wrapper (4:4:4 / 4:2:0 land at 2 LSB; 4:2:2
+    / 4:4:0 at 3 LSB).
 
 #### A2. SOF3 lossless with non-1×1 sampling
 
@@ -386,9 +388,10 @@ Pick **one** of these, in priority order. Each follows strict TDD:
 write the failing test first, watch it fail, implement minimal code,
 verify GREEN, commit.
 
-1. **A1 Part B — SOF1 12-bit RGB** (medium). Part A grayscale shipped;
-   this layers on 3-component YCbCr→RGB at 12-bit precision (scaled
-   fixed-point color constants).
+1. **A2 — SOF3 non-1×1 sampling** (small). Tiny matrix row to close;
+   good warm-up. Lift the `(h_factor, v_factor) ≠ (1, 1)` rejection
+   in `src/decode/lossless.zig` and walk MCUs by H/V factors. Generate
+   a fixture via `cjpeg -lossless 1 -sample 2x2,1x1,1x1`.
 2. **#7 — validate(...) warns** (medium). Architecture work that
    doesn't add a new variant but matters for downstream consumers.
 3. **A2 — SOF3 non-1×1 sampling** (small). Tiny matrix row to close;
