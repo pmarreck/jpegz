@@ -142,6 +142,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(idct_tests).step);
 
+    const arith_coder_mod = b.createModule(.{
+        .root_source_file = b.path("src/decode/arith_coder.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const arith_coder_tests = b.addTest(.{
+        .name = "decode_arith_coder",
+        .root_module = arith_coder_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(arith_coder_tests).step);
+
     // Cleanroom decoder modules (baseline.zig etc.) are tested
     // implicitly via the dispatch in src/jpegz.zig — when a fixture
     // matches the cleanroom's supported shape (8-bit, no subsampling,

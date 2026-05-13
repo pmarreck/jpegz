@@ -333,6 +333,12 @@ pub const internal = struct {
     pub fn wrapperDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("ffi/libjpeg_wrapper.zig").decode(allocator, data);
     }
+    /// Arithmetic-coded JPEG decode (SOF9 / SOF10). Returns
+    /// `error.NotImplemented` until B1 lands; tests calling this
+    /// entry point use that as their RED gate.
+    pub fn arithDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
+        return @import("decode/arith_decode.zig").decode(allocator, data);
+    }
 };
 
 // ─────────────────────────────────────────────────────────────────────
