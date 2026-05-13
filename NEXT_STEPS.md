@@ -1,304 +1,417 @@
-# jpegz NEXT_STEPS — Path to 100% Cleanroom Variant Coverage
+# jpegz NEXT_STEPS — Handoff to Next Session
 
-**Last updated:** 2026-05-07 EST, end of M2.1c + M2.1d session.
+**Last updated:** 2026-05-13.
 **Maintained for:** the next Claude session (or any other agent / human)
 who picks this up. Anchored to commits on `yolo`.
 
-## Current state (as of commit `2f863a4`)
+> This is a **complete handoff document.** Read it top to bottom on
+> session pickup. Past commits and memories are referenced inline.
 
-### Variant coverage matrix
+---
 
-| Variant                  | T.81 §        | Cleanroom | Wrapper | Corpus impact                  |
-|--------------------------|---------------|-----------|---------|--------------------------------|
-| Baseline DCT (SOF0)      | F             | ✅ 99.7%  | —       | 3844/3846 pixel-perfect        |
-| Extended Sequential (SOF1, 8-bit) | F    | ✅ M2.3   | —       | 0 corpus; spec coverage        |
-| Extended Sequential (SOF1, 12-bit) | F   | ❌        | ✅      | very rare; deferred            |
-| Progressive DCT (SOF2)   | G             | ✅ 100% ≤2 LSB | —  | 276/276 (199 byte-perfect)     |
-| Progressive + DRI (SOF2+RST) | G + F.2.1.3 | ✅ M2.5    | —       | 0 corpus; spec coverage        |
-| Lossless 8-bit (SOF3)    | H §H.1        | ✅ M2.4   | —       | 0 corpus; DICOM/DNG fixture    |
-| Lossless 8-bit RGB (SOF3, 3-comp) | H §H.1 | ✅ M2.6  | —       | 0 corpus; spec coverage        |
-| Lossless + DRI (SOF3+RST) | H + F.2.1.3  | ✅ M2.7   | —       | 0 corpus; spec coverage        |
-| Lossless 12/14/16-bit (SOF3) | H §H.1    | ✅ M2.8   | —       | DICOM/DNG fixture; byte-perfect |
-| Differential variants (SOF5–7) | H §H.2  | ❌        | ❌      | extremely rare; deferred       |
-| Arithmetic-coded (SOF9–11) | F §F.1.4    | ❌        | partial | rare in modern wild            |
-| JPEG-LS (T.87)           | T.87          | ❌        | charls? | medical imaging; future        |
-| JPEG 2000 (T.800)        | T.800         | ❌        | ✅ openjpeg | separate ABI namespace     |
+## Pickup checklist (60 seconds)
 
-**Reality check:** the corpus shows 99.7% pixel-perfect *because* the
-wrapper backstops every variant the cleanroom hasn't shipped. When
-Peter said "100% coverage of all jpeg variants, please let tiffz and
-validate know" — that's the trigger to close THIS gap. Not the
-corpus-passing-tests gap (already cleared); the cleanroom-handles-
-everything-libjpeg-can gap.
+1. `git pull` — confirm `yolo` HEAD ≥ `edce8d6` (most recent doc) or
+   `649c0ae` (latest code commit, M2.8).
+2. `./test` — must print `All checks passed.` (96/96 unit tests).
+3. `./zig-out/bin/diag-one tests/unit/fixtures/progressive_8x8_rgb.jpg`
+   — quick sanity that the progressive cleanroom is alive.
+4. Read **§"What's next"** below — choose ONE of the prioritized tasks
+   and follow TDD (write a failing test FIRST; see Peter's CLAUDE.md
+   rules and the `superpowers:test-driven-development` skill).
 
-### What's shipped on `yolo`
+**If anything is red:** stop and report. Don't barrel past test
+failures into more code.
 
-- **M1 series** (Phase 1 wrappers): libjpeg-turbo + openjpeg behind
-  the public API. Validate / tiffz integration recipes delivered.
-- **M2.1c** (cleanroom baseline robustness): six commits today
-  (`b08794b` → `54463e4`) took baseline cleanroom from 1.5% pixel-
-  perfect on Peter's 4,125-file corpus to 99.7%. Notable fixes:
-  RST `seekToMarker`, i32 coefficient pipeline, **canonical Huffman
-  zero-count gap shift** (the dominant bug — collapsed CLEAN-ERR
-  2257 → 13), IJG fancy chroma upsampling, marker-tolerance, single-
-  component scan layout, libjpeg-turbo islow IDCT, fixed-point
-  YCbCr→RGB.
-- **M2.1d** (caller-controlled threading): API surface +
-  implementation. `DecodeOptions { threads: u8 = 1 }` per the
-  cross-project convention validate proposed. `std.Thread.Pool`
-  underneath, parallel IDCT + color conversion. Modest 1.09× speedup
-  at 4 cores (Amdahl-bound — entropy is ~90% serial within a non-DRI
-  scan).
+---
 
-### What's still using the wrapper at runtime
+## Current state (after M2.8)
 
-- **SOF1 12-bit precision** (needs 12-bit DCT/IDCT pipeline —
-  separate from cleanroom's 8-bit islow path).
-- **SOF3 lossless with non-1×1 sampling** (extremely rare in
-  practice; DICOM/DNG default to 1×1).
-- **arithmetic (SOF9–11)**, **JPEG-LS (T.87)**, **JP2 (T.800)**:
-  no cleanroom yet (substantial future work).
-- **Progressive features cleanroom doesn't yet handle**: 12-bit
-  precision SOF2.
+### Cleanroom variant coverage
 
-## Gap-closers (in priority order)
+| Variant                           | T.81 §        | Cleanroom    | Wrapper | Corpus impact                        |
+|-----------------------------------|---------------|--------------|---------|--------------------------------------|
+| Baseline DCT (SOF0)               | F             | ✅ 99.7%     | —       | 3844/3846 byte-perfect               |
+| Extended Sequential (SOF1, 8-bit) | F             | ✅ M2.3      | —       | 0 corpus; spec coverage              |
+| Extended Sequential (SOF1, 12-bit)| F             | ❌           | ✅      | very rare; wrapper backstop          |
+| Progressive DCT (SOF2)            | G             | ✅ 100% ≤2 LSB | —     | 276/276 (199 byte-perfect)           |
+| Progressive + DRI (SOF2+RST)      | G + F.2.1.3   | ✅ M2.5      | —       | 0 corpus; spec coverage              |
+| Lossless (SOF3) 8-bit grayscale   | H §H.1        | ✅ M2.4      | —       | 0 corpus; DICOM/DNG synth fixtures   |
+| Lossless (SOF3) 3-comp RGB        | H §H.1        | ✅ M2.6      | —       | 0 corpus; spec coverage              |
+| Lossless + DRI (SOF3+RST)         | H + F.2.1.3   | ✅ M2.7      | —       | 0 corpus; spec coverage              |
+| Lossless 12/14/16-bit             | H §H.1        | ✅ M2.8      | —       | DICOM/DNG; byte-perfect              |
+| Lossless w/ non-1×1 sampling      | H §H.1        | ❌           | ✅      | extremely rare; deferred             |
+| Differential variants (SOF5–7)    | H §H.2        | ❌           | ❌      | extremely rare; deferred             |
+| Arithmetic-coded (SOF9–11)        | F §F.1.4      | ❌           | ✅      | almost zero modern use               |
+| JPEG-LS (T.87)                    | T.87          | ❌           | charls? | medical imaging niche                |
+| JPEG 2000 (T.800)                 | T.800         | ❌           | ✅ openjpeg | separate ABI namespace            |
+| 12-bit Progressive (SOF2)         | G             | ❌           | ✅      | rare; needs 12-bit DCT pipeline      |
 
-### 1. Wire progressive cleanroom into dispatch (M2.2) — ✅ COMPLETE 2026-05-08
+### Test counts
+- **96 unit tests passing** (32 in `tests/unit/decode.zig`, plus inline
+  module tests).
+- **35 fixtures** in `tests/unit/fixtures/` covering every cleanroom
+  variant + several wrapper fall-through paths.
 
-**Files:** `src/decode/progressive.zig`, `src/jpegz.zig` (dispatch),
-`tests/unit/decode.zig`, possibly `tests/unit/fixtures/`.
+### Module layout (src/decode/)
 
-**Status (2026-05-08, commits dbb9e97 → bcd39de):** SHIPPED. Wired into
-dispatch in `src/jpegz.zig` after baseline cleanroom. 276/276 corpus
-progressive JPEGs decode within ≤2 LSB of libjpeg-turbo (199/276
-byte-perfect). Same threshold baseline cleanroom uses against wrapper.
+| File             | Lines  | Role                                          |
+|------------------|--------|-----------------------------------------------|
+| `baseline.zig`   | 1016   | SOF0/SOF1 8-bit DCT decode, threading pool    |
+| `progressive.zig`| 1072   | SOF2 multi-scan DCT decode incl. DRI + refine |
+| `lossless.zig`   |  432   | SOF3 8/12/14/16-bit, 1/3 comp, DRI, 7 predict |
+| `huffman.zig`    |  278   | Canonical Huffman build + fast/slow decode    |
+| `idct.zig`       |  337   | libjpeg-turbo islow integer IDCT             |
+| `bitstream.zig`  |  241   | Byte-stuffed bit reader + marker handling     |
+| `color.zig`      |  163   | Fixed-point YCbCr→RGB + fancy chroma upsample |
 
-**Six concrete bugs fixed:**
-1. **End-of-scan marker detection** (markerHit→seekToMarker, mirrors
-   baseline RST handling).
-2. **libjpeg-turbo `insufficient_data` parity** — when entropy
-   exhausts at a marker, leave current/remaining blocks at their
-   current value (matches libjpeg's "leave the MCU set to zeroes"
-   behavior). Wired into all six error sites.
-3. **YCbCr→RGB float→fixed-point** (16-bit SCALEBITS, libjpeg
-   constants Cred=91881, Cgreen_cb=-22554, Cgreen_cr=-46802,
-   Cblue=116130). Collapsed delta=1 → delta=0. Per Peter's
-   preference: avoid IEEE754 in numerical paths.
-4. **IJG fancy chroma upsampling** — replaces nearest-neighbor
-   `samplePlane` with the same 9/3/3/1 (h2v2), 3/1 (h2v1, v2h1)
-   weights baseline cleanroom uses. Extracted into shared
-   `src/decode/color.zig`. Active-frame boundary clamping.
-5. **Single-component scan iteration uses xi/yi per T.81 §A.2.4**
-   — `xi = ceil(W * Hi / (8 * Hmax))` for the inner loop bound,
-   stride=`blocks_w[comp_idx]` for the buffer. Multi-component
-   scans still use MCU-padded iteration. Fixes 549×304 4:2:0
-   class of files where MCU-padding adds an extra Y column.
-6. **AC refinement ZRL break semantics** — match libjpeg's
-   `if (--r < 0) break;` exactly. Track `is_zrl = (size==0 && run==15)`;
-   break the inner walk immediately after the 16th zero is decremented
-   on ZRL, instead of letting the loop iterate once more (which
-   would refine a nonzero immediately following the 16-zero window
-   without the encoder having written a refinement bit for it).
-   Found via per-scan coef diff against libjpeg-turbo.
+`src/jpegz.zig` is the public dispatch:
+```
+baseline cleanroom     (SOF0/SOF1 8-bit)
+progressive cleanroom  (SOF2, incl. DRI)
+lossless cleanroom     (SOF3 8/12/14/16-bit, 1/3 comp, incl. DRI)
+libjpeg-turbo wrapper  (everything else + final fallback)
+```
 
-**Diagnostic tooling shipped (under `scratch/`, all gitignored):**
-- `dump_coefs_libjpeg.c` — uses `jpeg_read_coefficients()` to dump
-  post-entropy quantized coefficients in natural order.
-- `dump_coefs_jpegz.zig` — same format, calls
-  `internal.progressiveDecodeAndDumpCoefs` (added to public-but-
-  internal namespace; not part of stable ABI).
-- `scan_walk_diff.py` — truncates the file after each SOS scan
-  with a synthetic EOI marker, runs both decoders on each truncated
-  version, and identifies the first diverging scan. Found bug #6.
-- `pixel_diff.zig` — per-pixel diff + 8×8-cell delta heatmap.
-- `libjpeg_turbo_instr/` — vendored libjpeg-turbo 3.1.1 source for
-  invasive instrumentation if scan-walk approach isn't enough.
+NotImplemented from each cleanroom falls through to the next layer.
 
-**Validation-strictness consideration (Peter, 2026-05-08):** libjpeg-
-turbo silently tolerates several malformed-bitstream conditions
-(`insufficient_data` zero-padding being the most prominent). Our
-goal differs — we care about format integrity for validation tools.
-Today the cleanroom matches libjpeg's tolerance for byte-equal output,
-but a future enhancement could expose these tolerances as
-`Finding(severity=warn)` entries in `validate(...)`'s ValidationReport
-so callers can choose strict vs lenient mode. Not blocking M2.2.
+---
 
-**Outstanding follow-ups:**
-- DRI in progressive scans (currently NotImplemented; small corpus
-  presence). Needs baseline-style RST handling: `seekToMarker()` at
-  restart-interval boundaries, `prev_dc` reset, RSTm marker cycle.
-- 12-bit precision in SOF2 (looks like SOF1 with progressive
-  storage; probably very rare).
-- Validation strictness mode (above).
+## What's next (prioritized)
 
-### 2. DRI fast path (parallelism win)
+### Tier A — Smaller, finish T.81 cleanroom faster
 
-**Files:** `src/decode/baseline.zig` (decodeScan), maybe a new
-`src/decode/dri_partition.zig`.
+#### A1. SOF1 12-bit precision (extended sequential 12-bit)
 
-**Status:** Today, baseline cleanroom decodes RST-marker JPEGs
-correctly but serially. ~20% of Peter's corpus has DRI > 0.
+- **Effort:** medium-large. Needs 12-bit DCT/IDCT pipeline distinct
+  from the 8-bit `islow` IDCT.
+- **Why it's worth doing:** closes the last SOF1 row in the matrix.
+  Without it, `cjpeg -baseline -precision 12 -dct int` (the existing
+  `baseline_4x4_gray12_dct.jpg` fixture path) keeps falling through
+  to the wrapper.
+- **Approach (sketch):**
+  1. Lift `precision != 8` rejection in `baseline.zig` for SOF1
+     (currently NotImplemented for P=12 falls through to wrapper).
+  2. Port libjpeg-turbo's `jidct12.c` `jpeg_idct_12_islow` (lives in
+     `scratch/libjpeg_turbo_instr/src/jidct12.c` if still vendored).
+     Same coefficients as islow but with 12-bit-shifted ranges.
+  3. Output buffer becomes `u16` host-endian like lossless's M2.8;
+     consumer reads via `image.pixelsU16()`.
+  4. Dequantization: DQT entries for 12-bit are already 16-bit per
+     spec; existing `parseDqt` handles `precision_id == 1`.
+  5. YCbCr→RGB conversion at 12-bit precision: scale the libjpeg
+     fixed-point constants accordingly, OR convert to 8-bit by
+     right-shifting before color conversion (libjpeg does the latter
+     internally).
+- **Fixture:** the existing `baseline_4x4_gray12_dct.jpg` (uniform 0x800
+  expected). Add a non-uniform 12-bit fixture for predictor coverage.
 
-**Plan:** When `restart_interval > 0` and `options.threads != 1`:
+#### A2. SOF3 lossless with non-1×1 sampling
 
-1. Pre-scan the entropy stream once to find every RST byte offset
-   (cheap — single pass through bytes, looking for `FF D0..D7` not
-   preceded by `FF 00`).
-2. Each RST segment is `restart_interval` MCUs starting at a known
-   `(mcu_x, mcu_y)`.
-3. Per segment: enqueue a task that creates its own `BitReader` over
-   the segment's byte range, with `prev_dc = {0,0,0}`, decodes its
-   MCUs into the shared coefficient buffer at known coordinates.
-4. After all segments complete, run the existing parallel transform
-   + assemble pipeline.
+- **Effort:** small. Just lift the `c.h_factor != 1 or c.v_factor != 1`
+  check and walk the MCU correctly (variable blocks per component per
+  MCU).
+- **Why:** rare in practice (DICOM/DNG default to 1×1), but closes the
+  matrix row. Zero corpus impact.
+- **Fixture:** generate with `cjpeg -lossless 1 -sample 2x2,1x1,1x1` on
+  a PPM. Worth a try.
 
-**Expected gain:** near-linear speedup for the 20% of corpus with
-DRI. No effect on the rest.
+#### A3. 12-bit precision SOF2 progressive
 
-### 3. Extended sequential (SOF1)
+- **Effort:** large. Same precision pipeline as A1 but in progressive
+  context. Defer until A1 lands so the 12-bit IDCT is reusable.
 
-**Files:** new code in `src/decode/baseline.zig` or split out.
+### Tier B — Big lifts (one full session each)
 
-**Plan:** SOF1 differs from SOF0 only in that it allows up to 8-bit
-*and* 12-bit precision and up to 4 components. The DCT/Huffman/
-restart logic is identical. Adding this is mostly: accept SOF1 in
-the marker dispatcher, handle 12-bit precision through the same
-i32 coefficient pipeline that already exists, route 12-bit output
-through the existing 12-bit precision path used by lossless.
+#### B1. Arithmetic-coded JPEG (SOF9/10/11)
 
-**Win:** rare; one or two corpus files. Closes a spec checkbox.
+- **Effort:** ~600 LOC for the Q-coder + ~400 LOC adapting SOF0/2
+  scaffolding. Two full sessions, probably.
+- **Why:** completes T.81 spec coverage. Modern-use almost zero, but
+  some scanner output and legacy archive JPEGs use it.
+- **References:**
+  - T.81 §F.1.4 (encoder) / §F.2.4 (decoder)
+  - T.81 Annex D (Q-coder spec)
+  - Pennebaker & Mitchell "JPEG: Still Image Data Compression Standard"
+    (the canonical book; google "pennebaker mitchell pdf").
+  - libjpeg-turbo `jdarith.c` for a reference implementation. Apache-2
+    licensed, fine to read for guidance (per SPEC.md).
+- **Approach (sketch):**
+  1. New module `src/decode/arithmetic.zig` with the Q-coder state
+     machine: 16-bit `A` (range) + 32-bit `C` (code), byte-stuffed input.
+  2. Statistical area: 4 tables of 49 binary contexts each (DC), 1 table
+     of 245 contexts (AC). Each context = {index, MPS}, indexed via
+     the state transition tables (libjpeg's `qe_table`).
+  3. Decode procedures: `decode(stat_index)` returns 0/1 bit based on
+     current probability estimate; updates state via MPS/LPS table.
+  4. SOF dispatch: lift SOF9/10/11 from rejection in baseline.zig;
+     for arithmetic, parse DAC (Define Arithmetic Coding) markers
+     instead of DHT; entropy decode uses Q-coder for DC differential
+     (size + amplitude) and AC (run + size + amplitude) — same SSSS/
+     RRRR codes as Huffman, different binarization.
+- **Fixture:** existing `baseline_4x4_arithmetic.jpg`. Generate larger
+  fixtures with `cjpeg -arithmetic`.
+- **Validation-warns hookup:** if Q-coder encounters an invalid state
+  (LPS-renorm overflow, MPS state index out of range), surface as a
+  Finding in validate(...) per the strictness rule (see §Architecture).
 
-### 4. Arithmetic coding (SOF9, SOF10, SOF11)
+#### B2. JPEG-LS (T.87)
 
-**Files:** new `src/decode/arithmetic.zig` for the Q-coder; reused
-SOF logic from baseline/progressive.
+- **Effort:** ~800-1000 LOC. Entirely different algorithm from T.81
+  (LOCO-I predictor + Golomb-Rice entropy coding). One+ session.
+- **Why:** medical imaging niche (DICOM uses it). Not gated for the
+  100% trigger if Peter agrees on a "T.81 only" cut-off.
+- **Approach (sketch):**
+  1. New module `src/decode/jpegls.zig`.
+  2. LOCO-I predictor (T.87 §A.4.1): `min(a,b)` if `c≥max(a,b)`,
+     `max(a,b)` if `c≤min(a,b)`, else `a+b-c`. Like SOF3 predictor 4
+     but with the median preprocessing.
+  3. Context modeling: gradients `D1=b-d`, `D2=c-b`, `D3=a-c` quantized
+     to ±4 bins each = 365 contexts (after symmetry merging). Each
+     context tracks running `N` (count), `A` (absolute error sum),
+     `B` (correction).
+  4. Golomb-Rice entropy: parameter `k` derived per-context from
+     `A/N`. Unary prefix + `k` binary bits.
+  5. Run mode: extension for long flat regions.
+- **References:** T.87 spec, charls (Apache-2) for reference.
+- **Fixture:** need to generate via charls or another encoder; cjpeg
+  doesn't emit JPEG-LS.
 
-**Plan:** Implement the T.81 §F.1.4 arithmetic decoder (Q-coder) +
-context conditioning. Substantial work — the Q-coder is fiddly. ~600
-lines of code, careful adaptive-probability bookkeeping. Reference:
-T.81 §F.1.4, Annex D, and PennebakerMitchell book.
+#### B3. JPEG 2000 (T.800) cleanroom
 
-**Win:** completes T.81 cleanroom coverage. Almost no real-world
-files use this in 2026, but it's a spec checkbox.
+- **Effort:** multi-month. EBCOT tier-1 + tier-2 + DWT 5/3 or 9/7 wavelet
+  + R/D allocation. The openjpeg wrapper handles JP2 at runtime.
+- **Patent:** confirm with Peter before shipping (SPEC.md note).
+- **Status:** out of scope until M2.7+ in the milestone plan.
 
-### 5. JPEG-LS (T.87)
+### Tier C — Performance + tooling follow-ups
 
-**Files:** new `src/decode/jpegls.zig`.
+- **DRI fast path parallelism** (task #2 in the task list): pre-scan
+  RST byte offsets, decode each segment in parallel under
+  `options.threads > 1`. Near-linear speedup on the ~20% of corpus
+  with DRI. Independent of variant coverage.
+- **SIMD IDCT** (`src/decode/idct_neon.zig` / `idct_avx2.zig`) using
+  Zig `@Vector`. 1.5–2× win, brings us closer to libjpeg-turbo's
+  hand-tuned speed.
+- **Premature-end tolerance** behind `DecodeOptions.tolerate_truncation`
+  flag. Today the cleanroom errors out on truncated downloads (11
+  corpus files); libjpeg returns a partial image. Add a flag if a
+  consumer asks.
 
-**Plan:** LOCO-I predictor + Golomb-Rice entropy coding. Independent
-of T.81 work — different algorithm entirely. ~800–1000 lines.
-charls (Apache-2 license) is fine to read for guidance per
-SPEC.md §8. Medical-imaging niche; modest priority.
+---
 
-### 6. JPEG 2000 cleanroom (T.800)
+## Architecture decisions to remember
 
-**Files:** new `src/decode/jp2/` directory (lots).
+### Validation-strictness: warns over silent tolerance
 
-**Plan:** This is multi-month effort. EBCOT tier-1/tier-2 + DWT 5/3
-or 9/7 wavelet. Patent posture: confirm with Peter before shipping
-per SPEC.md note. The existing openjpeg wrapper handles JP2 at
-runtime; cleanroom is M2.7 in PLAN.md.
+**Source:** Peter, 2026-05-08, confirmed 2026-05-09.
+**Memory file:** `feedback_validation_warns_not_silent_tolerance.md` (in
+this project's auto-memory directory).
 
-## Performance follow-ups (orthogonal to coverage)
+When the cleanroom decoder mirrors libjpeg-turbo's silent tolerances
+(insufficient_data zero-padding, partial-EOI tolerance, etc.) to match
+its pixel output, the **`validate(...)` API path must also surface those
+conditions as `Finding(severity=warn)` entries on the
+ValidationReport**. Two audiences:
 
-### A. Close gap to libjpeg-turbo at `threads = 1`
+- **Image renderers**: want libjpeg-style "just give me pixels" —
+  cleanroom currently provides this.
+- **Format-integrity validators**: want every spec deviation flagged —
+  needs the warns we haven't wired up yet.
 
-Current: cleanroom is ~2.6× slower than wrapper at 1 thread on a
-1500×1026 image (27.3 ms vs 10.2 ms). libjpeg-turbo's lead is mostly
-hand-tuned NEON/AVX2 SIMD in IDCT and chroma upsampling. Options:
+Don't change the cleanroom decode path's behavior. Add the Finding
+emission in `validate(...)` (and any shared marker-walker code).
+Tracker: task #7 in the task list.
 
-- **SIMD IDCT** — write `src/decode/idct_neon.zig` and `idct_avx2.zig`
-  using Zig's `@Vector` builtin. Probably 1.5–2× win.
-- **SIMD color conversion** — same idea, 4-pixel-at-once vector
-  multiply-add. Probably 1.3× win.
-- **SIMD fancy upsample** — same idea, somewhat trickier rounding.
+**Conditions that should warn:**
+- Entropy stream exhausted at scan end before all blocks decoded
+  (insufficient_data — currently zero-padded silently).
+- DRI > 0 but RSTm marker missing or wrong cycle.
+- 0xFF fill bytes inside entropy stream (legal but non-canonical).
+- Non-canonical Huffman table (gap in code lengths after the
+  zero-count-gap-shift fix).
+- DC predictor differential carries across what should be a restart
+  boundary.
+- Adobe APP14 transform byte missing or conflicting with JFIF.
 
-Note: under M2.1d's threading API, all of these are pure
-correctness-preserving optimizations behind the existing `threads`
-contract — caller doesn't see anything change.
+### Integer/fixed-point over IEEE754
 
-### B. Parallel entropy decode for non-DRI scans
+**Source:** Peter, 2026-05-08.
+**Memory file:** `feedback_prefer_integer_fixed_point.md`.
 
-Hard: the DC predictor chain across MCUs makes entropy decode
-inherently serial within a scan. Workarounds people have tried:
+For numerical code (color conversion, IDCT, DSP), reach for
+integer/fixed-point FIRST. IEEE754's non-associativity, platform-
+specific rounding, and SIMD-flag-sensitive results are a constant
+source of byte-level reproducibility bugs. Concrete instance: the
+M2.2b commit collapsed a delta=1 LSB drift to delta=0 on 3 progressive
+corpus files just by porting libjpeg-turbo's fixed-point YCbCr
+conversion (16-bit SCALEBITS, constants Cred=91881 etc.).
 
-- Two-pass: pre-scan to find Huffman code boundaries, then decode
-  blocks in parallel from known offsets. Requires knowing where each
-  Huffman code ends, which requires parsing them. Unclear if it's
-  net positive.
-- Speculative parallelism: each worker assumes a starting bit
-  position, decodes, and validates against a checkpoint. Brittle.
+Only fall back to floats when the algorithm genuinely needs them and
+the nondeterminism is acceptable in context. When in doubt, ask.
 
-Probably not worth the engineering complexity. **Recommendation:
-ship DRI fast path (gap-closer #2) and accept Amdahl on the rest.**
+### Threading API contract
 
-### C. Premature-end tolerance for truncated files
+**Source:** M2.1d, cross-project convention with validate/tiffz.
 
-9 of the remaining 11 CLEAN-ERR are truncated downloads (PlayBoy
-35,688-byte files). libjpeg-turbo emits a "Premature end of JPEG
-file" warning and returns whatever it managed to decode. Our
-cleanroom errors out — *correctly* per strict-validator semantics,
-but if a future consumer wants tolerance (some image viewers
-prefer "show what you have" over "fail loudly"), this could go
-behind a `DecodeOptions.tolerate_truncation` flag.
+```zig
+pub const DecodeOptions = struct {
+    threads: u8 = 1,
+};
+```
 
-Not blocking. Wait for a real consumer ask.
+- `threads = 1` (default): run sequentially in the calling thread. No
+  spawning, no oversubscription.
+- `threads = 0`: explicit library-side auto-detect (capped at MCU
+  rows / DRI segments).
+- `threads > 1`: explicit budget. Library may use fewer if work
+  doesn't amortize.
+
+**No globals, no env vars, no implicit auto-detect.** Caller decides
+every call.
+
+Current implementation: parallel IDCT + color conversion in
+`baseline.zig`. Progressive and lossless are still single-threaded
+(modest images; parallel entropy decode is Amdahl-bound without DRI).
+
+### Test fidelity threshold
+
+- **Baseline / Progressive**: max delta ≤ 2 LSB against libjpeg-turbo
+  wrapper output (sub-pixel rounding from IDCT/upsampling).
+- **Lossless (any precision)**: byte-exact reconstruction
+  (`expectEqualSlices(u8, ...)`). No rounding in lossless by
+  definition.
+
+### Float ban applies to all numerical paths
+
+The progressive YCbCr was the last float in the decode pipeline. All
+current cleanroom paths use integer/fixed-point only. **Do not
+reintroduce floats** unless an algorithm genuinely needs them
+(transcendentals etc.) and the rounding semantics are non-load-bearing.
+
+---
+
+## Diagnostic tooling (in `scratch/`, gitignored)
+
+| Tool | Purpose |
+|------|---------|
+| `cleanroom-diff` | Walk a directory of JPEGs, classify each as CLEAN-OK / CLEAN-DIV / WRAP-ONLY / CLEAN-ERR / WRAP-ERR. Calls `internal.cleanroomDecode` (baseline). |
+| `diag-one` | Per-file: try `progressiveDecode` and `wrapperDecode`, report max delta. |
+| `pixel-diff` | Per-pixel diff between cleanroom (baseline OR progressive) and wrapper. Outputs histogram + 8×8-cell ASCII heatmap. |
+| `dump_coefs_jpegz.zig` | Dump our progressive's natural-order quantized coefs. Calls `internal.progressiveDecodeAndDumpCoefs`. |
+| `dump_coefs_libjpeg.c` | Same format using libjpeg-turbo's `jpeg_read_coefficients()`. |
+| `scan_walk_diff.py` | Truncate file after each SOS+EOI, diff both decoders at each truncation. Identifies the first diverging scan. Found the M2.2e ZRL bug. |
+| `bench-one` | Single-file decode timing (cleanroom vs wrapper) with hyperfine semantics. |
+| `libjpeg_turbo_instr/` | Vendored libjpeg-turbo 3.1.1 source for invasive instrumentation if scan-walk isn't enough. Not needed since M2.2e shipped. |
+
+Build any of them: `nix develop -c zig build <name>`.
+
+`PROG_DEBUG: bool` in `src/decode/progressive.zig` flips
+comptime-conditional `dbg()` printf statements throughout the
+progressive decoder. Default false; flip to true for tracing.
+
+---
+
+## Recent commit history (most-relevant first)
+
+```
+edce8d6  docs: NEXT_STEPS — SOF3 cleanroom full coverage
+649c0ae  M2.8: lossless 12/14/16-bit precision
+d3fab0c  M2.7: lossless + DRI
+9d2516e  M2.6: lossless 3-component RGB
+ac3b787  docs: NEXT_STEPS — SOF2+DRI row
+64fdb34  M2.5: progressive + DRI
+7372141  docs: NEXT_STEPS — M2.3/M2.4 completion
+a296a93  M2.4 hardening: 7-predictor lossless
+2b70d1e  M2.4: lossless (SOF3) 8-bit grayscale
+bebc28f  M2.3: SOF1 extended sequential 8-bit
+f0a6d98  docs: NEXT_STEPS — M2.2 complete
+bcd39de  M2.2: wire progressive into dispatch
+96ddde7  M2.2e: progressive AC refine ZRL break
+c1b7f32  M2.2d: progressive xi/yi single-comp iteration
+1cd54ed  M2.2c: progressive IJG fancy upsampling
+26dcc15  M2.2b: progressive YCbCr fixed-point
+dbb9e97  M2.2a: progressive marker + insufficient_data + ZRL
+```
+
+For the broader history including M2.1c baseline corpus fixes, run
+`git log yolo --oneline | head -60`.
+
+---
 
 ## The 100%-coverage notification trigger
 
-Peter set this trigger in the M2.1d session:
+Peter set this trigger during M2.1d:
 
 > "when you get basically 100% coverage of all jpeg variants, please
 > let tiffz and validate know after tests are passing and CI passes"
 
-**Trigger fires when:** every variant in the matrix above has
-"Cleanroom: ✅" *and* `./test` + Garnix CI both pass *and* corpus
-runs cleanly with cleanroom dispatch only (wrapper retired from the
-default path). At that point notify both projects via LLMsend. The
-relevant inboxes:
+**Trigger fires when:** every variant in the matrix above (modulo
+deferred differential SOF5–7 and the explicit "out of scope" rows)
+has Cleanroom: ✅, AND `./test` + Garnix CI both green, AND corpus
+runs cleanly with cleanroom-only dispatch.
 
+**Natural intermediate trigger:** "All of T.81 cleanroom complete" =
+gap-closers A1, B1 done; B2 (JPEG-LS) and B3 (JP2) deferred to their
+own milestones. Ask Peter when that lands whether to fire then or
+hold for full T.87 + T.800 cleanroom.
+
+**Notification inboxes** (use the `LLMsend` skill):
 - `~/Documents-CloudManaged/validate/inbox/`
 - `~/Documents-CloudManaged/tiffz/inbox/`
 
-A natural cut-off short of full T.81+T.87+T.800 100% coverage is
-"all of T.81 cleanroom complete" (gap-closers 1, 3, 4 done; 5 and
-6 deferred to their own milestones). That's a reasonable
-intermediate notification trigger if Peter agrees.
+---
 
-## Reference: today's session arc, in numbers
+## Pickup tasks reference
 
-Started: 432 CLEAN-OK / 2823 CLEAN-ERR (10.5% pixel-perfect)
-Ended:  3837 CLEAN-OK / 0 CLEAN-DIV / 11 CLEAN-ERR (99.7% pixel-perfect)
-Commits on `yolo`:
-- `b08794b` RST seekToMarker
-- `5269b07` i32 coefficient pipeline + Huffman short-buffer
-- `04c6146` chore: gitignore .claude
-- `557569b` THE BUG: Huffman zero-count gap shift
-- `17e70d3` IJG fancy chroma upsampling
-- `644ad58` extraneous-bytes-before-marker tolerance + non-interleaved scan
-- `54463e4` islow IDCT + fixed-point YCbCr→RGB
-- `91cea19` PLAN.md update
-- `7d4d113` internal.progressiveDecode export
-- `f685ec3` build: bench-one harness
-- `8657dbc` M2.1d: threading API surface
-- `2f863a4` M2.1d: parallel IDCT + color conversion + Garnix badge
+```
+#1  [completed] Wire progressive cleanroom into dispatch (M2.2)
+#2  [pending]   DRI parallel fast path (performance, gap-closer #2)
+#3  [completed] Extended sequential SOF1 (M2.3)
+#4  [pending]   Arithmetic coding SOF9/10/11 (gap-closer #4 / B1)
+#5  [pending]   JPEG-LS T.87 cleanroom (gap-closer #5 / B2)
+#6  [completed] Lossless SOF3 cleanroom (M2.4+M2.6+M2.7+M2.8)
+#7  [pending]   validate(...) emits warn-level findings for libjpeg
+                tolerances (architecture decision; see above)
+```
 
-Cross-project messages (delivered, not blocking):
-- validate: threading convention adopted (with 3 minor refinements)
-- tiffz: shared convention recommended for M6+
-- validate's reply: confirmed std.Thread.Pool as v1; noted misleading
-  "work-stealing" comment in their `memory_budget.zig` they'll fix
+If the task list looks different at pickup, `TaskList` will tell you.
 
-## Pickup checklist for the next session
+---
 
-1. `git pull` to confirm `yolo` HEAD = `2f863a4` or later.
-2. `nix develop --command codescan status` — make sure the index is
-   alive before search-heavy work.
-3. `./test` — green check before touching anything.
-4. `./zig-out/bin/cleanroom-diff /Volumes/Fileserver/clips-image/` —
-   confirm the corpus baseline is still 3837/0/277/11.
-5. Pick a gap-closer above. **Recommend starting with progressive
-   wiring (#1)** — likely the easiest big win given today's Huffman
-   fix probably also fixed progressive.
-6. When the trigger conditions for the 100%-variants notification
-   are met, send via LLMsend per the inboxes listed above.
+## Pickup recommendation (short version)
+
+Pick **one** of these, in priority order. Each follows strict TDD:
+write the failing test first, watch it fail, implement minimal code,
+verify GREEN, commit.
+
+1. **A1 — SOF1 12-bit** (medium-large). Reuses lossless's u16 output
+   pattern; the new piece is the 12-bit IDCT. Closes the last SOF1 row.
+2. **#7 — validate(...) warns** (medium). Architecture work that
+   doesn't add a new variant but matters for downstream consumers.
+3. **A2 — SOF3 non-1×1 sampling** (small). Tiny matrix row to close;
+   good warm-up.
+4. **B1 — Arithmetic SOF9** (large). Big lift but completes T.81.
+
+Or wait for Peter's direction — he may have a preference based on
+what `validate`/`tiffz` need next.
+
+---
+
+## Memory directory
+
+The next LLM session inherits these auto-memory files:
+
+- `MEMORY.md` (index)
+- `reference_sibling_tmux_inbox_notify.md`
+- `project_peter_jpeg_corpus.md`
+- `feedback_prefer_integer_fixed_point.md`
+- `feedback_validation_warns_not_silent_tolerance.md`
+
+Read `MEMORY.md` for the one-line summaries on session start.
+
+---
+
+**End of handoff.** Keep this doc updated after each milestone — at
+minimum, edit the variant matrix and `git log` block. The format is
+designed to be skim-able in 60 seconds.
