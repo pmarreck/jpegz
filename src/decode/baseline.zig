@@ -45,7 +45,7 @@ inline fn fail(comptime tag: []const u8, err: errors.DecodeError) errors.DecodeE
 /// JPEG zig-zag scan order (T.81 Figure A.6). Maps zig-zag index
 /// (the order in which AC coefficients arrive in the entropy stream)
 /// to natural (row-major) order in the 8×8 block.
-const ZIGZAG: [64]u8 = .{
+pub const ZIGZAG: [64]u8 = .{
     0,  1,  8,  16, 9,  2,  3,  10,
     17, 24, 32, 25, 18, 11, 4,  5,
     12, 19, 26, 33, 40, 48, 41, 34,
@@ -56,7 +56,7 @@ const ZIGZAG: [64]u8 = .{
     53, 60, 61, 54, 47, 55, 62, 63,
 };
 
-const ComponentInfo = struct {
+pub const ComponentInfo = struct {
     /// Component selector (Ci in T.81 SOF — usually 1 for Y, 2 for Cb, 3 for Cr).
     id: u8,
     /// Sampling factors. We only support 1×1 in v1.
@@ -69,7 +69,7 @@ const ComponentInfo = struct {
     ac_table: u8 = 0,
 };
 
-const FrameInfo = struct {
+pub const FrameInfo = struct {
     precision: u8,
     height: u16,
     width: u16,
@@ -234,12 +234,12 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
     return error.TruncatedStream;
 }
 
-fn parseSegmentLength(data: []const u8, pos: usize) usize {
+pub fn parseSegmentLength(data: []const u8, pos: usize) usize {
     if (pos + 1 >= data.len) return 0;
     return (@as(usize, data[pos]) << 8) | data[pos + 1];
 }
 
-fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
+pub fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
     const seg_len = parseSegmentLength(data, pos);
     if (seg_len < 8 or pos + seg_len > data.len) return error.TruncatedStream;
     var fi: FrameInfo = undefined;
@@ -262,7 +262,7 @@ fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
     return fi;
 }
 
-fn parseDqt(
+pub fn parseDqt(
     data: []const u8,
     pos: usize,
     quant_tables: *[4]?[64]u16,
@@ -332,7 +332,7 @@ fn parseDht(
     }
 }
 
-fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!void {
+pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!void {
     const seg_len = parseSegmentLength(data, pos);
     if (seg_len < 6 or pos + seg_len > data.len) return error.TruncatedStream;
     const ns = data[pos + 2];
@@ -1086,7 +1086,7 @@ fn decodeBlockCoefficients(
 /// block_y_pixels). Pure transform — no entropy state, no DC predictor
 /// touch — so it's safe to call from a worker thread provided each call
 /// reads its own `coeffs` and writes a non-overlapping 8×8 plane region.
-fn transformBlockToPlane(
+pub fn transformBlockToPlane(
     coeffs: *const [64]i32,
     plane: []u8,
     plane_w: u32,
@@ -1261,7 +1261,7 @@ inline fn clampSampleI32(v: i32) u8 {
 /// Subsampled chroma is upsampled nearest-neighbor (good enough for
 /// v2; proper cosited / midpoint reconstruction is a future
 /// refinement when image-quality consumers ask).
-fn assembleOutput(
+pub fn assembleOutput(
     allocator: Allocator,
     frame: *const FrameInfo,
     channels: u8,

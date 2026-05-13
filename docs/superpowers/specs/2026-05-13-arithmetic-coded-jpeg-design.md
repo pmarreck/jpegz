@@ -1,6 +1,9 @@
 # Arithmetic-coded JPEG cleanroom (B1) — Design
 
-**Status:** Approved 2026-05-13. Implements B1 from `NEXT_STEPS.md`.
+**Status:** SOF9 cleanroom **shipped 2026-05-13** (session 2 — gray
++ RGB all 4 sampling factors, cleanroom-vs-wrapper ≤4 LSB / ≤2 LSB
+gray). SOF10 progressive deferred to a follow-on session. Approved
+2026-05-13. Implements B1 from `NEXT_STEPS.md`.
 **Scope:** SOF9 (extended sequential, arithmetic) and SOF10
 (progressive, arithmetic). Closes T.81 spec coverage for the
 Q-coder entropy path.

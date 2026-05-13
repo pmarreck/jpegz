@@ -210,8 +210,19 @@ pub fn decodeWithOptions(
         else => return err,
     }
 
+    // Try arithmetic-coded cleanroom (SOF9 sequential; SOF10/11
+    // fall through). Patents expired in early 2000s; libjpeg-turbo
+    // decodes them. B1 milestone — see arith_decode.zig.
+    const arith_decode = @import("decode/arith_decode.zig");
+    if (arith_decode.decode(allocator, data)) |img| {
+        return img;
+    } else |err| switch (err) {
+        error.NotImplemented => {},
+        else => return err,
+    }
+
     // Final: libjpeg-turbo wrapper handles everything jpegz hasn't
-    // cleanroomed yet (SOF1 12-bit, SOF3 12/16-bit, SOF9/10/11 + JPEG-LS).
+    // cleanroomed yet (SOF1 12-bit, SOF3 12/16-bit, SOF10/11 + JPEG-LS).
     // Wrapper currently ignores `options.threads` — libjpeg-turbo's
     // traditional API has no thread parameter.
     return wrapper.decode(allocator, data);

@@ -591,22 +591,50 @@ const fixture_arith_baseline_16x16_rgb_422 = @embedFile("fixtures/arith_baseline
 const fixture_arith_baseline_16x16_rgb_440 = @embedFile("fixtures/arith_baseline_16x16_rgb_440.jpg");
 const fixture_arith_baseline_8x8_gray = @embedFile("fixtures/arith_baseline_8x8_gray.jpg");
 
-test "B1 fixtures embed and parse via wrapper (placeholder pending SOF9 cleanroom)" {
-    // Sanity test: the 5 SOF9 fixtures exist, embed, and decode via
-    // the libjpeg-turbo wrapper. The real cleanroom-vs-wrapper test
-    // arrives with the binarization commit.
+test "B1: SOF9 arithmetic baseline cleanroom (gray + RGB at all sampling factors)" {
+    // Real cleanroom-vs-wrapper gate. Same tolerance shape as A3:
+    // ≤4 LSB for RGB (chroma upsampling amplifies sub-pixel rounding),
+    // ≤2 LSB for grayscale.
     const allocator = std.testing.allocator;
-    const all = [_][]const u8{
-        fixture_arith_baseline_16x16_rgb_444,
-        fixture_arith_baseline_16x16_rgb_420,
-        fixture_arith_baseline_16x16_rgb_422,
-        fixture_arith_baseline_16x16_rgb_440,
-        fixture_arith_baseline_8x8_gray,
+    const RgbCase = struct { data: []const u8 };
+    const rgb_cases = [_]RgbCase{
+        .{ .data = fixture_arith_baseline_16x16_rgb_444 },
+        .{ .data = fixture_arith_baseline_16x16_rgb_420 },
+        .{ .data = fixture_arith_baseline_16x16_rgb_422 },
+        .{ .data = fixture_arith_baseline_16x16_rgb_440 },
     };
-    inline for (all) |data| {
-        var wrapper = try jpegz.internal.wrapperDecode(allocator, data);
+    inline for (rgb_cases) |c| {
+        var cleanroom = try jpegz.internal.arithDecode(allocator, c.data);
+        defer cleanroom.deinit(allocator);
+        var wrapper = try jpegz.internal.wrapperDecode(allocator, c.data);
         defer wrapper.deinit(allocator);
-        try std.testing.expectEqual(@as(u8, 8), wrapper.bits_per_sample);
+        try std.testing.expectEqual(@as(u8, 8), cleanroom.bits_per_sample);
+        try std.testing.expectEqual(@as(u8, 3), cleanroom.channels);
+        try std.testing.expectEqual(@as(u32, 16), cleanroom.width);
+        try std.testing.expectEqual(@as(u32, 16), cleanroom.height);
+        try std.testing.expectEqual(jpegz.PixelLayout.rgb, cleanroom.layout);
+        try std.testing.expectEqual(wrapper.pixels.len, cleanroom.pixels.len);
+        var max_delta: u8 = 0;
+        for (cleanroom.pixels, wrapper.pixels) |a, b| {
+            const d: u8 = @intCast(@abs(@as(i32, a) - @as(i32, b)));
+            if (d > max_delta) max_delta = d;
+        }
+        try std.testing.expect(max_delta <= 4);
+    }
+    // Grayscale: no chroma upsample, no color conversion → tighter ≤2.
+    {
+        var cleanroom = try jpegz.internal.arithDecode(allocator, fixture_arith_baseline_8x8_gray);
+        defer cleanroom.deinit(allocator);
+        var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_arith_baseline_8x8_gray);
+        defer wrapper.deinit(allocator);
+        try std.testing.expectEqual(@as(u8, 1), cleanroom.channels);
+        try std.testing.expectEqual(jpegz.PixelLayout.grayscale, cleanroom.layout);
+        var max_delta: u8 = 0;
+        for (cleanroom.pixels, wrapper.pixels) |a, b| {
+            const d: u8 = @intCast(@abs(@as(i32, a) - @as(i32, b)));
+            if (d > max_delta) max_delta = d;
+        }
+        try std.testing.expect(max_delta <= 2);
     }
 }
 
