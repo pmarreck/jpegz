@@ -46,7 +46,7 @@ failures into more code.
 | Arithmetic-coded (SOF9–11)        | F §F.1.4      | ❌           | ✅      | almost zero modern use               |
 | JPEG-LS (T.87)                    | T.87          | ❌           | charls? | medical imaging niche                |
 | JPEG 2000 (T.800)                 | T.800         | ❌           | ✅ openjpeg | separate ABI namespace            |
-| 12-bit Progressive (SOF2)         | G             | ❌           | ✅      | rare; needs 12-bit DCT pipeline      |
+| 12-bit Progressive (SOF2)         | G             | ✅ A3        | —       | gray + RGB all sampling factors      |
 
 ### Test counts
 - **96 unit tests passing** (32 in `tests/unit/decode.zig`, plus inline
@@ -394,11 +394,17 @@ verify GREEN, commit.
    encoder produces non-1×1 lossless JPEGs. See
    `docs/superpowers/specs/2026-05-13-sof3-nonsamp-design.md`
    for full rationale and "what to do if you want to revisit".
-2. **A3 — 12-bit progressive (SOF2 P=12)** (large). Same precision
-   pipeline as A1 but in the progressive scan context. Needs
-   per-component u16 plane storage in `progressive.zig`, comptime-P
-   on the existing progressive entropy decoder, and the new 12-bit
-   IDCT from A1 to be wired into the progressive coefficient path.
+2. **A3 — 12-bit progressive (SOF2 P=12)** — ✅ **shipped 2026-05-13**.
+   Hybrid factor: Phase 1 (multi-scan entropy decode) unchanged
+   because already precision-agnostic; Phase 2 (`assembleProgressive`)
+   refactored to `assembleProgressiveGeneric(comptime P, ...)` reusing
+   the A1 IDCT (`idct8x8Generic`) and A1 Part B color helpers
+   (`ycbcrRowToRgb12`, `fancyUpsample12`). All 4 sampling factors +
+   grayscale covered. Spec at
+   `docs/superpowers/specs/2026-05-13-sof2-12bit-progressive-design.md`.
+
+3. **B1 — Arithmetic SOF9/10/11** (large). Completes T.81 spec
+   coverage. ~600 LOC Q-coder + ~400 LOC scaffolding. Two sessions.
 2. **#7 — validate(...) warns** (medium). Architecture work that
    doesn't add a new variant but matters for downstream consumers.
 3. **A2 — SOF3 non-1×1 sampling** (small). Tiny matrix row to close;
