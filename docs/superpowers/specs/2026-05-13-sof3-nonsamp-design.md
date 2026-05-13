@@ -1,6 +1,14 @@
-# SOF3 lossless non-1×1 chroma sampling (A2) — Design
+# SOF3 lossless non-1×1 chroma sampling (A2) — Design [DEFERRED]
 
-**Status:** Approved 2026-05-13. Implements A2 from `NEXT_STEPS.md`.
+**Status:** **DEFERRED 2026-05-13** after empirical investigation found
+the variant unproducible by any real-world encoder. See "Deferral
+rationale" at the bottom of this doc. Implementation is **not** in
+progress; this design is preserved for historical context and so a
+future LLM/contributor revisiting the variant can pick up where the
+investigation left off.
+
+**Originally:** Approved 2026-05-13 for implementation. Implements A2
+from `NEXT_STEPS.md`.
 **Scope:** SOF3 (lossless) JPEGs with at least one component having
 `(h_factor, v_factor) ≠ (1, 1)` — i.e. chroma subsampling in lossless
 mode (4:2:0, 4:2:2, 4:4:0, 4:1:1, etc.).
@@ -239,3 +247,65 @@ Each its own commit on `yolo`.
 - **Lossless integrity rationale**: documented in code comments per
   Peter's directive — synthesis would corrupt downstream
   validation/hash-integrity flows. (Peter, 2026-05-13)
+
+---
+
+## Deferral rationale (added 2026-05-13)
+
+After this spec was approved and the implementation work began,
+empirical investigation revealed that **non-1×1 lossless JPEGs are
+unproducible by any real-world encoder**:
+
+1. **cjpeg CLI** silently rewrites `-sample 2x2,1x1,1x1` (and any
+   non-1×1 layout) to `1x1,1x1,1x1` whenever `-lossless` is used.
+   Verified: byte-identical SOF3 markers in test runs.
+
+2. **libjpeg-turbo's compress API** also gates this — the hard gate
+   is at `jcmaster.c:755`, inside `jpeg_start_compress` itself:
+
+   ```c
+   /* Disable smoothing and subsampling in lossless mode, since those
+    * are lossy algorithms. */
+   if (cinfo->master->lossless) {
+     for (ci = 0; ci < num_components; ci++)
+       compptr->h_samp_factor = compptr->v_samp_factor = 1;
+   }
+   ```
+
+   Setting `comp_info[i].h_samp_factor` and `v_samp_factor` directly
+   *before* `jpeg_start_compress` is overridden by this loop. Bypass
+   would require patching libjpeg-turbo source.
+
+3. **libjpeg-turbo's decoder** does support non-1×1 lossless
+   (`jdlhuff.c` walks per-component `MCU_width × MCU_height`), but
+   that path is essentially untested against real data because no
+   encoder produces it.
+
+4. **No alternative encoder ecosystem**: virtually every JPEG library
+   in widespread use derives from IJG/libjpeg-turbo and inherits the
+   same gate. ImageMagick, Apple CGImage, Python imaging, etc. all
+   wrap libjpeg-turbo.
+
+5. **No real-world corpus impact**: DICOM lossless is always 1×1.
+   DNG raw lossless is always 1×1. The variant is spec-legal but
+   de-facto extinct.
+
+**Conclusion**: The "ground-truthable" gate from Peter's coverage
+principle effectively fails — there's no canonical reference output
+to assert against. Pursuing the variant via hand-crafted fixtures is
+possible but costs ~200 LOC of careful bitstream construction for
+genuinely zero-impact spec coverage. Better to invest the effort in
+matrix rows with real-world fixtures (A3 / B1 / B2).
+
+**Variant matrix row stays** "❌ deferred — no encoder emits this
+variant; revisit if a real-world fixture surfaces."
+
+**If a future implementer wants to revisit**: this design doc still
+holds. The fixture problem is the gate. Options to unblock:
+- Hand-craft a 2×2 lossless bitstream with non-1×1 sampling
+  (small image, manageable Huffman tables, byte-exact known input).
+- Patch the vendored libjpeg-turbo source to skip the `jcmaster.c:755`
+  loop and build a fixture-generator-only fork (only for fixture
+  generation; the unpatched libjpeg-turbo wrapper would still serve
+  as the decode-side ground truth).
+- Wait for a real-world non-1×1 lossless JPEG to surface (unlikely).

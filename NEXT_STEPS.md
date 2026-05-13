@@ -41,7 +41,7 @@ failures into more code.
 | Lossless (SOF3) 3-comp RGB        | H §H.1        | ✅ M2.6      | —       | 0 corpus; spec coverage              |
 | Lossless + DRI (SOF3+RST)         | H + F.2.1.3   | ✅ M2.7      | —       | 0 corpus; spec coverage              |
 | Lossless 12/14/16-bit             | H §H.1        | ✅ M2.8      | —       | DICOM/DNG; byte-perfect              |
-| Lossless w/ non-1×1 sampling      | H §H.1        | ❌           | ✅      | extremely rare; deferred             |
+| Lossless w/ non-1×1 sampling      | H §H.1        | ❌ DEFERRED  | partial | no encoder emits this — extinct      |
 | Differential variants (SOF5–7)    | H §H.2        | ❌           | ❌      | extremely rare; deferred             |
 | Arithmetic-coded (SOF9–11)        | F §F.1.4      | ❌           | ✅      | almost zero modern use               |
 | JPEG-LS (T.87)                    | T.87          | ❌           | charls? | medical imaging niche                |
@@ -388,10 +388,17 @@ Pick **one** of these, in priority order. Each follows strict TDD:
 write the failing test first, watch it fail, implement minimal code,
 verify GREEN, commit.
 
-1. **A2 — SOF3 non-1×1 sampling** (small). Tiny matrix row to close;
-   good warm-up. Lift the `(h_factor, v_factor) ≠ (1, 1)` rejection
-   in `src/decode/lossless.zig` and walk MCUs by H/V factors. Generate
-   a fixture via `cjpeg -lossless 1 -sample 2x2,1x1,1x1`.
+1. **A2 — SOF3 non-1×1 sampling** — **DEFERRED**. Empirical finding
+   (2026-05-13): libjpeg-turbo's encoder hard-gates lossless to 1×1
+   sampling at `jcmaster.c:755` (and so does its CLI). No real-world
+   encoder produces non-1×1 lossless JPEGs. See
+   `docs/superpowers/specs/2026-05-13-sof3-nonsamp-design.md`
+   for full rationale and "what to do if you want to revisit".
+2. **A3 — 12-bit progressive (SOF2 P=12)** (large). Same precision
+   pipeline as A1 but in the progressive scan context. Needs
+   per-component u16 plane storage in `progressive.zig`, comptime-P
+   on the existing progressive entropy decoder, and the new 12-bit
+   IDCT from A1 to be wired into the progressive coefficient path.
 2. **#7 — validate(...) warns** (medium). Architecture work that
    doesn't add a new variant but matters for downstream consumers.
 3. **A2 — SOF3 non-1×1 sampling** (small). Tiny matrix row to close;
