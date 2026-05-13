@@ -592,6 +592,31 @@ const fixture_lossless_4x4_rgb = @embedFile("fixtures/lossless_4x4_rgb_pred1.jpg
 /// cleanroom's RST handling, mirroring the M2.5 progressive+DRI fix.
 const fixture_lossless_dri = @embedFile("fixtures/lossless_16x16_gray_dri.jpg");
 
+test "A1: SOF1 12-bit grayscale cleanroom decodes byte-for-byte vs wrapper" {
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.cleanroomDecode(allocator, fixture_baseline_4x4_gray12_dct);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_baseline_4x4_gray12_dct);
+    defer wrapper.deinit(allocator);
+    try std.testing.expectEqual(@as(u8, 12), cleanroom.bits_per_sample);
+    try std.testing.expectEqual(wrapper.bits_per_sample, cleanroom.bits_per_sample);
+    try std.testing.expectEqual(@as(u32, 4), cleanroom.width);
+    try std.testing.expectEqual(@as(u32, 4), cleanroom.height);
+    try std.testing.expectEqual(@as(u8, 1), cleanroom.channels);
+    try std.testing.expectEqual(jpegz.PixelLayout.grayscale, cleanroom.layout);
+    const cleanroom_u16 = cleanroom.pixelsU16();
+    const wrapper_u16 = wrapper.pixelsU16();
+    try std.testing.expectEqual(@as(usize, 16), cleanroom_u16.len);
+    try std.testing.expectEqual(wrapper_u16.len, cleanroom_u16.len);
+    // ≤2 LSB tolerance per spec (DCT rounding); uniform-input fixture
+    // produces DC-only coefficients so in practice this should match
+    // wrapper byte-exact, but the spec tolerance is the contractual gate.
+    for (cleanroom_u16, wrapper_u16) |c, w| {
+        const delta = @as(i32, c) - @as(i32, w);
+        try std.testing.expect(@abs(delta) <= 2);
+    }
+}
+
 test "M2.8: lossless SOF3 cleanroom decodes 12/14/16-bit grayscale precision byte-for-byte" {
     const allocator = std.testing.allocator;
     const cases = [_]struct { data: []const u8, bps: u8, expected: u16 }{

@@ -1,24 +1,33 @@
-//! Inverse 8×8 DCT — two implementations:
+//! Inverse 8×8 DCT — three flavors:
 //!
 //!   1. `idct8x8_float` — direct f64 implementation per T.81 Annex A.
 //!      Slow but obviously correct; kept as an oracle for tests.
 //!
-//!   2. `idct8x8` (default) — libjpeg-turbo "islow" integer IDCT
-//!      (Loeffler/Ligtenberg/Moschytz with 13-bit fixed-point
-//!      constants). Matches libjpeg-turbo's `jpeg_idct_islow`
-//!      byte-for-byte so cleanroom output is binary-identical with
-//!      libjpeg's default IDCT path. Source-of-truth: jidctint.c.
+//!   2. `idct8x8` — 8-bit thin wrapper over `idct8x8Generic(8, ...)`.
+//!      Public stable API used by SOF0/SOF1 8-bit cleanroom. Output
+//!      is byte-identical to libjpeg-turbo's `jpeg_idct_islow`.
 //!
-//! Output ordering for both:
+//!   3. `idct8x8_12` — 12-bit thin wrapper over `idct8x8Generic(12, ...)`.
+//!      Used by SOF1 12-bit cleanroom (A1 milestone). Output is
+//!      u16 host-endian, range [0, 4095] per T.81 §A.3.1.
+//!
+//! The generic core is libjpeg-turbo "islow" integer IDCT
+//! (Loeffler/Ligtenberg/Moschytz with 13-bit fixed-point constants).
+//! Accumulator widens from i32 → i64 at P=12 because dequantized
+//! 12-bit DC × 16-bit quant entries can reach ~2^31, which the
+//! column-pass `<< PASS1_BITS` shift would otherwise overflow.
+//! Source-of-truth: jidctint.c (8-bit) and jidct12.c (12-bit).
+//!
+//! Output ordering for all flavors:
 //!   - Input: 8×8 block in zig-zag-unsorted natural order, signed
 //!     coefficients (DCT post-dequantization). Indexed [v][u]
 //!     where v = vertical freq, u = horizontal freq.
-//!   - Output: 8×8 spatial block, level-shifted to 0..255, indexed
-//!     [y][x]. Per T.81 §A.3.1, baseline JPEG samples are unsigned
-//!     8-bit so we add 128 (the "level shift") before clamping.
+//!   - Output: 8×8 spatial block, level-shifted to [0, 2^P-1],
+//!     indexed [y][x]. The level shift +2^(P-1) is added before
+//!     clamping per T.81 §A.3.1 (samples are unsigned in T.81).
 //!
 //! Reference: ITU-T T.81 §A.3.3 (IDCT), §A.3.1 (level shift);
-//! libjpeg-turbo jidctint.c (islow algorithm).
+//! libjpeg-turbo jidctint.c / jidct12.c (islow algorithm).
 
 const std = @import("std");
 
@@ -49,41 +58,82 @@ const FIX_2_053119869: i32 = 16819;
 const FIX_2_562915447: i32 = 20995;
 const FIX_3_072711026: i32 = 25172;
 
-inline fn descale(x: i32, n: u5) i32 {
+inline fn descale(comptime T: type, x: T, comptime n: comptime_int) T {
     // Symmetric rounding right-shift: add 0.5 ULP before shifting.
-    return (x + (@as(i32, 1) << (n - 1))) >> n;
+    return (x + (@as(T, 1) << (n - 1))) >> n;
 }
 
-inline fn rangeLimit(v: i32) u8 {
+inline fn rangeLimit(comptime SampleT: type, comptime max: comptime_int, v: anytype) SampleT {
     if (v < 0) return 0;
-    if (v > 255) return 255;
+    if (v > max) return @intCast(max);
     return @intCast(v);
 }
 
-/// libjpeg-turbo's `jpeg_idct_islow` reproduced bit-for-bit. Operates on
-/// natural-row-major coefficients (post-dequant) and produces level-shifted
-/// 8-bit samples. This is the default cleanroom IDCT — its rounding ties
-/// match libjpeg's so cleanroom decode is byte-identical to libjpeg-turbo.
+/// Return the host integer type used for a P-bit DCT IDCT output sample.
+/// P=8 → u8, P=12 → u16.
+pub fn Sample(comptime P: u8) type {
+    return switch (P) {
+        8 => u8,
+        12 => u16,
+        else => @compileError("idct: unsupported precision (only 8 or 12)"),
+    };
+}
+
+/// Return the host integer type used for intermediate accumulators at
+/// precision P. P=8 keeps i32 (preserves libjpeg-turbo byte-identical
+/// output). P=12 widens to i64 to absorb dequantized 12-bit DC × 16-bit
+/// quant table entries that can reach ~2^31 before the column-pass shift.
+fn Accumulator(comptime P: u8) type {
+    return switch (P) {
+        8 => i32,
+        12 => i64,
+        else => @compileError("idct: unsupported precision (only 8 or 12)"),
+    };
+}
+
+/// 8-bit thin wrapper around the comptime-generic IDCT. Public stable
+/// API; cleanroom 8-bit callers use this. Byte-identical to
+/// libjpeg-turbo's `jpeg_idct_islow`.
 pub fn idct8x8(coeffs: *const [64]i32, out: *[64]u8) void {
-    var workspace: [64]i32 = undefined;
+    idct8x8Generic(8, coeffs, out);
+}
+
+/// 12-bit thin wrapper. Cleanroom SOF1@P=12 (A1) calls this. Output is
+/// u16 host-endian, range [0, 4095].
+pub fn idct8x8_12(coeffs: *const [64]i32, out: *[64]u16) void {
+    idct8x8Generic(12, coeffs, out);
+}
+
+/// libjpeg-turbo's `jpeg_idct_islow` reproduced bit-for-bit, generic
+/// over precision P ∈ {8, 12}. Operates on natural-row-major
+/// coefficients (post-dequant) and produces level-shifted P-bit samples.
+/// Same algorithm topology, fixed-point constants, and rounding ties as
+/// libjpeg — at P=8 the output matches `jpeg_idct_islow` byte-for-byte;
+/// at P=12 it matches `jpeg_idct_12_islow`.
+pub fn idct8x8Generic(comptime P: u8, coeffs: *const [64]i32, out: *[64]Sample(P)) void {
+    const Acc = Accumulator(P);
+    const SampleT = Sample(P);
+    const level_shift: comptime_int = 1 << (P - 1); // 128 for P=8, 2048 for P=12
+    const sample_max: comptime_int = (1 << P) - 1; // 255 for P=8, 4095 for P=12
+    var workspace: [64]Acc = undefined;
 
     // ── Column pass: process 8 columns of the 8×8 input ──────────
     var ctr: usize = 0;
     while (ctr < 8) : (ctr += 1) {
-        const c0: i32 = coeffs[0 * 8 + ctr];
-        const c1: i32 = coeffs[1 * 8 + ctr];
-        const c2: i32 = coeffs[2 * 8 + ctr];
-        const c3: i32 = coeffs[3 * 8 + ctr];
-        const c4: i32 = coeffs[4 * 8 + ctr];
-        const c5: i32 = coeffs[5 * 8 + ctr];
-        const c6: i32 = coeffs[6 * 8 + ctr];
-        const c7: i32 = coeffs[7 * 8 + ctr];
+        const c0: Acc = @as(Acc, coeffs[0 * 8 + ctr]);
+        const c1: Acc = @as(Acc, coeffs[1 * 8 + ctr]);
+        const c2: Acc = @as(Acc, coeffs[2 * 8 + ctr]);
+        const c3: Acc = @as(Acc, coeffs[3 * 8 + ctr]);
+        const c4: Acc = @as(Acc, coeffs[4 * 8 + ctr]);
+        const c5: Acc = @as(Acc, coeffs[5 * 8 + ctr]);
+        const c6: Acc = @as(Acc, coeffs[6 * 8 + ctr]);
+        const c7: Acc = @as(Acc, coeffs[7 * 8 + ctr]);
 
         // Shortcut: if AC terms are all zero, the column is just the DC
         // smeared up by PASS1_BITS. libjpeg uses this to make all-DC
         // blocks (very common in flat areas) much faster.
         if (c1 == 0 and c2 == 0 and c3 == 0 and c4 == 0 and c5 == 0 and c6 == 0 and c7 == 0) {
-            const dcval: i32 = c0 << PASS1_BITS;
+            const dcval: Acc = c0 << PASS1_BITS;
             workspace[0 * 8 + ctr] = dcval;
             workspace[1 * 8 + ctr] = dcval;
             workspace[2 * 8 + ctr] = dcval;
@@ -96,33 +146,33 @@ pub fn idct8x8(coeffs: *const [64]i32, out: *[64]u8) void {
         }
 
         // Even part: rotation by π/4 followed by butterflies.
-        var z2: i32 = c2;
-        var z3: i32 = c6;
-        var z1: i32 = (z2 + z3) * FIX_0_541196100;
-        const tmp2: i32 = z1 + z3 * -FIX_1_847759065;
-        const tmp3: i32 = z1 + z2 * FIX_0_765366865;
+        var z2: Acc = c2;
+        var z3: Acc = c6;
+        var z1: Acc = (z2 + z3) * FIX_0_541196100;
+        const tmp2: Acc = z1 + z3 * -FIX_1_847759065;
+        const tmp3: Acc = z1 + z2 * FIX_0_765366865;
 
         z2 = c0;
         z3 = c4;
-        const tmp0: i32 = (z2 + z3) << CONST_BITS;
-        const tmp1: i32 = (z2 - z3) << CONST_BITS;
+        const tmp0: Acc = (z2 + z3) << CONST_BITS;
+        const tmp1: Acc = (z2 - z3) << CONST_BITS;
 
-        const tmp10: i32 = tmp0 + tmp3;
-        const tmp13: i32 = tmp0 - tmp3;
-        const tmp11: i32 = tmp1 + tmp2;
-        const tmp12: i32 = tmp1 - tmp2;
+        const tmp10: Acc = tmp0 + tmp3;
+        const tmp13: Acc = tmp0 - tmp3;
+        const tmp11: Acc = tmp1 + tmp2;
+        const tmp12: Acc = tmp1 - tmp2;
 
         // Odd part: butterflies + rotations to extract odd terms.
-        var ot0: i32 = c7;
-        var ot1: i32 = c5;
-        var ot2: i32 = c3;
-        var ot3: i32 = c1;
+        var ot0: Acc = c7;
+        var ot1: Acc = c5;
+        var ot2: Acc = c3;
+        var ot3: Acc = c1;
 
         z1 = ot0 + ot3;
         z2 = ot1 + ot2;
         z3 = ot0 + ot2;
-        var z4: i32 = ot1 + ot3;
-        const z5: i32 = (z3 + z4) * FIX_1_175875602;
+        var z4: Acc = ot1 + ot3;
+        const z5: Acc = (z3 + z4) * FIX_1_175875602;
 
         ot0 = ot0 * FIX_0_298631336;
         ot1 = ot1 * FIX_2_053119869;
@@ -142,37 +192,37 @@ pub fn idct8x8(coeffs: *const [64]i32, out: *[64]u8) void {
         ot3 += z1 + z4;
 
         // Final butterflies + rounding right-shift.
-        const shift: u5 = CONST_BITS - PASS1_BITS;
-        workspace[0 * 8 + ctr] = descale(tmp10 + ot3, shift);
-        workspace[7 * 8 + ctr] = descale(tmp10 - ot3, shift);
-        workspace[1 * 8 + ctr] = descale(tmp11 + ot2, shift);
-        workspace[6 * 8 + ctr] = descale(tmp11 - ot2, shift);
-        workspace[2 * 8 + ctr] = descale(tmp12 + ot1, shift);
-        workspace[5 * 8 + ctr] = descale(tmp12 - ot1, shift);
-        workspace[3 * 8 + ctr] = descale(tmp13 + ot0, shift);
-        workspace[4 * 8 + ctr] = descale(tmp13 - ot0, shift);
+        const shift: comptime_int = CONST_BITS - PASS1_BITS;
+        workspace[0 * 8 + ctr] = descale(Acc, tmp10 + ot3, shift);
+        workspace[7 * 8 + ctr] = descale(Acc, tmp10 - ot3, shift);
+        workspace[1 * 8 + ctr] = descale(Acc, tmp11 + ot2, shift);
+        workspace[6 * 8 + ctr] = descale(Acc, tmp11 - ot2, shift);
+        workspace[2 * 8 + ctr] = descale(Acc, tmp12 + ot1, shift);
+        workspace[5 * 8 + ctr] = descale(Acc, tmp12 - ot1, shift);
+        workspace[3 * 8 + ctr] = descale(Acc, tmp13 + ot0, shift);
+        workspace[4 * 8 + ctr] = descale(Acc, tmp13 - ot0, shift);
     }
 
     // ── Row pass: process 8 rows of the workspace ────────────────
     // Final shift is CONST_BITS + PASS1_BITS + 3 to absorb the 8× row
-    // scale; level-shift +128 is added before rounding so the same
+    // scale; level-shift +2^(P-1) is added before rounding so the same
     // descale handles it (libjpeg's identical trick).
     var row: usize = 0;
     while (row < 8) : (row += 1) {
         const base: usize = row * 8;
-        const c0: i32 = workspace[base + 0];
-        const c1: i32 = workspace[base + 1];
-        const c2: i32 = workspace[base + 2];
-        const c3: i32 = workspace[base + 3];
-        const c4: i32 = workspace[base + 4];
-        const c5: i32 = workspace[base + 5];
-        const c6: i32 = workspace[base + 6];
-        const c7: i32 = workspace[base + 7];
+        const c0: Acc = workspace[base + 0];
+        const c1: Acc = workspace[base + 1];
+        const c2: Acc = workspace[base + 2];
+        const c3: Acc = workspace[base + 3];
+        const c4: Acc = workspace[base + 4];
+        const c5: Acc = workspace[base + 5];
+        const c6: Acc = workspace[base + 6];
+        const c7: Acc = workspace[base + 7];
 
         if (c1 == 0 and c2 == 0 and c3 == 0 and c4 == 0 and c5 == 0 and c6 == 0 and c7 == 0) {
             // Flat row: DC only. Result = (DC + level-shift round) >> shift.
-            const dcval: i32 = descale(c0, PASS1_BITS + 3) + 128;
-            const v: u8 = rangeLimit(dcval);
+            const dcval: Acc = descale(Acc, c0, PASS1_BITS + 3) + level_shift;
+            const v: SampleT = rangeLimit(SampleT, sample_max, dcval);
             out[base + 0] = v;
             out[base + 1] = v;
             out[base + 2] = v;
@@ -184,32 +234,32 @@ pub fn idct8x8(coeffs: *const [64]i32, out: *[64]u8) void {
             continue;
         }
 
-        var z2: i32 = c2;
-        var z3: i32 = c6;
-        var z1: i32 = (z2 + z3) * FIX_0_541196100;
-        const tmp2: i32 = z1 + z3 * -FIX_1_847759065;
-        const tmp3: i32 = z1 + z2 * FIX_0_765366865;
+        var z2: Acc = c2;
+        var z3: Acc = c6;
+        var z1: Acc = (z2 + z3) * FIX_0_541196100;
+        const tmp2: Acc = z1 + z3 * -FIX_1_847759065;
+        const tmp3: Acc = z1 + z2 * FIX_0_765366865;
 
         z2 = c0;
         z3 = c4;
-        const tmp0: i32 = (z2 + z3) << CONST_BITS;
-        const tmp1: i32 = (z2 - z3) << CONST_BITS;
+        const tmp0: Acc = (z2 + z3) << CONST_BITS;
+        const tmp1: Acc = (z2 - z3) << CONST_BITS;
 
-        const tmp10: i32 = tmp0 + tmp3;
-        const tmp13: i32 = tmp0 - tmp3;
-        const tmp11: i32 = tmp1 + tmp2;
-        const tmp12: i32 = tmp1 - tmp2;
+        const tmp10: Acc = tmp0 + tmp3;
+        const tmp13: Acc = tmp0 - tmp3;
+        const tmp11: Acc = tmp1 + tmp2;
+        const tmp12: Acc = tmp1 - tmp2;
 
-        var ot0: i32 = c7;
-        var ot1: i32 = c5;
-        var ot2: i32 = c3;
-        var ot3: i32 = c1;
+        var ot0: Acc = c7;
+        var ot1: Acc = c5;
+        var ot2: Acc = c3;
+        var ot3: Acc = c1;
 
         z1 = ot0 + ot3;
         z2 = ot1 + ot2;
         z3 = ot0 + ot2;
-        var z4: i32 = ot1 + ot3;
-        const z5: i32 = (z3 + z4) * FIX_1_175875602;
+        var z4: Acc = ot1 + ot3;
+        const z5: Acc = (z3 + z4) * FIX_1_175875602;
 
         ot0 = ot0 * FIX_0_298631336;
         ot1 = ot1 * FIX_2_053119869;
@@ -228,15 +278,15 @@ pub fn idct8x8(coeffs: *const [64]i32, out: *[64]u8) void {
         ot2 += z2 + z3;
         ot3 += z1 + z4;
 
-        const shift: u5 = CONST_BITS + PASS1_BITS + 3;
-        out[base + 0] = rangeLimit(descale(tmp10 + ot3, shift) + 128);
-        out[base + 7] = rangeLimit(descale(tmp10 - ot3, shift) + 128);
-        out[base + 1] = rangeLimit(descale(tmp11 + ot2, shift) + 128);
-        out[base + 6] = rangeLimit(descale(tmp11 - ot2, shift) + 128);
-        out[base + 2] = rangeLimit(descale(tmp12 + ot1, shift) + 128);
-        out[base + 5] = rangeLimit(descale(tmp12 - ot1, shift) + 128);
-        out[base + 3] = rangeLimit(descale(tmp13 + ot0, shift) + 128);
-        out[base + 4] = rangeLimit(descale(tmp13 - ot0, shift) + 128);
+        const shift: comptime_int = CONST_BITS + PASS1_BITS + 3;
+        out[base + 0] = rangeLimit(SampleT, sample_max, descale(Acc, tmp10 + ot3, shift) + level_shift);
+        out[base + 7] = rangeLimit(SampleT, sample_max, descale(Acc, tmp10 - ot3, shift) + level_shift);
+        out[base + 1] = rangeLimit(SampleT, sample_max, descale(Acc, tmp11 + ot2, shift) + level_shift);
+        out[base + 6] = rangeLimit(SampleT, sample_max, descale(Acc, tmp11 - ot2, shift) + level_shift);
+        out[base + 2] = rangeLimit(SampleT, sample_max, descale(Acc, tmp12 + ot1, shift) + level_shift);
+        out[base + 5] = rangeLimit(SampleT, sample_max, descale(Acc, tmp12 - ot1, shift) + level_shift);
+        out[base + 3] = rangeLimit(SampleT, sample_max, descale(Acc, tmp13 + ot0, shift) + level_shift);
+        out[base + 4] = rangeLimit(SampleT, sample_max, descale(Acc, tmp13 - ot0, shift) + level_shift);
     }
 }
 
@@ -334,4 +384,46 @@ test "idct8x8 clamps to 0..255" {
     coeffs[0] = -4096;
     idct8x8(&coeffs, &out);
     for (out) |s| try std.testing.expectEqual(@as(u8, 0), s);
+}
+
+// ── Precision-parametric tests (P ∈ {8, 12}) ────────────────────────
+
+test "idct8x8Generic all-zero coefficients yield uniform level-shift at every P" {
+    inline for (.{ 8, 12 }) |P| {
+        const coeffs = [_]i32{0} ** 64;
+        var out: [64]Sample(P) = undefined;
+        idct8x8Generic(P, &coeffs, &out);
+        const expected: Sample(P) = 1 << (P - 1);
+        for (out) |s| try std.testing.expectEqual(expected, s);
+    }
+}
+
+test "idct8x8Generic DC-only positive amplitude yields uniform brighter at every P" {
+    inline for (.{ 8, 12 }) |P| {
+        var coeffs = [_]i32{0} ** 64;
+        coeffs[0] = 256; // DC coefficient
+        var out: [64]Sample(P) = undefined;
+        idct8x8Generic(P, &coeffs, &out);
+        // Formula at every P: NORM[0]² × DC × 0.25 + level_shift
+        //   = (1/√2)² × 256 × 0.25 + 2^(P-1)
+        //   = 0.5 × 64 + 2^(P-1) = 32 + 2^(P-1)
+        const expected: Sample(P) = (1 << (P - 1)) + 32;
+        for (out) |s| try std.testing.expectEqual(expected, s);
+    }
+}
+
+test "idct8x8Generic clamps to [0, 2^P-1] at every P" {
+    inline for (.{ 8, 12 }) |P| {
+        var coeffs = [_]i32{0} ** 64;
+        // Saturate high: DC large enough to overflow even at P=12
+        coeffs[0] = 1 << 18;
+        var out: [64]Sample(P) = undefined;
+        idct8x8Generic(P, &coeffs, &out);
+        const max_sample: Sample(P) = (1 << P) - 1;
+        for (out) |s| try std.testing.expectEqual(max_sample, s);
+        // Saturate low.
+        coeffs[0] = -(@as(i32, 1) << 18);
+        idct8x8Generic(P, &coeffs, &out);
+        for (out) |s| try std.testing.expectEqual(@as(Sample(P), 0), s);
+    }
 }

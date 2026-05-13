@@ -147,10 +147,14 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
             0xC0, 0xC1 => { // SOF0 baseline DCT or SOF1 extended sequential DCT
                 // Per T.81 §A.4.2 / F.1.1: at 8-bit precision the SOF1
                 // bitstream is byte-identical to SOF0; only the marker
-                // byte differs. SOF1 12-bit precision needs the wrapper
-                // route until the cleanroom 12-bit pipeline lands.
+                // byte differs. At 12-bit precision SOF1 (extended
+                // sequential, T.81 §F.1.1) is supported only for
+                // 1-component grayscale at this milestone (A1); 3-comp
+                // 12-bit still falls through to the wrapper.
                 frame = try parseSof(data, pos);
-                if (frame.?.precision != 8) return fail("sof_precision_not_8", error.NotImplemented);
+                const p_ok = frame.?.precision == 8 or
+                    (frame.?.precision == 12 and frame.?.num_components == 1);
+                if (!p_ok) return fail("sof_precision_not_supported", error.NotImplemented);
                 if (frame.?.num_components != 1 and frame.?.num_components != 3)
                     return fail("sof_unsupported_ncomp", error.NotImplemented);
                 var i: usize = 0;
@@ -181,7 +185,19 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                 if (frame == null) return fail("sos_before_sof", error.InvalidMarker);
                 try parseSos(data, pos, &frame.?);
                 pos += parseSegmentLength(data, pos);
-                // Decode the entropy stream, get pixels.
+                // 12-bit grayscale (A1) routes to its own focused path.
+                // Everything else routes to the 8-bit pipeline.
+                if (frame.?.precision == 12 and frame.?.num_components == 1) {
+                    return try decodeScan12Gray(
+                        allocator,
+                        data[pos..],
+                        &frame.?,
+                        &quant_tables,
+                        &dc_tables,
+                        &ac_tables,
+                        restart_interval,
+                    );
+                }
                 return try decodeScan(
                     allocator,
                     data[pos..],
@@ -491,6 +507,7 @@ fn decodeScan(
                             quant_tables,
                             &prev_dc,
                             slot,
+                            frame.precision,
                         );
                     }
                 }
@@ -596,6 +613,122 @@ fn decodeScan(
     return assembleOutput(allocator, frame, channels, width, height, max_h, max_v, plane_w, plane_h, &planes, pool_ptr);
 }
 
+/// SOF1 12-bit extended sequential, 1-component grayscale (A1 milestone).
+/// Focused path that reuses the precision-agnostic entropy decoder
+/// (`decodeBlockCoefficients`) and routes through the 12-bit IDCT
+/// (`idct.idct8x8_12`) into a `u16` plane, then byte-aliases that into
+/// the `Image.pixels` field per the host-endian u16 convention shared
+/// with the lossless cleanroom (M2.8).
+///
+/// Single-threaded: 12-bit photographs are rare; parallelism can be
+/// added by reusing `transformBlockRow` once it's generic over P.
+fn decodeScan12Gray(
+    allocator: Allocator,
+    data: []const u8,
+    frame: *const FrameInfo,
+    quant_tables: *const [4]?[64]u16,
+    dc_tables: *const [4]?huffman.HuffmanTable,
+    ac_tables: *const [4]?huffman.HuffmanTable,
+    restart_interval: u32,
+) Error!types.Image {
+    const width: u32 = frame.width;
+    const height: u32 = frame.height;
+    const blocks_w: u32 = (width + 7) / 8;
+    const blocks_h: u32 = (height + 7) / 8;
+    const plane_w: u32 = blocks_w * 8;
+    const plane_h: u32 = blocks_h * 8;
+
+    // Coefficient buffer: i32 regardless of precision (entropy stream
+    // values fit). One 64-coef block per 8×8 input region.
+    const total_blocks: usize = @as(usize, blocks_w) * @as(usize, blocks_h);
+    const coef_buf = try allocator.alloc(i32, total_blocks * 64);
+    defer allocator.free(coef_buf);
+
+    // Plane: u16 host-endian, [0, 4095].
+    const plane = try allocator.alloc(u16, @as(usize, plane_w) * @as(usize, plane_h));
+    defer allocator.free(plane);
+
+    var br = bitstream.BitReader.init(data);
+    var prev_dc: [3]i32 = .{ 0, 0, 0 };
+    var mcus_since_rst: u32 = 0;
+    var expected_rst: u8 = 0xD0;
+
+    // ── Phase 1: serial entropy decode (1 block per MCU) ──────────
+    var by: u32 = 0;
+    while (by < blocks_h) : (by += 1) {
+        var bx: u32 = 0;
+        while (bx < blocks_w) : (bx += 1) {
+            if (restart_interval > 0 and mcus_since_rst == restart_interval) {
+                br.seekToMarker();
+                if (!br.marker_seen) return fail("rst_no_marker_seen", error.InvalidMarker);
+                if (br.marker_byte != expected_rst) return fail("rst_wrong_marker", error.InvalidMarker);
+                prev_dc = .{ 0, 0, 0 };
+                mcus_since_rst = 0;
+                expected_rst = 0xD0 + ((expected_rst - 0xD0 + 1) & 0x07);
+                br.skipPastMarker();
+            }
+            const linear: usize = (@as(usize, by) * @as(usize, blocks_w) + @as(usize, bx)) * 64;
+            const slot: *[64]i32 = coef_buf[linear..][0..64];
+            try decodeBlockCoefficients(
+                &br,
+                0, // single component, ci=0
+                &frame.components[0],
+                dc_tables,
+                ac_tables,
+                quant_tables,
+                &prev_dc,
+                slot,
+                frame.precision,
+            );
+            mcus_since_rst += 1;
+        }
+    }
+
+    // ── Phase 2: IDCT each block, write into u16 plane ────────────
+    by = 0;
+    while (by < blocks_h) : (by += 1) {
+        var bx: u32 = 0;
+        while (bx < blocks_w) : (bx += 1) {
+            const linear: usize = (@as(usize, by) * @as(usize, blocks_w) + @as(usize, bx)) * 64;
+            const slot: *const [64]i32 = coef_buf[linear..][0..64];
+            var block: [64]u16 = undefined;
+            idct.idct8x8_12(slot, &block);
+            var blk_y: u32 = 0;
+            while (blk_y < 8) : (blk_y += 1) {
+                var blk_x: u32 = 0;
+                while (blk_x < 8) : (blk_x += 1) {
+                    const px: u32 = bx * 8 + blk_x;
+                    const py: u32 = by * 8 + blk_y;
+                    plane[py * plane_w + px] = block[blk_y * 8 + blk_x];
+                }
+            }
+        }
+    }
+
+    // ── Phase 3: crop plane to (width × height) and alias as u8 bytes ──
+    const out_samples: usize = @as(usize, width) * @as(usize, height);
+    const pixels = try allocator.alloc(u8, out_samples * 2);
+    errdefer allocator.free(pixels);
+    const out_u16: []align(1) u16 = std.mem.bytesAsSlice(u16, pixels);
+    var y: u32 = 0;
+    while (y < height) : (y += 1) {
+        var x: u32 = 0;
+        while (x < width) : (x += 1) {
+            out_u16[y * width + x] = plane[y * plane_w + x];
+        }
+    }
+
+    return types.Image{
+        .pixels = pixels,
+        .width = width,
+        .height = height,
+        .channels = 1,
+        .bits_per_sample = 12,
+        .source_color_space = .grayscale,
+        .layout = .grayscale,
+    };
+}
+
 /// Per-row worker: IDCT every block in row `by_idx` and write into the
 /// plane. Pure compute over disjoint memory ranges (own slice of
 /// `coef_buf` for input, own 8-pixel-tall stripe of `plane` for output)
@@ -662,10 +795,18 @@ fn decodeBlockCoefficients(
     quant_tables: *const [4]?[64]u16,
     prev_dc: *[3]i32,
     out: *[64]i32,
+    precision: u8,
 ) Error!void {
     const dc_t = dc_tables[comp.dc_table] orelse return fail("block_dc_table_null", error.InvalidMarker);
     const ac_t = ac_tables[comp.ac_table] orelse return fail("block_ac_table_null", error.InvalidMarker);
     const qt = quant_tables[comp.qt_index] orelse return fail("block_qt_null", error.InvalidMarker);
+
+    // T.81 §F.1.4.1 (DC), §F.1.4.2 (AC), Table F.1: at P=8 DC SSSS ≤ 11
+    // and AC SSSS ≤ 10; at P=12 (extended sequential) DC SSSS ≤ 15 and
+    // AC SSSS ≤ 14. Same arithmetic shape across the precisions —
+    // DC max = P + 3, AC max = P + 2.
+    const max_dc_size: u8 = precision + 3; // 11 for P=8, 15 for P=12
+    const max_ac_size: u8 = precision + 2; // 10 for P=8, 14 for P=12
 
     // Coefficients accumulate in zig-zag order during entropy decode;
     // dequantized in zig-zag (matches DQT layout per T.81 §B.2.4.1);
@@ -675,7 +816,7 @@ fn decodeBlockCoefficients(
 
     // ── DC coefficient (T.81 §F.2.2.1) ─────────────────────────
     const dc_size: u8 = dc_t.decode(br) catch return fail("dc_huffman_decode_failed", error.BackendError);
-    if (dc_size > 11) return fail("dc_size_too_large", error.BackendError);
+    if (dc_size > max_dc_size) return fail("dc_size_too_large", error.BackendError);
     var dc_diff: i32 = 0;
     if (dc_size > 0) {
         const bits = br.readBits(@intCast(dc_size)) catch return error.TruncatedStream;
@@ -695,7 +836,7 @@ fn decodeBlockCoefficients(
         }
         const run: u8 = rs >> 4;
         const size: u8 = rs & 0x0F;
-        if (size == 0 or size > 10) return fail("ac_bad_size", error.BackendError);
+        if (size == 0 or size > max_ac_size) return fail("ac_bad_size", error.BackendError);
         k += run;
         if (k >= 64) return fail("ac_k_overflow", error.BackendError);
         const bits = br.readBits(@intCast(size)) catch return error.TruncatedStream;
