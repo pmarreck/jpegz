@@ -27,23 +27,23 @@ const decode_error_codes: []const struct { name: []const u8, code: i32 } = &.{
     .{ .name = "CALLBACK_ABORTED",       .code = -9 },
 };
 
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
+pub fn main(init: std.process.Init) !void {
+    const arena = init.arena;
     const a = arena.allocator();
+    const io = init.io;
 
-    const args = try std.process.argsAlloc(a);
+    const args = try init.minimal.args.toSlice(a);
     if (args.len < 2) {
         std.debug.print("usage: gen_c_header <out_path>\n", .{});
         return error.MissingOutputPath;
     }
     const out_path = args[1];
 
-    var file = try std.fs.cwd().createFile(out_path, .{});
-    defer file.close();
+    var file = try std.Io.Dir.cwd().createFile(io, out_path, .{});
+    defer file.close(io);
 
     var buf: [4096]u8 = undefined;
-    var w = file.writer(&buf);
+    var w = file.writer(io, &buf);
     const out = &w.interface;
 
     try out.writeAll(

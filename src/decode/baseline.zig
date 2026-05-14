@@ -26,6 +26,7 @@ const bitstream = @import("bitstream.zig");
 const huffman = @import("huffman.zig");
 const idct = @import("idct.zig");
 const color = @import("color.zig");
+const thread_pool = @import("thread_pool.zig");
 
 const builtin = @import("builtin");
 
@@ -541,7 +542,7 @@ fn decodeScan(
     //   options.threads == 1 → sequential (zero pool overhead).
     //   small image (any plane has < PARALLEL_BLOCKS_THRESHOLD blocks)
     //     → sequential (thread setup eats the gains).
-    //   else → std.Thread.Pool with options.threads workers (or
+    //   else → thread_pool.Pool with options.threads workers (or
     //     std.Thread.getCpuCount() if options.threads == 0).
     const total_blocks: u64 = blk: {
         var sum: u64 = 0;
@@ -561,9 +562,9 @@ fn decodeScan(
     // ONE pool and reuse it across both Phase 2 (IDCT) and the
     // color-conversion stage in assembleOutput. Spinning up two pools
     // for one decode would double the thread-creation overhead.
-    var pool: std.Thread.Pool = undefined;
+    var pool: thread_pool.Pool = undefined;
     var pool_initialized = false;
-    var pool_ptr: ?*std.Thread.Pool = null;
+    var pool_ptr: ?*thread_pool.Pool = null;
     defer if (pool_initialized) pool.deinit();
 
     if (want_parallel) {
@@ -594,7 +595,7 @@ fn decodeScan(
 
     if (pool_ptr) |p| {
         // Parallel transform: one task per row of blocks per component.
-        var wg: std.Thread.WaitGroup = .{};
+        var wg: thread_pool.WaitGroup = .{};
         var ci: usize = 0;
         while (ci < channels) : (ci += 1) {
             var by_idx: u32 = 0;
@@ -1272,7 +1273,7 @@ pub fn assembleOutput(
     plane_w: [3]u32,
     plane_h: [3]u32,
     planes: *const [3][]u8,
-    pool: ?*std.Thread.Pool,
+    pool: ?*thread_pool.Pool,
 ) Error!types.Image {
     const out_len: usize = @as(usize, width) * @as(usize, height) * @as(usize, channels);
     const pixels = try allocator.alloc(u8, out_len);
@@ -1341,7 +1342,7 @@ pub fn assembleOutput(
         // Color conversion is per-row independent. Parallelize it on the
         // same thread pool used for IDCT when one is supplied.
         if (pool) |p| {
-            var wg: std.Thread.WaitGroup = .{};
+            var wg: thread_pool.WaitGroup = .{};
             var y: u32 = 0;
             while (y < height) : (y += 1) {
                 p.spawnWg(&wg, ycbcrRowToRgb, .{

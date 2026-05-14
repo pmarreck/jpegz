@@ -224,15 +224,15 @@ pub fn build(b: *std.Build) void {
         .name = "c_smoke",
         .root_module = c_smoke_mod,
     });
-    c_smoke.addCSourceFile(.{
+    c_smoke_mod.addCSourceFile(.{
         .file = b.path("tests/cli/smoke.c"),
         .flags = &.{ "-std=c23", "-Wall", "-Wextra", "-Wpedantic" },
     });
-    c_smoke.addIncludePath(b.path("include"));
-    c_smoke.addIncludePath(generated_errno_h.dirname());
+    c_smoke_mod.addIncludePath(b.path("include"));
+    c_smoke_mod.addIncludePath(generated_errno_h.dirname());
     // C23 #embed needs to reach ../unit/fixtures/ relative to the .c file.
-    c_smoke.addIncludePath(b.path("tests"));
-    c_smoke.linkLibrary(lib);
+    c_smoke_mod.addIncludePath(b.path("tests"));
+    c_smoke_mod.linkLibrary(lib);
     test_step.dependOn(&b.addRunArtifact(c_smoke).step);
 
     // ============================================================
@@ -241,7 +241,7 @@ pub fn build(b: *std.Build) void {
     // output per-file. Source lives in scratch/ (gitignored). Skip
     // if the file isn't present (so a fresh checkout doesn't fail).
     // ============================================================
-    if (std.fs.cwd().access("scratch/cleanroom_diff.zig", .{})) {
+    if (std.Io.Dir.cwd().access(b.graph.io,"scratch/cleanroom_diff.zig", .{})) {
         // The diff binary lives in scratch/ (gitignored) and consumes
         // jpegz's public test surface (jpegz.internal.cleanroomDecode +
         // jpegz.internal.wrapperDecode) so it doesn't need to load
@@ -261,7 +261,7 @@ pub fn build(b: *std.Build) void {
         diff_step.dependOn(&b.addInstallArtifact(diff_exe, .{}).step);
     } else |_| {}
 
-    if (std.fs.cwd().access("scratch/diag_one.zig", .{})) {
+    if (std.Io.Dir.cwd().access(b.graph.io,"scratch/diag_one.zig", .{})) {
         const diag_mod = b.createModule(.{
             .root_source_file = b.path("scratch/diag_one.zig"),
             .target = target,
@@ -276,7 +276,7 @@ pub fn build(b: *std.Build) void {
         diag_step.dependOn(&b.addInstallArtifact(diag_exe, .{}).step);
     } else |_| {}
 
-    if (std.fs.cwd().access("scratch/pixel_diff.zig", .{})) {
+    if (std.Io.Dir.cwd().access(b.graph.io,"scratch/pixel_diff.zig", .{})) {
         const pd_mod = b.createModule(.{
             .root_source_file = b.path("scratch/pixel_diff.zig"),
             .target = target,
@@ -291,7 +291,7 @@ pub fn build(b: *std.Build) void {
         pd_step.dependOn(&b.addInstallArtifact(pd_exe, .{}).step);
     } else |_| {}
 
-    if (std.fs.cwd().access("scratch/dump_coefs_jpegz.zig", .{})) {
+    if (std.Io.Dir.cwd().access(b.graph.io,"scratch/dump_coefs_jpegz.zig", .{})) {
         const dc_mod = b.createModule(.{
             .root_source_file = b.path("scratch/dump_coefs_jpegz.zig"),
             .target = target,
@@ -306,7 +306,7 @@ pub fn build(b: *std.Build) void {
         dc_step.dependOn(&b.addInstallArtifact(dc_exe, .{}).step);
     } else |_| {}
 
-    if (std.fs.cwd().access("scratch/bench_one.zig", .{})) {
+    if (std.Io.Dir.cwd().access(b.graph.io,"scratch/bench_one.zig", .{})) {
         const b1_mod = b.createModule(.{
             .root_source_file = b.path("scratch/bench_one.zig"),
             .target = target,

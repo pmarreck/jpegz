@@ -4,10 +4,9 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    # We pin Zig explicitly via mitchellh/zig-overlay because nixpkgs unstable
-    # has moved to Zig 0.16 (which removed `addStaticLibrary` and other APIs
-    # we rely on). Targeting 0.15.2 per Peter; revisit when 0.16.1 ships and
-    # we explicitly migrate (see ZIG_0.15_TO_0.16_MIGRATION.md).
+    # We pin Zig explicitly via mitchellh/zig-overlay. Now targeting 0.16.0
+    # (the "Juicy Main" release). See ZIG_0.15_TO_0.16_MIGRATION.md for the
+    # patterns applied during the migration.
     zig-overlay = {
       url = "github:mitchellh/zig-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -21,7 +20,7 @@
         isDarwin = pkgs.stdenv.isDarwin;
         isLinux = pkgs.stdenv.isLinux;
 
-        zigPkg = zig-overlay.packages.${system}."0.15.2";
+        zigPkg = zig-overlay.packages.${system}."0.16.0";
 
         # On Linux we target musl explicitly so both the production lib
         # AND the test binaries are fully statically linked. Two reasons:
