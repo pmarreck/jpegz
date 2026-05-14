@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Run the jpegz fuzz harnesses (decode + validate).
+#
+# Usage:
+#   ./fuzz              — replay the seed corpus once each (smoke).
+#                         Fast (~seconds); guards against harness rot.
+#   ./fuzz --fuzz       — coverage-guided mutation, runs until killed
+#                         (Ctrl-C). Zig 0.16's in-tree libfuzzer.
+#   ./fuzz --fuzz=120s  — bounded duration. Useful for CI / nightly.
+#
+# Per CLAUDE.md "Testing Principles": no `set -euo pipefail`. We do
+# want `set -u` for catching unset vars, but `set -e` would mask a
+# failing harness behind a clean exit. Explicit exit-code tracking.
+
+set -u
+
+cd "$(dirname "$0")"
+
+# Build mode: ReleaseSafe is the sweet spot for fuzzing — runtime
+# safety checks are on (catches UB the fuzzer otherwise misses) while
+# performance is good enough to run for hours. Override with FUZZ_OPT.
+opt="${FUZZ_OPT:-ReleaseSafe}"
+
+# Pass through any extra args (e.g. --fuzz, --fuzz=120s, -j8).
+fuzz_args=("$@")
+
+echo "==> ./fuzz: zig build fuzz -Doptimize=$opt ${fuzz_args[*]:-}"
+nix develop -c zig build fuzz "-Doptimize=$opt" "${fuzz_args[@]}"
+status=$?
+
+if [ "$status" -ne 0 ]; then
+	echo "    FAIL (exit=$status)"
+	exit "$status"
+fi
+echo "    ok"

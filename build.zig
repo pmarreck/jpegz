@@ -201,6 +201,54 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(decode_jp2_tests).step);
 
     // ============================================================
+    // `zig build fuzz` — fuzz harnesses for jpegz.decode and
+    // jpegz.validate. Wrapped by `./fuzz` Bash script. Distinct from
+    // the `test` step so the long-running fuzz mode (`zig build fuzz
+    // --fuzz`) doesn't bloat regular CI.
+    //
+    // Without `--fuzz` each test replays its seed corpus once — acts
+    // as a smoke check that the harness compiles and the corpus is
+    // wired correctly. With `--fuzz`, Zig's in-tree libfuzzer drives
+    // coverage-guided mutation.
+    // ============================================================
+    const fuzz_step = b.step("fuzz", "Run fuzz harnesses (use --fuzz for coverage-guided mutation)");
+
+    // Shared seed-corpus module lives next to tests/unit/fixtures/ so
+    // its `@embedFile` calls resolve inside its own package. The fuzz
+    // harnesses pull it in as `@import("seed")`.
+    const seed_corpus_mod = b.createModule(.{
+        .root_source_file = b.path("tests/unit/seed_corpus.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const decode_fuzz_mod = b.createModule(.{
+        .root_source_file = b.path("tests/fuzz/decode_fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    decode_fuzz_mod.addImport("jpegz", jpegz_mod);
+    decode_fuzz_mod.addImport("seed", seed_corpus_mod);
+    const decode_fuzz_tests = b.addTest(.{
+        .name = "decode_fuzz",
+        .root_module = decode_fuzz_mod,
+    });
+    fuzz_step.dependOn(&b.addRunArtifact(decode_fuzz_tests).step);
+
+    const validate_fuzz_mod = b.createModule(.{
+        .root_source_file = b.path("tests/fuzz/validate_fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    validate_fuzz_mod.addImport("jpegz", jpegz_mod);
+    validate_fuzz_mod.addImport("seed", seed_corpus_mod);
+    const validate_fuzz_tests = b.addTest(.{
+        .name = "validate_fuzz",
+        .root_module = validate_fuzz_mod,
+    });
+    fuzz_step.dependOn(&b.addRunArtifact(validate_fuzz_tests).step);
+
+    // ============================================================
     // C FFI smoke test (M1.7 — exercises include/jpegz_core.h via a
     // tiny C program that links against libjpegz.a). Same exec
     // dogfoods the public ABI the way validate / tiffz will.
