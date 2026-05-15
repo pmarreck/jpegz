@@ -36,16 +36,135 @@ test "validate empty input fails fast at missing_soi" {
     try std.testing.expect(report.findings.items.len > 0);
 }
 
-test "decodeStreamingRows stub returns NotImplemented" {
-    const empty: []const u8 = &[_]u8{};
+// ── decodeStreamingRows tests ─────────────────────────────────────
+//
+// The streaming API materializes the full image internally (v1
+// implementation strategy: re-use decode() then iterate). What
+// callers depend on is the *shape*: callbacks fire in raster order,
+// progressive scans get NotRowStreamable, and callback errors
+// propagate as CallbackAborted. Each test asserts one of those
+// invariants without depending on the internal materialization
+// strategy — so a future per-decoder streaming implementation
+// won't break the suite.
+
+const fixture_baseline_2x2_rgb = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+const fixture_progressive_8x8_rgb = @embedFile("fixtures/progressive_8x8_rgb.jpg");
+const fixture_lossless_4x4_gray8 = @embedFile("fixtures/lossless_4x4_gray8.jpg");
+const fixture_jpegls_4x4_gray8 = @embedFile("fixtures/jpegls_4x4_gray8.jls");
+
+/// Streaming callback that copies each row into a contiguous buffer
+/// keyed by `y`. Lets the test assert raster order + content equals
+/// `jpegz.decode()`'s output.
+const RowCollector = struct {
+    buf: []u8,
+    row_stride: usize,
+    rows_seen: u32,
+    last_y: i32,
+    in_order: bool,
+
+    fn onRow(ctx_opaque: ?*anyopaque, row: []const u8, y: u32) anyerror!void {
+        const self: *RowCollector = @ptrCast(@alignCast(ctx_opaque.?));
+        @memcpy(self.buf[@as(usize, y) * self.row_stride ..][0..row.len], row);
+        self.rows_seen += 1;
+        if (@as(i32, @intCast(y)) <= self.last_y) self.in_order = false;
+        self.last_y = @intCast(y);
+    }
+};
+
+test "decodeStreamingRows: baseline JPEG streams rows matching decode()" {
+    const allocator = std.testing.allocator;
+    var ref = try jpegz.decode(allocator, fixture_baseline_2x2_rgb);
+    defer ref.deinit(allocator);
+
+    const buf = try allocator.alloc(u8, ref.pixels.len);
+    defer allocator.free(buf);
+    var collector = RowCollector{
+        .buf = buf,
+        .row_stride = ref.rowStride(),
+        .rows_seen = 0,
+        .last_y = -1,
+        .in_order = true,
+    };
+    const meta = try jpegz.decodeStreamingRows(allocator, fixture_baseline_2x2_rgb, .{
+        .on_row = RowCollector.onRow,
+        .ctx = &collector,
+    });
+
+    try std.testing.expectEqual(ref.width, meta.width);
+    try std.testing.expectEqual(ref.height, meta.height);
+    try std.testing.expectEqual(ref.channels, meta.channels);
+    try std.testing.expectEqual(ref.bits_per_sample, meta.bits_per_sample);
+    try std.testing.expectEqual(ref.layout, meta.layout);
+    try std.testing.expectEqual(@as(u32, ref.height), collector.rows_seen);
+    try std.testing.expect(collector.in_order);
+    try std.testing.expectEqualSlices(u8, ref.pixels, buf);
+}
+
+test "decodeStreamingRows: progressive JPEG returns NotRowStreamable" {
     const cb = jpegz.RowCallback{
         .on_row = struct {
             fn cb(_: ?*anyopaque, _: []const u8, _: u32) anyerror!void {}
         }.cb,
     };
     try std.testing.expectError(
-        error.NotImplemented,
-        jpegz.decodeStreamingRows(std.testing.allocator, empty, cb),
+        error.NotRowStreamable,
+        jpegz.decodeStreamingRows(std.testing.allocator, fixture_progressive_8x8_rgb, cb),
+    );
+}
+
+test "decodeStreamingRows: lossless SOF3 grayscale streams rows" {
+    const allocator = std.testing.allocator;
+    var ref = try jpegz.decode(allocator, fixture_lossless_4x4_gray8);
+    defer ref.deinit(allocator);
+    const buf = try allocator.alloc(u8, ref.pixels.len);
+    defer allocator.free(buf);
+    var collector = RowCollector{
+        .buf = buf,
+        .row_stride = ref.rowStride(),
+        .rows_seen = 0,
+        .last_y = -1,
+        .in_order = true,
+    };
+    _ = try jpegz.decodeStreamingRows(allocator, fixture_lossless_4x4_gray8, .{
+        .on_row = RowCollector.onRow,
+        .ctx = &collector,
+    });
+    try std.testing.expectEqual(@as(u32, 4), collector.rows_seen);
+    try std.testing.expectEqualSlices(u8, ref.pixels, buf);
+}
+
+test "decodeStreamingRows: JPEG-LS streams rows matching decode()" {
+    const allocator = std.testing.allocator;
+    var ref = try jpegz.decode(allocator, fixture_jpegls_4x4_gray8);
+    defer ref.deinit(allocator);
+    const buf = try allocator.alloc(u8, ref.pixels.len);
+    defer allocator.free(buf);
+    var collector = RowCollector{
+        .buf = buf,
+        .row_stride = ref.rowStride(),
+        .rows_seen = 0,
+        .last_y = -1,
+        .in_order = true,
+    };
+    _ = try jpegz.decodeStreamingRows(allocator, fixture_jpegls_4x4_gray8, .{
+        .on_row = RowCollector.onRow,
+        .ctx = &collector,
+    });
+    try std.testing.expectEqual(@as(u32, 4), collector.rows_seen);
+    try std.testing.expectEqualSlices(u8, ref.pixels, buf);
+}
+
+test "decodeStreamingRows: callback error propagates as CallbackAborted" {
+    const cb = jpegz.RowCallback{
+        .on_row = struct {
+            fn cb(_: ?*anyopaque, _: []const u8, _: u32) anyerror!void {
+                return error.UserAborted;
+            }
+        }.cb,
+    };
+    try std.testing.expectError(
+        error.CallbackAborted,
+        jpegz.decodeStreamingRows(std.testing.allocator, fixture_baseline_2x2_rgb, cb),
     );
 }
 

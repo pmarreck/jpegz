@@ -260,10 +260,72 @@ pub fn decodeStreamingRows(
     data: []const u8,
     cb: RowCallback,
 ) DecodeError!ImageMetadata {
-    _ = allocator;
-    _ = data;
-    _ = cb;
-    return error.NotImplemented;
+    if (data.len < 4) return error.TruncatedStream;
+    if (data[0] != 0xFF or data[1] != 0xD8) return error.InvalidMarker;
+
+    // Reject progressive scans up front. T.81 §G.1 progressive bitstreams
+    // are inherently multi-pass: every coefficient is touched across all
+    // scans before its block is complete, so row-by-row delivery isn't
+    // possible without full materialization. Callers wanting that
+    // experience should call `decode` and iterate the pixel buffer.
+    if (peekIsProgressive(data)) return error.NotRowStreamable;
+
+    // v1 strategy: materialize the full image via `decode`, then iterate
+    // rows. Memory profile is identical to plain `decode`; the API
+    // contract is what callers depend on. A future per-decoder
+    // implementation can deliver rows incrementally without touching
+    // the public surface.
+    var image = try decode(allocator, data);
+    defer image.deinit(allocator);
+
+    const stride = image.rowStride();
+    var y: u32 = 0;
+    while (y < image.height) : (y += 1) {
+        const row = image.pixels[@as(usize, y) * stride ..][0..stride];
+        cb.on_row(cb.ctx, row, y) catch return error.CallbackAborted;
+    }
+
+    return ImageMetadata{
+        .width = image.width,
+        .height = image.height,
+        .channels = image.channels,
+        .bits_per_sample = image.bits_per_sample,
+        .source_color_space = image.source_color_space,
+        .layout = image.layout,
+    };
+}
+
+/// Cheap pre-flight: walk markers looking for a progressive SOF
+/// (SOF2 0xC2 Huffman, SOF10 0xCA arithmetic). Stops at the first
+/// SOFn or SOS — doesn't validate the rest of the stream. Used only
+/// to gate `decodeStreamingRows` early; full classification lives in
+/// `core/validator.zig`.
+fn peekIsProgressive(data: []const u8) bool {
+    var pos: usize = 2;
+    while (pos + 1 < data.len) {
+        while (pos < data.len and data[pos] != 0xFF) pos += 1;
+        if (pos + 1 >= data.len) return false;
+        while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
+        if (pos + 1 >= data.len) return false;
+        const marker = data[pos + 1];
+        pos += 2;
+        switch (marker) {
+            0xC2, 0xCA => return true, // progressive Huffman / arithmetic
+            // Any other SOFn or SOS: this is not a progressive image.
+            0xC0, 0xC1, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCB, 0xCD, 0xCE, 0xCF,
+            0xF7, 0xDA => return false,
+            // Standalone markers we can skip safely.
+            0x01, 0xD0...0xD7, 0xD8, 0xD9 => continue,
+            // Length-prefixed marker — skip its payload.
+            else => {
+                if (pos + 1 >= data.len) return false;
+                const seg_len: usize = (@as(usize, data[pos]) << 8) | data[pos + 1];
+                if (seg_len < 2 or pos + seg_len > data.len) return false;
+                pos += seg_len;
+            },
+        }
+    }
+    return false;
 }
 
 /// Walk the bitstream without materializing pixels. Accumulates
