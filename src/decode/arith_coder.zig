@@ -426,6 +426,27 @@ pub const ScanState = struct {
         self.last_dc_val = .{ 0, 0, 0, 0 };
         self.dc_context = .{ 0, 0, 0, 0 };
     }
+
+    /// Per-scan reset for SOF10 progressive — see libjpeg jdarith.c
+    /// `start_pass`. The Q-coder always restarts at every SOS, but
+    /// only the statistics tables touched by this scan type get
+    /// zeroed:
+    ///   - DC-first (Ss=0, Ah=0): zero dc_stats + reset DC predictors.
+    ///   - DC-refine (Ss=0, Ah>0): zero nothing.
+    ///   - AC-first / AC-refine (Ss>0): zero ac_stats.
+    /// `fixed_bin` never changes (state 113 forever); DAC L/U/Kx
+    /// persist (frame-scope).
+    pub fn startScan(self: *ScanState, data: []const u8, reset_dc: bool, reset_ac: bool) void {
+        self.qcoder = QCoder.init(data);
+        if (reset_dc) {
+            self.dc_stats = .{.{INITIAL_CONTEXT} ** DC_STAT_BINS} ** 4;
+            self.last_dc_val = .{ 0, 0, 0, 0 };
+            self.dc_context = .{ 0, 0, 0, 0 };
+        }
+        if (reset_ac) {
+            self.ac_stats = .{.{INITIAL_CONTEXT} ** AC_STAT_BINS} ** 4;
+        }
+    }
 };
 
 /// Decode one DC differential per T.81 §F.1.4.4.1 / Fig. F.19-F.24.
@@ -572,7 +593,239 @@ pub fn decodeAcSof9(
     }
 }
 
-// ── Inline tests ────────────────────────────────────────────────
+// ─────── SOF10 progressive arithmetic (T.81 §G.1.2) ─────────────
+//
+// Four scan types: DC-first / AC-first / DC-refine / AC-refine.
+// The shape of each mirrors libjpeg-turbo `jdarith.c` exactly:
+// `decode_mcu_DC_first` (lines 250-320), `decode_mcu_AC_first`
+// (329-395), `decode_mcu_DC_refine` (403-428), `decode_mcu_AC_refine`
+// (436-498).
+//
+// Differences vs SOF9 sequential:
+//   - DC scans store the reconstructed sample << Al into block[0]
+//     instead of writing the i16 wraparound directly. Later scans
+//     refine the bits Al-1..0.
+//   - AC scans walk a [Ss..Se] zig-zag range, not all 63 coefs.
+//   - Output is i16 in NATURAL order (un-zig-zagged) — same shape
+//     as `progressive.zig`'s persistent coef_buf — because multiple
+//     scans accumulate into the same block buffer.
+//   - DC refinement uses `fixed_bin` for the single per-block bit.
+//   - AC refinement is the gnarly one: walks EOBx, branches on
+//     "previously nonzero" (refine bit at st+2) vs "newly nonzero"
+//     (decision at st+1, sign at fixed_bin).
+//
+// `ZIGZAG_AC[k]` maps a zigzag index k to its natural-order
+// position in the block — same as libjpeg's `jpeg_natural_order`,
+// same as `baseline.zig`'s `ZIGZAG`. Local copy keeps arith_coder
+// independent of the higher-level decode modules.
+pub const ZIGZAG_AC: [64]u8 = .{
+    0,  1,  8,  16, 9,  2,  3,  10,
+    17, 24, 32, 25, 18, 11, 4,  5,
+    12, 19, 26, 33, 40, 48, 41, 34,
+    27, 20, 13, 6,  7,  14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36,
+    29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46,
+    53, 60, 61, 54, 47, 55, 62, 63,
+};
+
+/// T.81 §G.1.2.1 — DC first pass (Ss=0, Ah=0). Faithful port of
+/// libjpeg's `decode_mcu_DC_first` DC arm (jdarith.c:280-313).
+/// Writes the reconstructed DC sample << al into block[0].
+/// `block` is natural-order i16 (only index 0 is touched here).
+pub fn decodeDcFirstArith(
+    state: *ScanState,
+    ci: usize,
+    dc_tbl: u8,
+    al: u4,
+    block: []i16,
+) ArithError!void {
+    if (dc_tbl >= 4) return error.InvalidMarker;
+    const stats: *[DC_STAT_BINS]Context = &state.dc_stats[dc_tbl];
+    const ctx_base: u8 = state.dc_context[ci];
+    var st_idx: usize = ctx_base;
+
+    if (state.qcoder.decode(&stats[st_idx]) == 0) {
+        state.dc_context[ci] = 0;
+    } else {
+        const sign: u1 = state.qcoder.decode(&stats[st_idx + 1]);
+        st_idx = @as(usize, ctx_base) + 2 + @as(usize, sign);
+        var m: i32 = @intCast(state.qcoder.decode(&stats[st_idx]));
+        if (m != 0) {
+            st_idx = 20;
+            while (state.qcoder.decode(&stats[st_idx]) == 1) {
+                m <<= 1;
+                if (m == 0x8000) return error.BackendError;
+                st_idx += 1;
+                if (st_idx >= DC_STAT_BINS) return error.BackendError;
+            }
+        }
+        const sign_int: i32 = @intCast(sign);
+        if (state.arith_dc_L[dc_tbl] > 15 or state.arith_dc_U[dc_tbl] > 15)
+            return error.BackendError;
+        const dc_L_shift: u5 = @intCast(state.arith_dc_L[dc_tbl]);
+        const dc_U_shift: u5 = @intCast(state.arith_dc_U[dc_tbl]);
+        const L: i32 = (@as(i32, 1) << dc_L_shift) >> 1;
+        const U: i32 = (@as(i32, 1) << dc_U_shift) >> 1;
+        if (m < L) state.dc_context[ci] = 0
+        else if (m > U) state.dc_context[ci] = @intCast(12 + sign_int * 4)
+        else state.dc_context[ci] = @intCast(4 + sign_int * 4);
+
+        var v: i32 = m;
+        st_idx += 14;
+        while (true) {
+            m >>= 1;
+            if (m == 0) break;
+            if (state.qcoder.decode(&stats[st_idx]) == 1) v |= m;
+        }
+        v += 1;
+        if (sign == 1) v = -v;
+        const sum: i32 = state.last_dc_val[ci] + v;
+        state.last_dc_val[ci] = sum & 0xFFFF;
+    }
+    // Sign-extend to i16 and emit shifted into the block's DC slot.
+    const u_val: u16 = @intCast(@as(u32, @bitCast(state.last_dc_val[ci])) & 0xFFFF);
+    const dc_i16: i16 = @bitCast(u_val);
+    // T.81 §G.1.2.1: emit dc_i16 << al. Use a 32-bit shift then
+    // truncate to i16 to handle wraparound the same way libjpeg's
+    // `(JCOEF)LEFT_SHIFT(...)` does.
+    const shifted: i32 = @as(i32, dc_i16) << al;
+    block[0] = @truncate(shifted);
+}
+
+/// T.81 §G.1.2.3 — DC refinement scan (Ss=0, Ah>0). One bit per
+/// block decoded against `fixed_bin`. If the bit is 1, OR-in the
+/// `1 << al` mask at block[0]. Mirrors libjpeg's
+/// `decode_mcu_DC_refine` (jdarith.c:402-428).
+pub fn decodeDcRefineArith(state: *ScanState, al: u4, block: []i16) void {
+    const bit: u1 = state.qcoder.decode(&state.fixed_bin);
+    if (bit == 1) {
+        const mask: i16 = @as(i16, 1) << al;
+        block[0] |= mask;
+    }
+}
+
+/// T.81 §G.1.2.2 — AC first pass (Ss>=1, Ah=0). Decodes the AC
+/// coefficients in zig-zag range [ss, se], shifted left by `al`,
+/// into `block[ZIGZAG_AC[k]]`. Mirrors `decode_mcu_AC_first`
+/// (jdarith.c:329-395). Loop semantics match `decodeAcSof9` —
+/// extra inner arith_decode at M, Kx-conditioned X-walk base.
+pub fn decodeAcFirstArith(
+    state: *ScanState,
+    ac_tbl: u8,
+    ss: u8,
+    se: u8,
+    al: u4,
+    block: []i16,
+) ArithError!void {
+    if (ac_tbl >= 4) return error.InvalidMarker;
+    if (ss < 1 or se > 63 or se < ss) return error.InvalidMarker;
+    const stats: *[AC_STAT_BINS]Context = &state.ac_stats[ac_tbl];
+    const Kx: u8 = state.arith_ac_K[ac_tbl];
+
+    var k: usize = ss;
+    while (k <= se) {
+        var st_idx: usize = 3 * (k - 1);
+        if (state.qcoder.decode(&stats[st_idx]) == 1) break; // EOB
+        while (state.qcoder.decode(&stats[st_idx + 1]) == 0) {
+            st_idx += 3;
+            k += 1;
+            if (k > se) return error.BackendError;
+        }
+        const sign: u1 = state.qcoder.decode(&state.fixed_bin);
+        st_idx += 2;
+        var m: i32 = @intCast(state.qcoder.decode(&stats[st_idx]));
+        if (m != 0) {
+            if (state.qcoder.decode(&stats[st_idx]) == 1) {
+                m <<= 1;
+                st_idx = if (k <= @as(usize, Kx)) 189 else 217;
+                while (state.qcoder.decode(&stats[st_idx]) == 1) {
+                    m <<= 1;
+                    if (m == 0x8000) return error.BackendError;
+                    st_idx += 1;
+                    if (st_idx >= AC_STAT_BINS) return error.BackendError;
+                }
+            }
+        }
+        var v: i32 = m;
+        st_idx += 14;
+        while (true) {
+            m >>= 1;
+            if (m == 0) break;
+            if (state.qcoder.decode(&stats[st_idx]) == 1) v |= m;
+        }
+        v += 1;
+        if (sign == 1) v = -v;
+        // Shift << al and write at the ZIG-ZAG index k. progressive.zig's
+        // coef buffers are zig-zag-indexed throughout; un-zig-zagging
+        // happens inside `assembleProgressiveGeneric`.
+        const shifted: i32 = v << al;
+        block[k] = @truncate(shifted);
+        k += 1;
+    }
+}
+
+/// T.81 §G.1.2.4 — AC refinement scan (Ss>=1, Ah>0). For each
+/// zig-zag position in [ss, se]:
+///   - If we're past the previous-stage EOB index, test an EOB
+///     flag at cell 3*(k-1). If 1, terminate the scan early.
+///   - For previously-nonzero coefs, optionally flip-toward magnitude
+///     bit (cell 3*(k-1) + 2, fixed_bin not involved).
+///   - For previously-zero coefs, decide newly-nonzero (cell 3*(k-1)+1)
+///     and on yes decode the sign from `fixed_bin`, setting
+///     `±(1 << al)`.
+///   - Otherwise walk forward (st += 3, k++) until something fires.
+/// Mirrors `decode_mcu_AC_refine` (jdarith.c:435-497).
+pub fn decodeAcRefineArith(
+    state: *ScanState,
+    ac_tbl: u8,
+    ss: u8,
+    se: u8,
+    al: u4,
+    block: []i16,
+) ArithError!void {
+    if (ac_tbl >= 4) return error.InvalidMarker;
+    if (ss < 1 or se > 63 or se < ss) return error.InvalidMarker;
+    const stats: *[AC_STAT_BINS]Context = &state.ac_stats[ac_tbl];
+    const p1: i16 = @as(i16, 1) << al;
+    const m1: i16 = -p1;
+
+    // EOBx = highest zig-zag index in [1..se] with a nonzero coef.
+    // progressive.zig stores coefs zig-zag-indexed, so block[k] is
+    // the kth zig-zag coefficient (NOT block[natural_order[k]]).
+    var kex: usize = se;
+    while (kex > 0) : (kex -= 1) {
+        if (block[kex] != 0) break;
+    }
+
+    var k: usize = ss;
+    while (k <= se) : (k += 1) {
+        var st_idx: usize = 3 * (k - 1);
+        if (k > kex) {
+            if (state.qcoder.decode(&stats[st_idx]) == 1) break; // EOB
+        }
+        // Inner: walk until "previously nonzero" or "newly nonzero" fires.
+        while (true) {
+            const coef: i16 = block[k];
+            if (coef != 0) {
+                // Previously nonzero — possibly flip magnitude bit.
+                if (state.qcoder.decode(&stats[st_idx + 2]) == 1) {
+                    block[k] = coef +| (if (coef < 0) m1 else p1);
+                }
+                break;
+            }
+            if (state.qcoder.decode(&stats[st_idx + 1]) == 1) {
+                // Newly nonzero.
+                const sign: u1 = state.qcoder.decode(&state.fixed_bin);
+                block[k] = if (sign == 1) m1 else p1;
+                break;
+            }
+            st_idx += 3;
+            k += 1;
+            if (k > se) return error.BackendError;
+        }
+    }
+}
 
 test "QE_TABLE: spec-known anchors" {
     // Index 0: Qe = 0x5a1d (the most-frequently-used probability)

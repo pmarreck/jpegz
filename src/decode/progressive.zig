@@ -50,7 +50,7 @@ const ZIGZAG: [64]u8 = .{
     53, 60, 61, 54, 47, 55, 62, 63,
 };
 
-const ComponentInfo = struct {
+pub const ComponentInfo = struct {
     id: u8,
     h_factor: u4,
     v_factor: u4,
@@ -59,7 +59,7 @@ const ComponentInfo = struct {
     ac_table: u8 = 0,
 };
 
-const FrameInfo = struct {
+pub const FrameInfo = struct {
     precision: u8,
     height: u16,
     width: u16,
@@ -67,7 +67,7 @@ const FrameInfo = struct {
     components: [4]ComponentInfo,
 };
 
-const ScanInfo = struct {
+pub const ScanInfo = struct {
     num_components: u8,
     /// component_index_in_frame[i] for each scan-component i in 0..num_components
     comp_indices: [4]usize,
@@ -363,12 +363,12 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
     };
 }
 
-fn parseSegmentLength(data: []const u8, pos: usize) usize {
+pub fn parseSegmentLength(data: []const u8, pos: usize) usize {
     if (pos + 1 >= data.len) return 0;
     return (@as(usize, data[pos]) << 8) | data[pos + 1];
 }
 
-fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
+pub fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
     const seg_len = parseSegmentLength(data, pos);
     if (seg_len < 8 or pos + seg_len > data.len) return error.TruncatedStream;
     var fi: FrameInfo = undefined;
@@ -391,7 +391,7 @@ fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
     return fi;
 }
 
-fn parseDqt(
+pub fn parseDqt(
     data: []const u8,
     pos: usize,
     quant_tables: *[4]?[64]u16,
@@ -458,7 +458,7 @@ fn parseDht(
     }
 }
 
-fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
+pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
     const seg_len = parseSegmentLength(data, pos);
     if (seg_len < 6 or pos + seg_len > data.len) return error.TruncatedStream;
     var info: ScanInfo = undefined;
@@ -965,7 +965,7 @@ fn assembleProgressive(
 ///
 /// 12-bit support is the A3 milestone (2026-05-13). The 8-bit path
 /// is unchanged behaviorally.
-fn assembleProgressiveGeneric(
+pub fn assembleProgressiveGeneric(
     comptime P: u8,
     allocator: Allocator,
     frame: *const FrameInfo,
