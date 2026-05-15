@@ -44,7 +44,7 @@ failures into more code.
 | Lossless w/ non-1×1 sampling      | H §H.1        | ❌ DEFERRED  | partial | no encoder emits this — extinct      |
 | Differential variants (SOF5–7)    | H §H.2        | ❌           | ❌      | extremely rare; deferred             |
 | Arithmetic-coded (SOF9–11)        | F §F.1.4      | SOF9/10 ✅   | ✅      | SOF9 (2026-05-13) + SOF10 (2026-05-15) cleanroom; SOF11 deferred |
-| JPEG-LS (T.87)                    | T.87          | ❌           | charls? | medical imaging niche                |
+| JPEG-LS (T.87)                    | T.87          | ❌           | ✅ charls | wrapper 2026-05-15 (B2.1); cleanroom pending |
 | JPEG 2000 (T.800)                 | T.800         | ❌           | ✅ openjpeg | separate ABI namespace            |
 | 12-bit Progressive (SOF2)         | G             | ✅ A3        | —       | gray + RGB all sampling factors      |
 
@@ -373,7 +373,8 @@ hold for full T.87 + T.800 cleanroom.
 #3  [completed] Extended sequential SOF1 (M2.3)
 #4  [partial]   Arithmetic coding SOF9 ✅ (2026-05-13) + SOF10 ✅
                 (2026-05-15); SOF11 deferred (extinct in the wild)
-#5  [pending]   JPEG-LS T.87 cleanroom (gap-closer #5 / B2)
+#5  [partial]   JPEG-LS T.87 — charls wrapper ✅ 2026-05-15;
+                cleanroom (B2.2) pending
 #6  [completed] Lossless SOF3 cleanroom (M2.4+M2.6+M2.7+M2.8)
 #7  [completed] validate(...) emits warn-level findings for libjpeg
                 tolerances — 2026-05-15. WARNMS capture in wrapper +

@@ -23,8 +23,12 @@ pub fn build(b: *std.Build) void {
     // Link C deps (system; provided by Nix flake's buildInputs):
     //   - libjpeg-turbo (jpeglib.h, used by src/ffi/libjpeg_wrapper.zig)
     //   - openjpeg     (openjpeg.h, used by src/ffi/openjpeg_wrapper.zig)
+    //   - charls       (charls/charls.h, used by src/ffi/charls_wrapper.zig)
     jpegz_mod.linkSystemLibrary("jpeg", .{});
     jpegz_mod.linkSystemLibrary("openjp2", .{});
+    jpegz_mod.linkSystemLibrary("charls", .{});
+    // charls is a C++ library — pull in libc++ for the dylib's symbols.
+    jpegz_mod.link_libcpp = true;
     jpegz_mod.link_libc = true;
 
     // Optional explicit include / library paths from the flake. When
@@ -36,10 +40,14 @@ pub fn build(b: *std.Build) void {
     const opt_libjpeg_lib = b.option([]const u8, "libjpeg-lib", "Path to libjpeg library directory");
     const opt_openjpeg_inc = b.option([]const u8, "openjpeg-include", "Path to openjpeg headers (incl. version subdir)");
     const opt_openjpeg_lib = b.option([]const u8, "openjpeg-lib", "Path to openjpeg library directory");
+    const opt_charls_inc = b.option([]const u8, "charls-include", "Path to charls headers");
+    const opt_charls_lib = b.option([]const u8, "charls-lib", "Path to charls library directory");
     if (opt_libjpeg_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
     if (opt_libjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
     if (opt_openjpeg_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
     if (opt_openjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
+    if (opt_charls_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
+    if (opt_charls_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
 
     const lib = b.addLibrary(.{
         .name = "jpegz",
@@ -266,8 +274,11 @@ pub fn build(b: *std.Build) void {
     // unset and Zig finds the libs via the host wrapper-cc.
     c_smoke_mod.linkSystemLibrary("jpeg", .{});
     c_smoke_mod.linkSystemLibrary("openjp2", .{});
+    c_smoke_mod.linkSystemLibrary("charls", .{});
+    c_smoke_mod.link_libcpp = true;
     if (opt_libjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
     if (opt_openjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
+    if (opt_charls_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
     const c_smoke = b.addExecutable(.{
         .name = "c_smoke",
         .root_module = c_smoke_mod,

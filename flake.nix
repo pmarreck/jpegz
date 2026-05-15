@@ -51,6 +51,11 @@
         # built against musl + statically linkable.
         libjpegTurbo = if isLinux then pkgs.pkgsStatic.libjpeg else pkgs.libjpeg;
         openjpegPkg  = if isLinux then pkgs.pkgsStatic.openjpeg else pkgs.openjpeg;
+        # charls — BSD-3, JPEG-LS (T.87) reference codec. C++ implementation
+        # with a C ABI (charls_jpegls_decoder_*); we consume via cImport.
+        # libjpeg-turbo does not ship a JPEG-LS path, so this is the only
+        # T.87 oracle available for cleanroom-vs-wrapper testing.
+        charlsPkg = if isLinux then pkgs.pkgsStatic.charls else pkgs.charls;
 
         # When cross-targeting (musl on Linux), Zig's host NIX_LDFLAGS /
         # NIX_CFLAGS don't apply, and `--search-prefix` only handles
@@ -69,10 +74,12 @@
           "-Dlibjpeg-lib=${libjpegTurbo.out}/lib"
           "-Dopenjpeg-include=${openjpegPkg.dev}/include/openjpeg-2.5"
           "-Dopenjpeg-lib=${openjpegPkg.out}/lib"
+          "-Dcharls-include=${charlsPkg}/include"
+          "-Dcharls-lib=${charlsPkg}/lib"
         ];
 
         commonNativeBuildInputs = [ zigPkg pkgs.git pkgs.cacert ];
-        commonBuildInputs = [ libjpegTurbo openjpegPkg ];
+        commonBuildInputs = [ libjpegTurbo openjpegPkg charlsPkg ];
 
         # Phase 1 has no external Zig dependencies — `build.zig.zon` will be
         # added when the first dependency is introduced. Until then we don't
@@ -131,9 +138,9 @@
           # Dev shell uses the host's default libjpeg/openjpeg (glibc on
           # Linux, native on macOS). The musl pinning above is sandbox-only
           # — interactive dev doesn't need it.
-          packages = [ zigPkg pkgs.git pkgs.cacert pkgs.libjpeg pkgs.openjpeg pkgs.hyperfine pkgs.pkg-config ];
+          packages = [ zigPkg pkgs.git pkgs.cacert pkgs.libjpeg pkgs.openjpeg pkgs.charls pkgs.hyperfine pkgs.pkg-config ];
           shellHook = ''
-            echo "jpegz devShell — zig $(zig version), libjpeg-turbo ${pkgs.libjpeg.version}, openjpeg ${pkgs.openjpeg.version}"
+            echo "jpegz devShell — zig $(zig version), libjpeg-turbo ${pkgs.libjpeg.version}, openjpeg ${pkgs.openjpeg.version}, charls ${pkgs.charls.version}"
           '';
         };
 

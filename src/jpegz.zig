@@ -168,6 +168,20 @@ pub fn decodeWithOptions(
     const baseline = @import("decode/baseline.zig");
     const wrapper = @import("ffi/libjpeg_wrapper.zig");
 
+    // JPEG-LS comes first: T.87 uses a different SOF marker (SOF55 =
+    // 0xF7) that the other cleanroom paths' marker walkers don't
+    // recognize — they'd misclassify and surface InvalidMarker
+    // instead of NotImplemented. charls_wrapper's `looksLikeJpegLs`
+    // pre-flights cheaply (just walks the marker chain for FF F7);
+    // non-JPEG-LS inputs return NotImplemented and fall through.
+    const charls_wrapper = @import("ffi/charls_wrapper.zig");
+    if (charls_wrapper.decode(allocator, data)) |img| {
+        return img;
+    } else |err| switch (err) {
+        error.NotImplemented => {},
+        else => return err,
+    }
+
     // Try baseline cleanroom first (SOF0). Convert public DecodeOptions
     // → baseline's structurally-identical DecodeOptions (separate types
     // to keep baseline.zig free of a dependency on the parent module).
@@ -222,7 +236,8 @@ pub fn decodeWithOptions(
     }
 
     // Final: libjpeg-turbo wrapper handles everything jpegz hasn't
-    // cleanroomed yet (SOF1 12-bit, SOF3 12/16-bit, SOF10/11 + JPEG-LS).
+    // cleanroomed yet (SOF1 12-bit, SOF3 12/16-bit, SOF11). JPEG-LS
+    // was already handled at the top of dispatch via charls_wrapper.
     // Wrapper currently ignores `options.threads` — libjpeg-turbo's
     // traditional API has no thread parameter.
     return wrapper.decode(allocator, data);

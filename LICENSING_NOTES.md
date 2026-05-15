@@ -28,8 +28,13 @@ implementations.
 - **libjpeg (the original IJG)** — BSD-3-style with attribution-required
   clause. Older; superseded by libjpeg-turbo. If consulted, include
   the IJG attribution.
-- **charls** — Apache-2.0. MIT-compatible (with NOTICE-style
-  attribution). Reference for JPEG-LS.
+- **charls** — BSD-3-Clause (per upstream `SPDX-License-Identifier`).
+  MIT-compatible. Added 2026-05-15 for JPEG-LS (T.87) support;
+  libjpeg-turbo does not implement JPEG-LS, so charls is currently
+  the only runtime path. Used as the runtime decoder via
+  `src/ffi/charls_wrapper.zig` and (later) as the oracle for the
+  cleanroom B2 milestone. C++ implementation with a C ABI; linked
+  via `link_libcpp = true` in `build.zig`.
 - **zigimg's `src/formats/jpeg.zig`** — MIT. Reference reading allowed
   (322 lines, baseline-only). Phase 2 reference reading expressly
   permitted.
