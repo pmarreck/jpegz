@@ -290,7 +290,29 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     //     handled elsewhere or not yet routed).
     if (report.overall != .fail and shouldRunCodecCheck(report.variant)) {
         const wrapper = @import("../ffi/libjpeg_wrapper.zig");
-        if (wrapper.validateCodecIntegrity(data)) |failure| {
+        // Caller-owned bridge keeps message slices valid until we
+        // finish copying them into Finding allocations.
+        var bridge: wrapper.ValidationBridge = undefined;
+        const codec_result = wrapper.validateCodecIntegrity(data, &bridge);
+
+        // Every captured WARNMS becomes a Finding(.warn) — this is the
+        // "validate-warns" surface. Architecture decision documented
+        // in NEXT_STEPS.md §"Validation-strictness". The decoder still
+        // returns pixels (libjpeg-style tolerance); validate just flags
+        // the deviation so format-integrity consumers see it.
+        for (codec_result.warnings) |warn| {
+            const msg_len = std.mem.indexOfScalar(u8, &warn.message, 0) orelse warn.message.len;
+            try addFinding(
+                &report,
+                allocator,
+                .warn,
+                wrapper.libjpegWarnToFindingCode(warn.msg_code),
+                null,
+                warn.message[0..msg_len],
+            );
+        }
+
+        if (codec_result.failure) |failure| {
             try addFinding(&report, allocator, .fail, failure.code, null, failure.message);
         }
     }

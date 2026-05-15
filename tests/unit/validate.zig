@@ -176,6 +176,47 @@ test "validate surfaces trailing-data-after-EOI as INFO" {
     try std.testing.expect(offset_seen != null);
 }
 
+test "validate surfaces libjpeg-style insufficient_data tolerance as Finding(warn)" {
+    // Architecture decision (NEXT_STEPS.md §"Validation-strictness"):
+    // when the decoder tolerates a spec deviation that libjpeg-turbo
+    // would WARNMS about, validate(...) must surface a Finding(.warn).
+    //
+    // Setup: take a clean baseline JPEG, truncate bytes from the END
+    // of its entropy stream, then re-attach the FFD9 EOI marker.
+    // libjpeg sees a structurally-complete file (jpeg_read_header
+    // succeeds), but `jpeg_read_scanlines` hits the EOI marker before
+    // every block is decoded → emits JWRN_HIT_MARKER. The validator
+    // surface should map that into Finding(.warn, .insufficient_data).
+    const allocator = std.testing.allocator;
+    const full = fixture_baseline_2x2_rgb;
+    // Sanity: existing fixture ends with the EOI marker.
+    try std.testing.expectEqual(@as(u8, 0xFF), full[full.len - 2]);
+    try std.testing.expectEqual(@as(u8, 0xD9), full[full.len - 1]);
+
+    // Strip the last 24 bytes of entropy (well inside the scan), then
+    // re-attach the 2-byte EOI so the structural walker is satisfied.
+    const cut: usize = 24;
+    var corrupted = try allocator.alloc(u8, full.len - cut);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0 .. full.len - cut - 2], full[0 .. full.len - cut - 2]);
+    corrupted[full.len - cut - 2] = 0xFF;
+    corrupted[full.len - cut - 1] = 0xD9;
+
+    var report = try jpegz.validate(allocator, corrupted);
+    defer report.deinit(allocator);
+
+    // Must surface at least one .warn finding tagged insufficient_data.
+    var found_warn = false;
+    for (report.findings.items) |f| {
+        if (f.severity == .warn and f.code == .insufficient_data) {
+            found_warn = true;
+        }
+    }
+    try std.testing.expect(found_warn);
+    // Overall must not regress to .fail — libjpeg recovers, so should we.
+    try std.testing.expect(report.overall != .fail);
+}
+
 test "validate non-JPEG bytes → FAIL, missing_soi finding" {
     const allocator = std.testing.allocator;
     const garbage = "this is not a JPEG file at all";

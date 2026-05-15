@@ -57,12 +57,22 @@ pub const Variant = enum(u8) {
 /// `JPEGZ_FINDING_*` enum in the auto-generated `jpegz_errno.h`.
 pub const FindingCode = enum(u32) {
     // ── Structural (1..49) ───────────────────────────────────────
-    missing_soi               = 1,
-    missing_eoi               = 2,
-    truncated_stream          = 3,
-    bad_marker_length         = 4,
-    unknown_marker            = 5,
-    duplicate_sof             = 6,
+    missing_soi                  = 1,
+    missing_eoi                  = 2,
+    truncated_stream             = 3,
+    bad_marker_length            = 4,
+    unknown_marker               = 5,
+    duplicate_sof                = 6,
+    // libjpeg-style entropy-data exhaustion the decoder zero-pads
+    // through (JWRN_HIT_MARKER / JWRN_JPEG_EOF). File is structurally
+    // complete but a block could not be filled — usually emitted at
+    // severity=warn by validate(...). See NEXT_STEPS.md §"Validation-
+    // strictness: warns over silent tolerance".
+    insufficient_data            = 7,
+    // libjpeg JWRN_EXTRANEOUS_DATA: "Corrupt JPEG data: N extraneous
+    // bytes before marker 0xXX". The decoder skips them and resumes,
+    // but the bytes are spec violations worth flagging.
+    extraneous_bytes_before_marker = 8,
 
     // ── T.81 codec-specific (50..99) ─────────────────────────────
     invalid_sof_precision       = 50,

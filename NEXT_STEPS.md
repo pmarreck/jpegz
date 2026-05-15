@@ -374,8 +374,10 @@ hold for full T.87 + T.800 cleanroom.
 #4  [partial]   Arithmetic coding SOF9 ✅ (2026-05-13); SOF10/11 pending
 #5  [pending]   JPEG-LS T.87 cleanroom (gap-closer #5 / B2)
 #6  [completed] Lossless SOF3 cleanroom (M2.4+M2.6+M2.7+M2.8)
-#7  [pending]   validate(...) emits warn-level findings for libjpeg
-                tolerances (architecture decision; see above)
+#7  [completed] validate(...) emits warn-level findings for libjpeg
+                tolerances — 2026-05-15. WARNMS capture in wrapper +
+                JWRN_* → FindingCode map. SOF9 still has no separate
+                surface yet (cleanroom doesn't run libjpeg).
 ```
 
 If the task list looks different at pickup, `TaskList` will tell you.
