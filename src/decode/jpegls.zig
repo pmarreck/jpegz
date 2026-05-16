@@ -15,6 +15,7 @@ const Allocator = std.mem.Allocator;
 const errors = @import("../core/errors.zig");
 const types = @import("../core/types.zig");
 const codec = @import("jpegls_codec.zig");
+const bitstream = @import("jpegls_bitstream");
 
 const Error = errors.DecodeError;
 
@@ -63,7 +64,6 @@ pub const ScanInfo = struct {
 /// walker still parses headers so any structural issue surfaces
 /// before falling through to the wrapper.
 pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
-    _ = allocator;
     if (data.len < 4) return error.TruncatedStream;
     if (data[0] != 0xFF or data[1] != M_SOI) return error.InvalidMarker;
 
@@ -106,9 +106,13 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
             },
             M_SOS => {
                 if (frame == null) return error.InvalidMarker;
-                _ = try parseSos(data, pos, &frame.?);
-                // §2 lands here: scan-loop, entropy decode, assemble.
-                return error.NotImplemented;
+                const scan = try parseSos(data, pos, &frame.?);
+                pos += parseSegmentLength(data, pos);
+                if (scan.NEAR != 0) return error.NotImplemented; // NEAR > 0 deferred
+                if (scan.ILV != 0 and scan.ILV != 2) return error.NotImplemented;
+                if (frame.?.P > 8) return error.NotImplemented; // §4 covers 16-bit
+                if (frame.?.num_components != 1) return error.NotImplemented; // §3 covers RGB
+                return try decodeScan8Mono(allocator, data[pos..], &frame.?, &scan, &preset);
             },
             // Standalone markers we can skip safely (RST, TEM, SOI/EOI
             // shouldn't appear here; treat as no-op).
@@ -265,23 +269,200 @@ test "parseLse: subtype 4 (mapping table) silently skipped" {
     try std.testing.expectEqual(@as(u32, 0), preset.MAXVAL);
 }
 
-test "decode: returns NotImplemented after parsing the header (v1 stub)" {
-    // Same minimal header as parseSof55 test, no actual scan data.
-    const data = [_]u8{
-        0xFF, 0xD8, // SOI
-        0xFF, 0xF7, 0x00, 0x0B, // SOF55
-        8, 0x00, 0x04, 0x00, 0x04, 1,
-        1, 0x11, 0,
-        0xFF, 0xDA, 0x00, 0x08, // SOS
-        1, // Ns
-        1, 0, // Cs, Td (ignored)
-        0, // NEAR
-        0, // ILV (none)
-        0, // Al:Ah (T.81-compat, ignored)
-        // No body — §2 will decode this; §1c returns NotImplemented here.
-        0xFF, 0xD9, // EOI
+// (§1c stub test was here — superseded by the B2 fixture test in
+// tests/unit/decode.zig now that §2 actually decodes the scan body.)
+
+// ─────────────────────────────────────────────────────────────────
+// Scan body — 8-bit, 1-component (Session 2 scope).
+// ─────────────────────────────────────────────────────────────────
+
+/// Decode a 1-component 8-bit JPEG-LS scan. Entropy-decodes every
+/// sample via regular or run mode and emits a raster-order pixel
+/// buffer. T.87 §A; mirrors charls' `jls_codec::do_line` /
+/// `do_run_mode` for the single-component path.
+fn decodeScan8Mono(
+    allocator: Allocator,
+    data: []const u8,
+    frame: *const FrameInfo,
+    scan: *const ScanInfo,
+    preset: *const PresetParams,
+) Error!types.Image {
+    _ = scan;
+    const W: u32 = frame.width;
+    const H: u32 = frame.height;
+
+    var state: codec.ScanState = undefined;
+    state.reset(8, 0); // 8-bit, NEAR=0 (lossless)
+    // Apply LSE preset overrides if present.
+    if (preset.MAXVAL != 0) state.MAXVAL = preset.MAXVAL;
+    if (preset.T1 != 0) state.T1 = preset.T1;
+    if (preset.T2 != 0) state.T2 = preset.T2;
+    if (preset.T3 != 0) state.T3 = preset.T3;
+    if (preset.RESET != 0) state.RESET = preset.RESET;
+
+    var br = bitstream.BitReader.init(data);
+    const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H));
+    errdefer allocator.free(pixels);
+
+    // Two scan-lines buffered so we can access Rb/Rc/Rd from the
+    // previous line. T.87 §A.1.2 boundary rule: samples outside the
+    // image are 0; at start-of-line, Ra ← Rb.
+    const cur_line = try allocator.alloc(i32, @as(usize, W) + 2);
+    defer allocator.free(cur_line);
+    const prev_line = try allocator.alloc(i32, @as(usize, W) + 2);
+    defer allocator.free(prev_line);
+    @memset(prev_line, 0);
+
+    var y: u32 = 0;
+    while (y < H) : (y += 1) {
+        @memset(cur_line, 0);
+        // T.87 §A.1.2: at start of line, Ra is set to the prior
+        // line's value at column 0. We store at index 1 (index 0
+        // is the left-of-image sentinel, kept 0).
+        cur_line[0] = prev_line[1];
+
+        var x: u32 = 0;
+        while (x < W) {
+            // Neighbors in our 1-indexed line buffer:
+            //   Ra = cur_line[x]      (just-decoded; at x=0 = Rb)
+            //   Rb = prev_line[x+1]
+            //   Rc = prev_line[x]
+            //   Rd = prev_line[x+2]   (replicates Rb at right edge)
+            const ra: i32 = cur_line[x];
+            const rb: i32 = prev_line[x + 1];
+            const rc: i32 = prev_line[x];
+            const rd_raw: i32 = if (x + 1 < W) prev_line[x + 2] else rb;
+            const rd: i32 = rd_raw;
+
+            const t1: i32 = @intCast(state.T1);
+            const t2: i32 = @intCast(state.T2);
+            const t3: i32 = @intCast(state.T3);
+            const near_i: i32 = @intCast(state.NEAR);
+            const q1 = codec.quantize(rd - rb, t1, t2, t3, near_i);
+            const q2 = codec.quantize(rb - rc, t1, t2, t3, near_i);
+            const q3 = codec.quantize(rc - ra, t1, t2, t3, near_i);
+
+            const ctx = codec.computeContextIndex(q1, q2, q3);
+            if (ctx.q == 0) {
+                // Run mode.
+                const consumed = try decodeRun(&state, &br, ra, cur_line, prev_line, x, W);
+                x += consumed;
+            } else {
+                // Regular mode.
+                const c_correction: i32 = @as(i32, state.contexts[0][ctx.q].C);
+                var px = codec.predictMed(ra, rb, rc);
+                px += codec.applySign(c_correction, ctx.sign);
+                if (px < 0) px = 0 else if (px > @as(i32, @intCast(state.MAXVAL))) px = @intCast(state.MAXVAL);
+
+                const k = codec.computeK(
+                    state.contexts[0][ctx.q].N,
+                    state.contexts[0][ctx.q].A,
+                );
+                const merrval = codec.decodeGolombRice(&br, k, state.LIMIT, state.qbpp);
+                var errval = codec.mapMErrvalToErrval(merrval);
+                if (k == 0) {
+                    // T.87 §A.6.2 — k=0 sign-correction trick.
+                    const b = state.contexts[0][ctx.q].B;
+                    const n_i: i32 = @intCast(state.contexts[0][ctx.q].N);
+                    if (2 * b + n_i - 1 < 0) errval = ~errval;
+                }
+                codec.updateState(&state, 0, ctx.q, errval);
+                const signed_err = codec.applySign(errval, ctx.sign);
+                const sample = codec.computeReconstructed(px, signed_err, state.MAXVAL);
+                cur_line[x + 1] = sample;
+                pixels[@as(usize, y) * @as(usize, W) + @as(usize, x)] = @intCast(sample);
+                x += 1;
+            }
+        }
+        // Mirror cur_line → pixels (run mode wrote to cur_line; finalize).
+        var xc: u32 = 0;
+        while (xc < W) : (xc += 1) {
+            pixels[@as(usize, y) * @as(usize, W) + @as(usize, xc)] = @intCast(cur_line[xc + 1]);
+        }
+        // Swap buffers (would copy or swap; for simplicity, copy).
+        @memcpy(prev_line, cur_line);
+    }
+
+    return types.Image{
+        .pixels = pixels,
+        .width = W,
+        .height = H,
+        .channels = 1,
+        .bits_per_sample = 8,
+        .source_color_space = .grayscale,
+        .layout = .grayscale,
     };
-    try std.testing.expectError(error.NotImplemented, decode(std.testing.allocator, &data));
+}
+
+/// Run mode for a single sample-component pixel. T.87 §A.7; mirrors
+/// charls' `decode_run_pixels` + `decode_run_interruption_pixel`.
+/// Returns the number of pixels consumed (run length + 1 if a run-
+/// interruption sample followed; or just run length at EOL).
+fn decodeRun(
+    state: *codec.ScanState,
+    br: *bitstream.BitReader,
+    ra: i32,
+    cur_line: []i32,
+    prev_line: []const i32,
+    start_x: u32,
+    W: u32,
+) Error!u32 {
+    const pixel_count: u32 = W - start_x;
+    var index: u32 = 0;
+    // Run-length: emit 1 << J[run_index] pixels per 1-bit, cap at
+    // pixel_count; bump run_index up to 31 each time we emit a full
+    // step. Stop on a 0 bit OR when we reach end-of-line.
+    while (br.readBits(1) == 1) {
+        const step: u32 = @as(u32, 1) << @intCast(codec.J_TABLE[state.run_index[0]]);
+        const count: u32 = @min(step, pixel_count - index);
+        index += count;
+        if (count == step and state.run_index[0] < 31) state.run_index[0] += 1;
+        if (index == pixel_count) break;
+    }
+    if (index != pixel_count) {
+        // Incomplete run — read residual bits.
+        const j = codec.J_TABLE[state.run_index[0]];
+        if (j > 0) {
+            const residual: u32 = br.readBits(@intCast(j));
+            index += residual;
+        }
+    }
+    if (index > pixel_count) return error.BackendError;
+
+    // Fill run with Ra.
+    var i: u32 = 0;
+    while (i < index) : (i += 1) {
+        cur_line[start_x + 1 + i] = ra;
+    }
+
+    if (start_x + index == W) return index; // EOL — no interruption
+
+    // Run interruption sample at (start_x + index). T.87 §A.7.4 /
+    // charls `decode_run_interruption_pixel`:
+    //   - |Ra - Rb| <= NEAR → RItype 1 (flat region), predict from Ra.
+    //   - otherwise         → RItype 0 (edge), predict from Rb with
+    //                          sign(Rb - Ra) applied to the error.
+    const rb_v: i32 = prev_line[start_x + index + 1];
+    const ri_type: u8 = if (@abs(ra - rb_v) <= @as(i32, @intCast(state.NEAR))) 1 else 0;
+    const rc = &state.run_contexts[0][ri_type];
+    const k = codec.runModeGetK(rc, ri_type);
+    const e_mapped = codec.decodeGolombRice(
+        br, k,
+        @as(u8, @intCast(@as(i32, state.LIMIT) - codec.J_TABLE[state.run_index[0]] - 1)),
+        state.qbpp,
+    );
+    const errval = codec.runModeComputeError(rc, e_mapped, k, ri_type);
+    codec.runModeUpdate(rc, errval, e_mapped, ri_type, state.RESET);
+
+    const sample: i32 = if (ri_type == 0) blk: {
+        // Edge case: predict from Rb, sign-flip error by sign(Rb - Ra).
+        const s: i32 = if (rb_v > ra) 1 else if (rb_v < ra) -1 else 0;
+        break :blk codec.computeReconstructed(rb_v, errval * s, state.MAXVAL);
+    } else codec.computeReconstructed(ra, errval, state.MAXVAL);
+    cur_line[start_x + index + 1] = sample;
+
+    if (state.run_index[0] > 0) state.run_index[0] -= 1;
+    return index + 1;
 }
 
 // Force-import the codec module so its inline tests run if this is the

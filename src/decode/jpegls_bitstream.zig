@@ -115,16 +115,15 @@ pub const BitReader = struct {
         if (self.valid >= n) self.valid -= @intCast(n) else self.valid = 0;
     }
 
-    /// Read a unary code: count consecutive 1-bits, stop at the
-    /// first 0 (which is consumed). `limit` is the maximum count
-    /// before we bail and return `limit` exactly — protects against
-    /// pathological streams that would otherwise spin forever.
-    /// Used by Golomb-Rice decode (T.87 §A.5.3).
+    /// Read a JPEG-LS unary code: count leading 0-bits, terminator
+    /// is a 1-bit (consumed). The standard unary code for `n` is
+    /// `n` zeros followed by a 1 (T.87 §A.5.3). `limit` caps the
+    /// count to guard against pathological all-zero streams.
     pub fn readUnary(self: *BitReader, limit: u8) u32 {
         var count: u32 = 0;
         while (count < limit) : (count += 1) {
             const bit = self.readBits(1);
-            if (bit == 0) return count;
+            if (bit == 1) return count;
         }
         return count;
     }
@@ -167,19 +166,17 @@ test "BitReader: 0xFF followed by top-bit-set byte signals marker" {
     try std.testing.expectEqual(@as(u8, 0xD9), br.marker_byte);
 }
 
-test "BitReader: readUnary terminates at 0-bit" {
-    // 0b1110_0000 → unary = 3, then a 0, then padding.
-    const data = [_]u8{0b1110_0000};
+test "BitReader: readUnary terminates at 1-bit (JPEG-LS convention)" {
+    // 0b0001_0000 → 3 zeros then a 1 = unary code for 3.
+    const data = [_]u8{0b0001_0000};
     var br = BitReader.init(&data);
     try std.testing.expectEqual(@as(u32, 3), br.readUnary(16));
 }
 
-test "BitReader: readUnary respects limit on degenerate stream" {
-    const data = [_]u8{ 0xFF, 0x7F, 0xFF, 0x7F, 0xFF, 0x7F };
-    // 0xFF is 8 ones, then bit-stuff escape, then 0x7F & 0x7F = 7
-    // ones, but wait — the bit-stuff makes the bottom 7 bits of 0x7F
-    // = 0b1111111 = 7 more ones. So the stream is effectively a long
-    // run of 1s. The limit must terminate it.
+test "BitReader: readUnary respects limit on degenerate all-zeros stream" {
+    // Long run of 0s past EOF (zero-padded). Without a 1-terminator
+    // readUnary must bail at `limit`.
+    const data = [_]u8{ 0x00, 0x00 };
     var br = BitReader.init(&data);
     try std.testing.expectEqual(@as(u32, 16), br.readUnary(16));
 }

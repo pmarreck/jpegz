@@ -45,9 +45,14 @@ pub const ScanState = struct {
     /// Per-component context tables. JPEG-LS replicates state per
     /// component for multi-component scans (T.87 §A.3.5).
     contexts: [4][NUM_CONTEXTS]ContextState,
-    /// Run-mode J index per RItype slot (T.87 §A.7.1 Table A.16).
-    /// 0..31. Caps at 31; advances on each run continuation.
-    run_index: [4][2]u8,
+    /// Two run-interruption contexts per component (T.87 §A.7.2):
+    ///   [0] = RItype 0 (|Ra - Rb| ≤ NEAR — flat region)
+    ///   [1] = RItype 1 (anything else)
+    run_contexts: [4][2]RunContextState,
+    /// One run_index per component (T.87 §A.7.1). Caps at 31.
+    /// Advances on each run continuation; decrements after a run
+    /// interruption sample.
+    run_index: [4]u8,
     /// Frame parameters.
     MAXVAL: u32,
     NEAR: u32,
@@ -79,7 +84,7 @@ pub const ScanState = struct {
         self.bpp = bpp;
         self.qbpp = qbpp;
         self.LIMIT = computeLimit(bpp, qbpp);
-        self.run_index = .{ .{ 0, 0 }, .{ 0, 0 }, .{ 0, 0 }, .{ 0, 0 } };
+        self.run_index = .{ 0, 0, 0, 0 };
         // Per-context init — direct fill to keep Zig's type inference
         // simple (nested struct literals through 3 array dimensions
         // confuse it as of 0.16).
@@ -89,6 +94,10 @@ pub const ScanState = struct {
             while (q < NUM_CONTEXTS) : (q += 1) {
                 self.contexts[ci][q] = .{ .A = initial_A, .B = 0, .C = 0, .N = 1 };
             }
+            // Run-interruption contexts also use initial A per
+            // T.87 §A.8 step 1.f.
+            self.run_contexts[ci][0] = .{ .A = initial_A, .Nn = 0, .N = 1 };
+            self.run_contexts[ci][1] = .{ .A = initial_A, .Nn = 0, .N = 1 };
         }
         self.setDefaultThresholds();
     }
@@ -126,13 +135,16 @@ inline fn clampI32(v: i32, lo: i32, hi: i32) i32 {
     return @max(lo, @min(hi, v));
 }
 
-/// `LIMIT = 2 * (bpp + max(8, bpp)) - qbpp - 1` (T.87 Eq. A.18).
-/// Caps the unary part of Golomb-Rice; above this we escape into a
-/// full qbpp-bit value.
+/// `LIMIT = 2 * (bpp + max(8, bpp))`. This matches charls's
+/// `compute_limit_parameter`; the `- qbpp - 1` from the T.87 text
+/// formula is applied at the *comparison* site inside
+/// `decodeGolombRice` (the standard/escape branch threshold is
+/// `LIMIT - qbpp - 1`), not in the LIMIT constant itself.
+/// For 8-bit: LIMIT = 32. For 16-bit: LIMIT = 64.
 fn computeLimit(bpp: u8, qbpp: u8) u8 {
+    _ = qbpp;
     const high: u32 = @as(u32, bpp) + @max(@as(u32, 8), @as(u32, bpp));
-    const lim: u32 = 2 * high - @as(u32, qbpp) - 1;
-    return @intCast(lim);
+    return @intCast(2 * high);
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -173,37 +185,44 @@ pub inline fn quantize(d: i32, t1: i32, t2: i32, t3: i32, near: i32) i32 {
 /// must be applied to the prediction error to fold the negative
 /// twin onto the same context.
 pub const ContextLookup = struct {
-    /// Canonical context index in [0, 364].
+    /// Canonical context index in [0, 364]. 0 reserved for (0,0,0)
+    /// which triggers run mode; caller checks `q == 0` before
+    /// invoking regular-mode helpers.
     q: usize,
-    /// +1 or -1. Multiply the predicted/decoded error by `sign` to
-    /// undo the canonicalization.
+    /// +1 or -1. Multiply the decoded error by `sign` to undo
+    /// the canonicalization on the way out.
     sign: i8,
 };
 
-/// Map (Q1, Q2, Q3) → canonical context index 0..364, with sign
-/// canonicalization (T.87 §A.3.6): if the first non-zero gradient
-/// is negative, negate all three and flip the sign output.
+/// Map (Q1, Q2, Q3) → canonical context index, with sign
+/// canonicalization. Matches charls's `compute_context_id` +
+/// `bit_wise_sign` / `apply_sign` pair:
+///
+///   qs = (q1 * 9 + q2) * 9 + q3        // signed, in [-364, 364]
+///   sign = qs < 0 ? -1 : +1
+///   q = |qs|                            // in [0, 364]
+///
+/// `q == 0` iff (q1, q2, q3) == (0, 0, 0) iff run mode.
 pub inline fn computeContextIndex(q1: i32, q2: i32, q3: i32) ContextLookup {
-    var s1 = q1;
-    var s2 = q2;
-    var s3 = q3;
-    var sign: i8 = 1;
-    // Sign canonicalization rule from T.87 §A.3.6: find the first
-    // non-zero gradient; if it's negative, negate all three.
-    if (s1 < 0 or (s1 == 0 and s2 < 0) or (s1 == 0 and s2 == 0 and s3 < 0)) {
-        s1 = -s1;
-        s2 = -s2;
-        s3 = -s3;
-        sign = -1;
-    }
-    // 9 values per gradient (-4..4 → offset by +4); pack as
-    // base-9 digits. Range [0, 728]. The canonicalization above
-    // halves this — every reachable index is in [0, 364] inclusive,
-    // with 0 reserved for (0,0,0) which triggers run mode (not
-    // regular). For regular mode the caller routes the (0,0,0)
-    // case before invoking this.
-    const idx: usize = @intCast((s1 + 4) * 81 + (s2 + 4) * 9 + (s3 + 4));
-    return .{ .q = idx, .sign = sign };
+    const qs: i32 = (q1 * 9 + q2) * 9 + q3;
+    if (qs >= 0) return .{ .q = @intCast(qs), .sign = 1 };
+    return .{ .q = @intCast(-qs), .sign = -1 };
+}
+
+/// `applySign(value, sign)`: return `value` if sign=+1, `-value` if
+/// sign=-1. Used to undo the sign canonicalization on decoded errors.
+pub inline fn applySign(value: i32, sign: i8) i32 {
+    return if (sign < 0) -value else value;
+}
+
+/// `computeReconstructed(predicted, error)`: `(predicted + error)
+/// mod RANGE`, with RANGE = MAXVAL + 1. T.87 §A.5.
+pub inline fn computeReconstructed(predicted: i32, errval: i32, MAXVAL: u32) i32 {
+    var v: i32 = predicted + errval;
+    const range: i32 = @intCast(MAXVAL + 1);
+    if (v < 0) v += range;
+    if (v > @as(i32, @intCast(MAXVAL))) v -= range;
+    return v;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -249,44 +268,117 @@ pub inline fn mapMErrvalToErrval(merrval: u32) i32 {
 // State update (T.87 §A.6)
 // ─────────────────────────────────────────────────────────────────
 
-/// Apply the post-sample state update at the given context.
+/// Apply the post-sample state update at the given context. Order
+/// follows T.87 §A.6 / charls' `update_variables_and_bias`:
 ///
-/// Order matters:
-///   1. Bias correction adjustment (`updateBiasCorrection`) reads
-///      pre-update B[Q] and N[Q] before mutating C[Q].
-///   2. Then A and N accumulate the new sample.
-///   3. If N hits RESET, halve all three (decimation — T.87
-///      §A.6.1 step "Reset").
+///   1. A += |errval|; B += errval * (2*NEAR+1).
+///   2. If N == RESET, halve A, B, N (arithmetic shift on B so
+///      negative values round toward -∞).
+///   3. ++N.
+///   4. Bias-correction adjustment of C[Q] based on the new B/N.
 pub inline fn updateState(state: *ScanState, ci: usize, q: usize, errval: i32) void {
     const ctx = &state.contexts[ci][q];
-    // Step 1: bias-correction adjustment. Reads pre-update B/N.
-    updateBiasCorrection(ctx, errval);
-    // Step 2: accumulate.
+    const near_factor: i32 = @intCast(2 * state.NEAR + 1);
     ctx.A +%= @intCast(@abs(errval));
-    ctx.N +%= 1;
-    // Step 3: decimation.
+    ctx.B +%= errval * near_factor;
     if (ctx.N == state.RESET) {
         ctx.A >>= 1;
-        ctx.B = @divFloor(ctx.B - 1, 2);
+        ctx.B = ctx.B >> 1; // arithmetic shift — preserves sign
         ctx.N >>= 1;
+    }
+    ctx.N +%= 1;
+    biasCorrectAfterUpdate(ctx);
+}
+
+/// T.87 §A.6.1 — applied AFTER A/B accumulation and the N++ step.
+/// Walks C[Q] toward zero so the bias-corrected prediction trends
+/// toward the true sample value.
+inline fn biasCorrectAfterUpdate(ctx: *ContextState) void {
+    const n_i: i32 = @intCast(ctx.N);
+    if (ctx.B + n_i <= 0) {
+        ctx.B +%= n_i;
+        if (ctx.B <= -n_i) ctx.B = -n_i + 1;
+        if (ctx.C > -128) ctx.C -= 1;
+    } else if (ctx.B > 0) {
+        ctx.B -%= n_i;
+        if (ctx.B > 0) ctx.B = 0;
+        if (ctx.C < 127) ctx.C += 1;
     }
 }
 
-/// T.87 §A.6.1 bias correction. The algorithm shifts C up/down by
-/// 1 based on whether B trends positive (toward over-prediction)
-/// or negative (under-prediction), clamped to [-128, 127].
+/// Legacy name kept for the §1b test that calls `updateBiasCorrection`
+/// directly. The new code path (`updateState`) doesn't use it.
 pub inline fn updateBiasCorrection(ctx: *ContextState, errval: i32) void {
     ctx.B +%= errval;
-    const n_i: i32 = @intCast(ctx.N);
-    if (ctx.B <= -n_i) {
-        if (ctx.C > -128) ctx.C -= 1;
-        ctx.B +%= n_i;
-        if (ctx.B <= -n_i) ctx.B = -n_i + 1;
-    } else if (ctx.B > 0) {
-        if (ctx.C < 127) ctx.C += 1;
-        ctx.B -%= n_i;
-        if (ctx.B > 0) ctx.B = 0;
+    biasCorrectAfterUpdate(ctx);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Run mode (T.87 §A.7)
+// ─────────────────────────────────────────────────────────────────
+
+/// Run-length code table (T.87 §A.2.1, Table A.16 / charls's `J`).
+/// Indexed by `run_index` ∈ [0, 31]. Each entry is the number of
+/// bits in the residual run-length code at that index, which also
+/// equals log2 of the run-step.
+pub const J_TABLE = [_]u8{
+    0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3,
+    4, 4, 5, 5, 6, 6, 7, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+};
+
+/// Run-interruption context (T.87 §A.7.2). Two per component
+/// (RItype 0 and 1), stored in `ScanState.run_contexts[ci][0..2]`.
+pub const RunContextState = struct {
+    A: u32 = 4,
+    /// Negative-error count, for the k=0 sign-correction trick.
+    Nn: u32 = 0,
+    N: u32 = 1,
+};
+
+/// k for a run-mode interruption context (T.87 §A.7.4 / charls's
+/// `context_run_mode::get_golomb_code`).
+pub inline fn runModeGetK(rc: *const RunContextState, ri_type: u8) u5 {
+    const temp: u32 = rc.A + (rc.N >> 1) * @as(u32, ri_type);
+    var n_test: u32 = rc.N;
+    var k: u5 = 0;
+    while (n_test < temp and k < 31) : (k += 1) n_test <<= 1;
+    return k;
+}
+
+/// Recover the signed Errval from the wire-format `e_mapped` value
+/// for a run-interruption sample (charls's
+/// `context_run_mode::compute_error_value`).
+pub inline fn runModeComputeError(
+    rc: *const RunContextState,
+    e_mapped: u32,
+    k: u5,
+    ri_type: u8,
+) i32 {
+    const temp: u32 = e_mapped + ri_type;
+    const map_bit: u1 = @intCast(temp & 1);
+    const abs_err: i32 = @intCast(@divFloor(temp + map_bit, 2));
+    // `(k != 0 || (2*Nn >= N)) == map` → return -abs_err else abs_err.
+    const condition: bool = (k != 0) or (2 * rc.Nn >= rc.N);
+    if (condition == (map_bit == 1)) return -abs_err;
+    return abs_err;
+}
+
+/// Update run-interruption context after a sample (T.87 §A.7.5).
+pub inline fn runModeUpdate(
+    rc: *RunContextState,
+    errval: i32,
+    e_mapped: u32,
+    ri_type: u8,
+    reset_threshold: u32,
+) void {
+    if (errval < 0) rc.Nn +%= 1;
+    rc.A +%= @intCast(@divFloor(@as(i32, @intCast(e_mapped)) + 1 - @as(i32, ri_type), 2));
+    if (rc.N == reset_threshold) {
+        rc.A >>= 1;
+        rc.N >>= 1;
+        rc.Nn >>= 1;
     }
+    rc.N +%= 1;
 }
 
 // ── Inline tests ─────────────────────────────────────────────────
@@ -324,27 +416,39 @@ test "quantize: standard 8-bit thresholds {3,7,21}" {
     try std.testing.expectEqual(@as(i32, -4), quantize(-21, 3, 7, 21, 0));
 }
 
-test "computeContextIndex: canonical positive-leading tuple" {
-    // (1, 0, 0) — positive Q1, sign stays +1.
+test "computeContextIndex: canonical positive tuple" {
+    // qs = (1*9 + 0)*9 + 0 = 81. Positive → sign=+1, q=81.
     const r = computeContextIndex(1, 0, 0);
     try std.testing.expectEqual(@as(i8, 1), r.sign);
-    // Index = (1+4)*81 + (0+4)*9 + (0+4) = 405 + 36 + 4 = 445.
-    try std.testing.expectEqual(@as(usize, 445), r.q);
+    try std.testing.expectEqual(@as(usize, 81), r.q);
 }
 
-test "computeContextIndex: sign-canonicalize negative-leading tuple" {
-    // (-1, 0, 0) → flip to (1, 0, 0), sign = -1.
+test "computeContextIndex: negative tuple folds to positive index" {
+    // qs = -81. q=|qs|=81, sign=-1.
     const r = computeContextIndex(-1, 0, 0);
     try std.testing.expectEqual(@as(i8, -1), r.sign);
-    try std.testing.expectEqual(@as(usize, 445), r.q);
+    try std.testing.expectEqual(@as(usize, 81), r.q);
 }
 
-test "computeContextIndex: sign-canonicalize when leading zero" {
-    // (0, -2, 1) → first non-zero is q2 = -2 (negative), flip → (0, 2, -1), sign = -1.
-    const r = computeContextIndex(0, -2, 1);
-    try std.testing.expectEqual(@as(i8, -1), r.sign);
-    // Index = (0+4)*81 + (2+4)*9 + (-1+4) = 324 + 54 + 3 = 381.
-    try std.testing.expectEqual(@as(usize, 381), r.q);
+test "computeContextIndex: run-mode trigger (0,0,0) returns q=0" {
+    const r = computeContextIndex(0, 0, 0);
+    try std.testing.expectEqual(@as(i8, 1), r.sign);
+    try std.testing.expectEqual(@as(usize, 0), r.q);
+}
+
+test "applySign: passthrough vs negate" {
+    try std.testing.expectEqual(@as(i32, 5), applySign(5, 1));
+    try std.testing.expectEqual(@as(i32, -5), applySign(5, -1));
+    try std.testing.expectEqual(@as(i32, 5), applySign(-5, -1));
+}
+
+test "computeReconstructed: in-range / wrap-low / wrap-high" {
+    // RANGE = 256.
+    try std.testing.expectEqual(@as(i32, 100), computeReconstructed(80, 20, 255));
+    // -1 wraps to 255.
+    try std.testing.expectEqual(@as(i32, 255), computeReconstructed(0, -1, 255));
+    // 256 wraps to 0.
+    try std.testing.expectEqual(@as(i32, 0), computeReconstructed(255, 1, 255));
 }
 
 test "computeK: simple cases" {
@@ -371,17 +475,17 @@ test "mapMErrvalToErrval: round-trip via known mapping" {
 }
 
 test "decodeGolombRice: k=0 simple unary code" {
-    // k=0: each Errval is a unary count. Stream 0b110_00000 →
-    // unary = 2 (two 1s + a 0), no low bits since k=0 → result 2.
-    const data = [_]u8{0b1100_0000};
+    // JPEG-LS unary: n zeros then a 1. k=0 → result = high alone.
+    // Stream 0b001_00000 → 2 zeros then a 1 → high = 2.
+    const data = [_]u8{0b0010_0000};
     var br = bitstream.BitReader.init(&data);
     try std.testing.expectEqual(@as(u32, 2), decodeGolombRice(&br, 0, 16, 8));
 }
 
 test "decodeGolombRice: k=2 mixed unary+binary" {
-    // k=2: unary high then 2 low bits. Stream 0b10_11_xxxx → high=1
-    // (one 1-bit then 0), low = 0b11 = 3, total = (1 << 2) | 3 = 7.
-    const data = [_]u8{0b1011_0000};
+    // Stream 0b01_11_0000 → unary = 1 (one zero then a 1), low = 0b11 = 3
+    // → result = (1 << 2) | 3 = 7.
+    const data = [_]u8{0b0111_0000};
     var br = bitstream.BitReader.init(&data);
     try std.testing.expectEqual(@as(u32, 7), decodeGolombRice(&br, 2, 16, 8));
 }
@@ -396,8 +500,8 @@ test "ScanState.reset: 8-bit lossless defaults" {
     try std.testing.expectEqual(@as(u32, 21), s.T3);
     try std.testing.expectEqual(@as(u32, 64), s.RESET);
     try std.testing.expectEqual(@as(u8, 8), s.qbpp);
-    // A.18: LIMIT = 2*(8+8) - 8 - 1 = 23.
-    try std.testing.expectEqual(@as(u8, 23), s.LIMIT);
+    // charls's compute_limit_parameter: 2*(8+8) = 32.
+    try std.testing.expectEqual(@as(u8, 32), s.LIMIT);
     // Initial context: A=max(2, (RANGE+32)>>6) = max(2, (256+32)>>6) = max(2, 4) = 4.
     try std.testing.expectEqual(@as(u32, 4), s.contexts[0][0].A);
     try std.testing.expectEqual(@as(u32, 1), s.contexts[0][0].N);
