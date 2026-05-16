@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const jpegz = @import("jpegz");
+const build_options = @import("build_options");
 
 /// 2×2 RGB baseline JPEG (Y'CbCr internally, decoded to RGB by libjpeg-turbo).
 /// Generated via `cjpeg -quality 90 -baseline` from a 2×2 PPM with
@@ -607,6 +608,7 @@ const fixture_jpegls_4x4_gray16 = @embedFile("fixtures/jpegls_4x4_gray16.jls");
 const fixture_jpegls_4x4_rgb8 = @embedFile("fixtures/jpegls_4x4_rgb8.jls");
 
 test "B2: JPEG-LS 4x4 8-bit grayscale lossless round-trip via charls wrapper" {
+    if (!build_options.with_charls) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var image = try jpegz.decode(allocator, fixture_jpegls_4x4_gray8);
     defer image.deinit(allocator);
@@ -624,6 +626,7 @@ test "B2: JPEG-LS 4x4 8-bit grayscale lossless round-trip via charls wrapper" {
 }
 
 test "B2: JPEG-LS 4x4 16-bit grayscale lossless round-trip" {
+    if (!build_options.with_charls) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var image = try jpegz.decode(allocator, fixture_jpegls_4x4_gray16);
     defer image.deinit(allocator);
@@ -641,6 +644,7 @@ test "B2: JPEG-LS 4x4 16-bit grayscale lossless round-trip" {
 }
 
 test "B2: JPEG-LS 4x4 RGB 8-bit lossless round-trip" {
+    if (!build_options.with_charls) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var image = try jpegz.decode(allocator, fixture_jpegls_4x4_rgb8);
     defer image.deinit(allocator);

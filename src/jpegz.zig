@@ -189,7 +189,9 @@ pub fn decodeWithOptions(
     // instead of NotImplemented. charls_wrapper's `looksLikeJpegLs`
     // pre-flights cheaply (just walks the marker chain for FF F7);
     // non-JPEG-LS inputs return NotImplemented and fall through.
-    const charls_wrapper = @import("ffi/charls_wrapper.zig");
+    // (When -Dwith-charls=false, the import resolves to a stub that
+    // always returns NotImplemented — see build.zig.)
+    const charls_wrapper = @import("charls_wrapper");
     if (charls_wrapper.decode(allocator, data)) |img| {
         return img;
     } else |err| switch (err) {

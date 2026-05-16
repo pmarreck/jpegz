@@ -55,7 +55,15 @@
         # with a C ABI (charls_jpegls_decoder_*); we consume via cImport.
         # libjpeg-turbo does not ship a JPEG-LS path, so this is the only
         # T.87 oracle available for cleanroom-vs-wrapper testing.
-        charlsPkg = if isLinux then pkgs.pkgsStatic.charls else pkgs.charls;
+        #
+        # On Linux musl-static (CI target), pkgsStatic.charls was built
+        # against libstdc++ but Zig's `link_libcpp` resolves to its
+        # bundled libc++ — symbol mismatch at link time. Linux disables
+        # charls (`-Dwith-charls=false`) until either we rebuild charls
+        # against libc++ or the B2.2 cleanroom replaces this path.
+        # macOS / native dev shell keeps charls enabled.
+        withCharls = !isLinux;
+        charlsPkg = pkgs.charls;
 
         # When cross-targeting (musl on Linux), Zig's host NIX_LDFLAGS /
         # NIX_CFLAGS don't apply, and `--search-prefix` only handles
@@ -69,17 +77,23 @@
         # - pkgsStatic.libjpeg's default output is `bin`, NOT `out`.
         #   Use `.out` for libs, `.dev` for headers.
         # - openjpeg's headers nest under `include/openjpeg-2.5/`.
-        depFlags = pkgs.lib.concatStringsSep " " [
-          "-Dlibjpeg-include=${libjpegTurbo.dev}/include"
-          "-Dlibjpeg-lib=${libjpegTurbo.out}/lib"
-          "-Dopenjpeg-include=${openjpegPkg.dev}/include/openjpeg-2.5"
-          "-Dopenjpeg-lib=${openjpegPkg.out}/lib"
-          "-Dcharls-include=${charlsPkg}/include"
-          "-Dcharls-lib=${charlsPkg}/lib"
-        ];
+        depFlags = pkgs.lib.concatStringsSep " " (
+          [
+            "-Dlibjpeg-include=${libjpegTurbo.dev}/include"
+            "-Dlibjpeg-lib=${libjpegTurbo.out}/lib"
+            "-Dopenjpeg-include=${openjpegPkg.dev}/include/openjpeg-2.5"
+            "-Dopenjpeg-lib=${openjpegPkg.out}/lib"
+          ] ++ (if withCharls then [
+            "-Dcharls-include=${charlsPkg}/include"
+            "-Dcharls-lib=${charlsPkg}/lib"
+          ] else [
+            "-Dwith-charls=false"
+          ])
+        );
 
         commonNativeBuildInputs = [ zigPkg pkgs.git pkgs.cacert ];
-        commonBuildInputs = [ libjpegTurbo openjpegPkg charlsPkg ];
+        commonBuildInputs = [ libjpegTurbo openjpegPkg ]
+          ++ pkgs.lib.optionals withCharls [ charlsPkg ];
 
         # Phase 1 has no external Zig dependencies — `build.zig.zon` will be
         # added when the first dependency is introduced. Until then we don't

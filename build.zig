@@ -20,15 +20,34 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // charls is a C++ library — pulling it in requires linking a C++
+    // stdlib. On macOS native that's seamless (system libc++). On
+    // pkgsStatic Linux musl, pkgsStatic.charls was built against
+    // libstdc++ but Zig's `link_libcpp` resolves to its bundled
+    // libc++ — symbol mismatch at link time. Gate with a build option
+    // so the Linux CI can opt out until either (a) we rebuild charls
+    // against libc++ or (b) the B2.2 cleanroom replaces this path.
+    const with_charls = b.option(bool, "with-charls",
+        "Link charls for JPEG-LS support (default: true)") orelse true;
+
+    // Expose build-time flags to Zig source via @import("build_options").
+    // Test modules consult `with_charls` to skip JPEG-LS-dependent tests
+    // when the wrapper has been gated out.
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "with_charls", with_charls);
+    const build_options_mod = build_options.createModule();
+
     // Link C deps (system; provided by Nix flake's buildInputs):
     //   - libjpeg-turbo (jpeglib.h, used by src/ffi/libjpeg_wrapper.zig)
     //   - openjpeg     (openjpeg.h, used by src/ffi/openjpeg_wrapper.zig)
-    //   - charls       (charls/charls.h, used by src/ffi/charls_wrapper.zig)
+    //   - charls       (charls/charls.h, used by src/ffi/charls_wrapper_impl.zig)
+    //                  — only when -Dwith-charls=true.
     jpegz_mod.linkSystemLibrary("jpeg", .{});
     jpegz_mod.linkSystemLibrary("openjp2", .{});
-    jpegz_mod.linkSystemLibrary("charls", .{});
-    // charls is a C++ library — pull in libc++ for the dylib's symbols.
-    jpegz_mod.link_libcpp = true;
+    if (with_charls) {
+        jpegz_mod.linkSystemLibrary("charls", .{});
+        jpegz_mod.link_libcpp = true;
+    }
     jpegz_mod.link_libc = true;
 
     // Optional explicit include / library paths from the flake. When
@@ -46,8 +65,36 @@ pub fn build(b: *std.Build) void {
     if (opt_libjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
     if (opt_openjpeg_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
     if (opt_openjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
-    if (opt_charls_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
-    if (opt_charls_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
+    if (with_charls) {
+        if (opt_charls_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
+        if (opt_charls_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
+    }
+
+    // Wire the charls wrapper module: real impl when -Dwith-charls=true,
+    // a NotImplemented stub otherwise. Consumers `@import("charls_wrapper")`
+    // and get the right shape transparently.
+    const charls_module_path: []const u8 = if (with_charls)
+        "src/ffi/charls_wrapper_impl.zig"
+    else
+        "src/ffi/charls_wrapper_stub.zig";
+    const charls_wrapper_mod = b.createModule(.{
+        .root_source_file = b.path(charls_module_path),
+        .target = target,
+        .optimize = optimize,
+    });
+    // Two-way import: the wrapper needs jpegz's public types
+    // (DecodeError, Image, ColorSpace, PixelLayout) but can't pull
+    // them from `../jpegz.zig` directly (Zig 0.16 forbids one file
+    // belonging to two modules). Cross-link via `@import("jpegz")`.
+    charls_wrapper_mod.addImport("jpegz", jpegz_mod);
+    if (with_charls) {
+        charls_wrapper_mod.link_libc = true;
+        charls_wrapper_mod.linkSystemLibrary("charls", .{});
+        charls_wrapper_mod.link_libcpp = true;
+        if (opt_charls_inc) |p| charls_wrapper_mod.addIncludePath(.{ .cwd_relative = p });
+        if (opt_charls_lib) |p| charls_wrapper_mod.addLibraryPath(.{ .cwd_relative = p });
+    }
+    jpegz_mod.addImport("charls_wrapper", charls_wrapper_mod);
 
     const lib = b.addLibrary(.{
         .name = "jpegz",
@@ -103,6 +150,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     smoke_mod.addImport("jpegz", jpegz_mod);
+    smoke_mod.addImport("build_options", build_options_mod);
     const smoke_tests = b.addTest(.{
         .name = "smoke",
         .root_module = smoke_mod,
@@ -187,6 +235,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     decode_mod.addImport("jpegz", jpegz_mod);
+    decode_mod.addImport("build_options", build_options_mod);
     const decode_tests = b.addTest(.{
         .name = "decode",
         .root_module = decode_mod,
@@ -285,11 +334,15 @@ pub fn build(b: *std.Build) void {
     // unset and Zig finds the libs via the host wrapper-cc.
     c_smoke_mod.linkSystemLibrary("jpeg", .{});
     c_smoke_mod.linkSystemLibrary("openjp2", .{});
-    c_smoke_mod.linkSystemLibrary("charls", .{});
-    c_smoke_mod.link_libcpp = true;
+    if (with_charls) {
+        c_smoke_mod.linkSystemLibrary("charls", .{});
+        c_smoke_mod.link_libcpp = true;
+    }
     if (opt_libjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
     if (opt_openjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
-    if (opt_charls_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
+    if (with_charls) {
+        if (opt_charls_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
+    }
     const c_smoke = b.addExecutable(.{
         .name = "c_smoke",
         .root_module = c_smoke_mod,
