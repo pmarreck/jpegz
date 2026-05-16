@@ -20,6 +20,24 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // -Dwith-charls=false lets consumers that don't need JPEG-LS
+    // (e.g. tiffz, which only needs baseline/progressive/lossless
+    // for Compression=7 and DNG raw) skip the charls compile + link
+    // entirely. Default true so jpegz's own CI keeps full coverage.
+    const with_charls = b.option(
+        bool,
+        "with-charls",
+        "Compile + link vendored charls (JPEG-LS support). Default true.",
+    ) orelse true;
+
+    // Expose `with_charls` to Zig source via @import("build_options").
+    // src/ffi/charls_wrapper.zig branches its @cImport on this so the
+    // charls header doesn't need to be resolvable when the gate is off.
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "with_charls", with_charls);
+    const build_options_mod = build_options.createModule();
+    jpegz_mod.addImport("build_options", build_options_mod);
+
     // Link C deps (system; provided by Nix flake's buildInputs):
     //   - libjpeg-turbo (jpeglib.h, used by src/ffi/libjpeg_wrapper.zig)
     //   - openjpeg     (openjpeg.h, used by src/ffi/openjpeg_wrapper.zig)
@@ -28,7 +46,7 @@ pub fn build(b: *std.Build) void {
     //                   or CHARLS_SRC env, see the charls block below.
     jpegz_mod.linkSystemLibrary("jpeg", .{});
     jpegz_mod.linkSystemLibrary("openjp2", .{});
-    jpegz_mod.link_libcpp = true;
+    if (with_charls) jpegz_mod.link_libcpp = true;
     jpegz_mod.link_libc = true;
 
     // Optional explicit include / library paths from the flake. When
@@ -45,7 +63,7 @@ pub fn build(b: *std.Build) void {
     if (opt_openjpeg_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
     if (opt_openjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
 
-    // ── charls — vendored, compiled by Zig ────────────────────
+    // ── charls — vendored, compiled by Zig (gated on -Dwith-charls) ──
     //
     // We tried two paths through nixpkgs binaries first; both broke
     // (gcc/libstdc++ vs Zig's libc++ symbol mismatch on Linux musl,
@@ -61,10 +79,11 @@ pub fn build(b: *std.Build) void {
         "Path to vendored charls source tree (with src/ + include/charls/)",
     ) orelse b.graph.environ_map.get("CHARLS_SRC");
 
-    const charls_lib: *std.Build.Step.Compile = blk: {
+    if (with_charls) {
         const path = charls_src_path orelse @panic(
             "charls source path required: pass -Dcharls-src=PATH or set CHARLS_SRC env. " ++
-            "Inside the nix devShell or nix build, both are configured automatically.",
+            "Inside the nix devShell or nix build, both are configured automatically. " ++
+            "Consumers that don't need JPEG-LS can pass -Dwith-charls=false.",
         );
         const charls_mod = b.createModule(.{
             .target = target,
@@ -92,15 +111,12 @@ pub fn build(b: *std.Build) void {
         });
         charls_mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{path}) });
         charls_mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/src", .{path}) });
-        const lib = b.addLibrary(.{
+        const charls_lib = b.addLibrary(.{
             .name = "charls",
             .linkage = .static,
             .root_module = charls_mod,
         });
-        break :blk lib;
-    };
-    jpegz_mod.linkLibrary(charls_lib);
-    if (charls_src_path) |path| {
+        jpegz_mod.linkLibrary(charls_lib);
         jpegz_mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{path}) });
     }
 

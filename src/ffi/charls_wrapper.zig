@@ -19,10 +19,43 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const errors = @import("../core/errors.zig");
 const types = @import("../jpegz.zig");
+const build_options = @import("build_options");
 
-const c = @cImport({
+// `c` is namespaced behind the with_charls build option. When false
+// (consumers that don't link charls, e.g. tiffz), the @cImport never
+// runs — the include path isn't present and would fail to resolve.
+// Wrapping in an `if (comptime ...) struct { ... } else struct {}`
+// keeps the @cImport inside the false-pruned branch so it's a no-op
+// at parse time when the gate is off.
+const c = if (build_options.with_charls) @cImport({
     @cInclude("charls/charls.h");
-});
+}) else struct {
+    pub const charls_frame_info = extern struct {
+        width: u32,
+        height: u32,
+        bits_per_sample: i32,
+        component_count: i32,
+    };
+    pub fn charls_jpegls_decoder_create() ?*anyopaque {
+        return null;
+    }
+    pub fn charls_jpegls_decoder_destroy(_: ?*anyopaque) callconv(.c) void {}
+    pub fn charls_jpegls_decoder_set_source_buffer(_: ?*anyopaque, _: [*]const u8, _: usize) c_int {
+        return 0;
+    }
+    pub fn charls_jpegls_decoder_read_header(_: ?*anyopaque) c_int {
+        return 0;
+    }
+    pub fn charls_jpegls_decoder_get_frame_info(_: ?*anyopaque, _: *charls_frame_info) c_int {
+        return 0;
+    }
+    pub fn charls_jpegls_decoder_get_destination_size(_: ?*anyopaque, _: u32, _: *usize) c_int {
+        return 0;
+    }
+    pub fn charls_jpegls_decoder_decode_to_buffer(_: ?*anyopaque, _: [*]u8, _: usize, _: u32) c_int {
+        return 0;
+    }
+};
 
 /// charls' I8 enum cast — interleave mode tells us pixel layout.
 /// 0 = none (planar), 1 = line-interleaved, 2 = sample-interleaved (RGB).
@@ -72,6 +105,7 @@ fn looksLikeJpegLs(data: []const u8) bool {
 /// `error.NotImplemented` for non-JPEG-LS inputs (so the dispatcher
 /// falls through) and `error.BackendError` for charls failures.
 pub fn decode(allocator: Allocator, data: []const u8) errors.DecodeError!types.Image {
+    if (comptime !build_options.with_charls) return error.NotImplemented;
     if (!looksLikeJpegLs(data)) return error.NotImplemented;
 
     const decoder = c.charls_jpegls_decoder_create() orelse return error.OutOfMemory;
