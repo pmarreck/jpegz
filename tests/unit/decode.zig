@@ -623,6 +623,23 @@ test "B2: JPEG-LS 4x4 8-bit grayscale lossless round-trip via charls wrapper" {
     }
 }
 
+test "B2.2 §4: JPEG-LS 4x4 16-bit grayscale cleanroom (direct entry)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, fixture_jpegls_4x4_gray16);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 1), image.channels);
+    try std.testing.expectEqual(@as(u8, 16), image.bits_per_sample);
+    try std.testing.expectEqual(@as(usize, 32), image.pixels.len);
+    const px = image.pixelsU16();
+    try std.testing.expectEqual(@as(usize, 16), px.len);
+    for (px, 0..) |s, i| {
+        try std.testing.expectEqual(@as(u16, @intCast(i * 0x1111)), s);
+    }
+}
+
 test "B2: JPEG-LS 4x4 16-bit grayscale lossless round-trip" {
     const allocator = std.testing.allocator;
     var image = try jpegz.decode(allocator, fixture_jpegls_4x4_gray16);

@@ -12,12 +12,14 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const builtin = @import("builtin");
 const errors = @import("../core/errors.zig");
 const types = @import("../core/types.zig");
 const codec = @import("jpegls_codec.zig");
 const bitstream = @import("jpegls_bitstream");
 
 const Error = errors.DecodeError;
+const native_endian = builtin.cpu.arch.endian();
 
 // T.87 marker bytes (those that differ from T.81 are noted).
 const M_SOI: u8 = 0xD8;
@@ -110,11 +112,13 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
                 pos += parseSegmentLength(data, pos);
                 if (scan.NEAR != 0) return error.NotImplemented; // NEAR > 0 deferred
                 if (scan.ILV != 0 and scan.ILV != 2) return error.NotImplemented;
-                if (frame.?.P > 8) return error.NotImplemented; // §4 covers 16-bit
                 if (frame.?.num_components == 1) {
-                    return try decodeScan8Mono(allocator, data[pos..], &frame.?, &scan, &preset);
+                    return try decodeScanMono(allocator, data[pos..], &frame.?, &scan, &preset);
                 }
-                if (frame.?.num_components == 3 and scan.ILV == 2) {
+                // RGB sample-interleaved currently lives in the 8-bit
+                // path; 16-bit RGB has no fixture yet — would generalize
+                // the same way `decodeScanMono` did when one lands.
+                if (frame.?.num_components == 3 and scan.ILV == 2 and frame.?.P <= 8) {
                     return try decodeScan8Rgb(allocator, data[pos..], &frame.?, &scan, &preset);
                 }
                 return error.NotImplemented;
@@ -278,14 +282,18 @@ test "parseLse: subtype 4 (mapping table) silently skipped" {
 // tests/unit/decode.zig now that §2 actually decodes the scan body.)
 
 // ─────────────────────────────────────────────────────────────────
-// Scan body — 8-bit, 1-component (Session 2 scope).
+// Scan body — 1-component, 8 or 16-bit precision (Sessions 2 + 4).
 // ─────────────────────────────────────────────────────────────────
 
-/// Decode a 1-component 8-bit JPEG-LS scan. Entropy-decodes every
-/// sample via regular or run mode and emits a raster-order pixel
-/// buffer. T.87 §A; mirrors charls' `jls_codec::do_line` /
-/// `do_run_mode` for the single-component path.
-fn decodeScan8Mono(
+/// Decode a 1-component JPEG-LS scan (8 or 16-bit precision).
+/// Entropy-decodes every sample via regular or run mode and emits a
+/// raster-order pixel buffer. T.87 §A; mirrors charls'
+/// `jls_codec::do_line` / `do_run_mode` for the single-component path.
+///
+/// Output convention matches the rest of jpegz: P ≤ 8 → `[]u8`,
+/// otherwise `[]u8` aliasing host-endian `[]u16` (caller reinterprets
+/// via `image.pixelsU16()`).
+fn decodeScanMono(
     allocator: Allocator,
     data: []const u8,
     frame: *const FrameInfo,
@@ -295,9 +303,11 @@ fn decodeScan8Mono(
     _ = scan;
     const W: u32 = frame.width;
     const H: u32 = frame.height;
+    const P: u8 = frame.P;
+    const bytes_per_sample: usize = if (P <= 8) 1 else 2;
 
     var state: codec.ScanState = undefined;
-    state.reset(8, 0); // 8-bit, NEAR=0 (lossless)
+    state.reset(P, 0);
     // Apply LSE preset overrides if present.
     if (preset.MAXVAL != 0) state.MAXVAL = preset.MAXVAL;
     if (preset.T1 != 0) state.T1 = preset.T1;
@@ -306,7 +316,7 @@ fn decodeScan8Mono(
     if (preset.RESET != 0) state.RESET = preset.RESET;
 
     var br = bitstream.BitReader.init(data);
-    const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H));
+    const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H) * bytes_per_sample);
     errdefer allocator.free(pixels);
 
     // Two scan-lines buffered so we can access Rb/Rc/Rd from the
@@ -336,8 +346,7 @@ fn decodeScan8Mono(
             const ra: i32 = cur_line[x];
             const rb: i32 = prev_line[x + 1];
             const rc: i32 = prev_line[x];
-            const rd_raw: i32 = if (x + 1 < W) prev_line[x + 2] else rb;
-            const rd: i32 = rd_raw;
+            const rd: i32 = if (x + 1 < W) prev_line[x + 2] else rb;
 
             const t1: i32 = @intCast(state.T1);
             const t2: i32 = @intCast(state.T2);
@@ -349,11 +358,9 @@ fn decodeScan8Mono(
 
             const ctx = codec.computeContextIndex(q1, q2, q3);
             if (ctx.q == 0) {
-                // Run mode.
                 const consumed = try decodeRun(&state, &br, ra, cur_line, prev_line, x, W);
                 x += consumed;
             } else {
-                // Regular mode.
                 const c_correction: i32 = @as(i32, state.contexts[0][ctx.q].C);
                 var px = codec.predictMed(ra, rb, rc);
                 px += codec.applySign(c_correction, ctx.sign);
@@ -366,7 +373,6 @@ fn decodeScan8Mono(
                 const merrval = codec.decodeGolombRice(&br, k, state.LIMIT, state.qbpp);
                 var errval = codec.mapMErrvalToErrval(merrval);
                 if (k == 0) {
-                    // T.87 §A.6.2 — k=0 sign-correction trick.
                     const b = state.contexts[0][ctx.q].B;
                     const n_i: i32 = @intCast(state.contexts[0][ctx.q].N);
                     if (2 * b + n_i - 1 < 0) errval = ~errval;
@@ -375,16 +381,23 @@ fn decodeScan8Mono(
                 const signed_err = codec.applySign(errval, ctx.sign);
                 const sample = codec.computeReconstructed(px, signed_err, state.MAXVAL);
                 cur_line[x + 1] = sample;
-                pixels[@as(usize, y) * @as(usize, W) + @as(usize, x)] = @intCast(sample);
                 x += 1;
             }
         }
-        // Mirror cur_line → pixels (run mode wrote to cur_line; finalize).
+        // Drain cur_line → pixels (run mode wrote to cur_line; finalize).
         var xc: u32 = 0;
         while (xc < W) : (xc += 1) {
-            pixels[@as(usize, y) * @as(usize, W) + @as(usize, xc)] = @intCast(cur_line[xc + 1]);
+            const sample: i32 = cur_line[xc + 1];
+            const out_idx: usize = (@as(usize, y) * @as(usize, W) + @as(usize, xc)) * bytes_per_sample;
+            if (P <= 8) {
+                pixels[out_idx] = @intCast(sample);
+            } else {
+                // Host-endian u16 — same convention as the lossless /
+                // SOF2 12-bit cleanroom paths (`pixelsU16()` aliases).
+                const v: u16 = @intCast(sample);
+                std.mem.writeInt(u16, pixels[out_idx..][0..2], v, native_endian);
+            }
         }
-        // Swap buffers (would copy or swap; for simplicity, copy).
         @memcpy(prev_line, cur_line);
     }
 
@@ -393,7 +406,7 @@ fn decodeScan8Mono(
         .width = W,
         .height = H,
         .channels = 1,
-        .bits_per_sample = 8,
+        .bits_per_sample = P,
         .source_color_space = .grayscale,
         .layout = .grayscale,
     };
