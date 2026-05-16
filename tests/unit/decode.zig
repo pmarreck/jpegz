@@ -508,6 +508,30 @@ test "decode 8x8 progressive grayscale (currently wrapper; cleanroom WIP)" {
 // closely enough to wire into dispatch.
 // ─────────────────────────────────────────────────────────────────────
 
+test "M2.2 regression: 8-bit progressive cleanroom is byte-perfect vs wrapper" {
+    // 2026-05-16 sweep showed cleanroom is byte-exact (max_delta = 0)
+    // on every 8-bit progressive fixture in tree: prog_8x8_gray (1ch),
+    // prog_8x8_rgb (3ch), prog_32x32_dri (DRI > 0). Tightening from
+    // ≤2 LSB to == 0 to catch any future regression in the IDCT /
+    // YCbCr→RGB / chroma upsample paths. (12-bit tests keep their
+    // ≤2..4 LSB gate — sub-pixel rounding in u16 path is not yet
+    // fully aligned to libjpeg-turbo's rounding mode.)
+    const allocator = std.testing.allocator;
+    const cases = [_][]const u8{
+        fixture_progressive_8x8_gray,
+        fixture_progressive_8x8,
+        fixture_progressive_32x32_dri,
+    };
+    for (cases) |data| {
+        var cleanroom = try jpegz.internal.progressiveDecode(allocator, data);
+        defer cleanroom.deinit(allocator);
+        var wrapper = try jpegz.internal.wrapperDecode(allocator, data);
+        defer wrapper.deinit(allocator);
+        try std.testing.expectEqual(wrapper.pixels.len, cleanroom.pixels.len);
+        try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+    }
+}
+
 test "M2.2: progressive cleanroom decodes 8x8 grayscale fixture" {
     const allocator = std.testing.allocator;
     var cleanroom = try jpegz.internal.progressiveDecode(allocator, fixture_progressive_8x8_gray);

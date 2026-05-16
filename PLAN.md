@@ -252,23 +252,37 @@ machinery where possible).
           here). Tolerance can be added behind a flag if a future
           consumer wants it.
 
-- [~] **M2.2 — Progressive cleanroom.** Started 2026-05-07. Module
-      `src/decode/progressive.zig` written end-to-end:
-      - Persistent per-component coefficient buffers
-        (mcu_cols × h_factor × mcu_rows × v_factor blocks × 64 i16)
-      - Multi-scan marker walker (loops SOS until EOI)
-      - All 4 scan-type variants implemented per T.81 §G.1.2:
-        DC first-pass (Ah=0), DC refinement (Ah>0),
-        AC first-pass (Ah=0, with EOB-run extension),
-        AC refinement (Ah>0, with sign-preserving 1-bit refinement
-        and EOB-run carry-over)
-      - Final pass: dequantize zig-zag → un-zig-zag → IDCT → YCbCr→RGB
-      Currently NOT wired into dispatch in src/jpegz.zig — output
-      doesn't match the wrapper byte-for-byte on the simplest 8×8
-      grayscale fixture (6-scan progressive). Likely culprits in
-      AC-refinement walk-forward logic (ZRL semantics) or the
-      multi-scan byte-position handoff. Iteration to pixel-equality
-      is the M2.2-complete checkpoint; current commit is WIP.
+- [x] **M2.2 — Progressive cleanroom (SOF2, 8 + 12-bit).** Shipped
+      2026-05-08, wired into dispatch in `src/jpegz.zig`. Module
+      `src/decode/progressive.zig` covers all 4 scan-type variants
+      per T.81 §G.1.2 (DC first/refine, AC first/refine with EOB-run
+      and sign-preserving 1-bit refinement), DRI > 0 (restart markers
+      in progressive), 1- and 3-component scans at both 8-bit and
+      12-bit precision, all 4 chroma sampling factors (4:4:4, 4:2:2,
+      4:2:0, 4:4:0), IJG-compatible fancy chroma upsampling.
+
+      **2026-05-16 sweep results (cleanroom vs libjpeg-turbo wrapper):**
+        - 8-bit progressive (3 fixtures: gray, RGB, DRI): **byte-perfect**
+          (max_delta = 0, 100% exact). Locked in by regression test.
+        - 12-bit grayscale: max_delta = 1 (98% exact).
+        - 12-bit RGB at 4:4:4 / 4:2:0 / 4:2:2 / 4:4:0: max_delta = 2–3
+          (93–95% exact). Sub-pixel rounding noise in u16 path; well
+          within the existing ≤4 LSB tolerance gate. Tightening to
+          byte-perfect would require aligning to libjpeg-turbo's
+          rounding mode in the 12-bit IDCT + YCbCr→RGB path — back-of-
+          cabinet polish, not blocking.
+
+      Validation history: against 276 real-world progressive JPEGs
+      from Peter's corpus on 2026-05-08, 199 byte-perfect / 77 within
+      ≤2 LSB sub-pixel rounding. Six bug fixes shipped during that
+      iteration: end-of-scan marker (markerHit→seekToMarker), libjpeg
+      `insufficient_data` parity, AC refinement ZRL break semantics
+      (libjpeg's `--r < 0`), float→fixed-point YCbCr, single-component
+      scan iteration via T.81 §A.2.4 xi/yi, IJG fancy chroma upsample.
+
+      Remaining NotImplemented gates (intentional fall-through to
+      wrapper): 4-component (CMYK) progressive — no real-world demand,
+      no fixture in tree. _(2026-05-08 EST; sweep 2026-05-16 EST)_
 - [ ] **M2.3 — Lossless audit.** Audit the lifted decoder against T.81
       §13 + libjpeg-turbo oracle.
 - [ ] **M2.4 — 12-bit precision.** Rare but spec-mandatory.
