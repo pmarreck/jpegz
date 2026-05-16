@@ -115,11 +115,8 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
                 if (frame.?.num_components == 1) {
                     return try decodeScanMono(allocator, data[pos..], &frame.?, &scan, &preset);
                 }
-                // RGB sample-interleaved currently lives in the 8-bit
-                // path; 16-bit RGB has no fixture yet — would generalize
-                // the same way `decodeScanMono` did when one lands.
-                if (frame.?.num_components == 3 and scan.ILV == 2 and frame.?.P <= 8) {
-                    return try decodeScan8Rgb(allocator, data[pos..], &frame.?, &scan, &preset);
+                if (frame.?.num_components == 3 and scan.ILV == 2) {
+                    return try decodeScanRgb(allocator, data[pos..], &frame.?, &scan, &preset);
                 }
                 return error.NotImplemented;
             },
@@ -484,17 +481,18 @@ fn decodeRun(
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Scan body — 8-bit, 3-component sample-interleaved (Session 3 scope).
+// Scan body — 3-component sample-interleaved, 8 or 16-bit precision.
 // ─────────────────────────────────────────────────────────────────
 
-/// Decode a 3-component 8-bit sample-interleaved (ILV=2) JPEG-LS scan.
-/// Mirrors charls' `do_line<triplet<sample_type>>`. Contexts are
-/// SHARED across components in sample-interleaved mode (T.87 §A.3.5 +
-/// charls' single `contexts_[]` array per codec instance); the run-
-/// interruption sample always uses `context_run_mode_[0]` (edge) for
-/// all three components — the run only initiates over identical
-/// triplets, so its termination implies an edge.
-fn decodeScan8Rgb(
+/// Decode a 3-component sample-interleaved (ILV=2) JPEG-LS scan,
+/// 8 or 16-bit precision. Mirrors charls' `do_line<triplet<sample_type>>`.
+/// Contexts are SHARED across components in sample-interleaved mode
+/// (T.87 §A.3.5 + charls' single `contexts_[]` array per codec
+/// instance); the run-interruption sample always uses
+/// `context_run_mode_[0]` (edge) for all three components — the run
+/// only initiates over identical triplets, so its termination implies
+/// an edge.
+fn decodeScanRgb(
     allocator: Allocator,
     data: []const u8,
     frame: *const FrameInfo,
@@ -504,9 +502,11 @@ fn decodeScan8Rgb(
     _ = scan;
     const W: u32 = frame.width;
     const H: u32 = frame.height;
+    const P: u8 = frame.P;
+    const bytes_per_sample: usize = if (P <= 8) 1 else 2;
 
     var state: codec.ScanState = undefined;
-    state.reset(8, 0); // 8-bit, NEAR=0 (lossless)
+    state.reset(P, 0);
     if (preset.MAXVAL != 0) state.MAXVAL = preset.MAXVAL;
     if (preset.T1 != 0) state.T1 = preset.T1;
     if (preset.T2 != 0) state.T2 = preset.T2;
@@ -514,7 +514,7 @@ fn decodeScan8Rgb(
     if (preset.RESET != 0) state.RESET = preset.RESET;
 
     var br = bitstream.BitReader.init(data);
-    const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H) * 3);
+    const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H) * 3 * bytes_per_sample);
     errdefer allocator.free(pixels);
 
     // (W+2) triplets per line × 3 components = (W+2)*3 i32 entries.
@@ -602,10 +602,19 @@ fn decodeScan8Rgb(
         var xc: u32 = 0;
         while (xc < W) : (xc += 1) {
             const cidx: usize = (@as(usize, xc) + 1) * 3;
-            const oidx: usize = (@as(usize, y) * @as(usize, W) + @as(usize, xc)) * 3;
-            pixels[oidx]     = @intCast(cur_line[cidx]);
-            pixels[oidx + 1] = @intCast(cur_line[cidx + 1]);
-            pixels[oidx + 2] = @intCast(cur_line[cidx + 2]);
+            const oidx: usize = (@as(usize, y) * @as(usize, W) + @as(usize, xc)) * 3 * bytes_per_sample;
+            if (P <= 8) {
+                pixels[oidx]     = @intCast(cur_line[cidx]);
+                pixels[oidx + 1] = @intCast(cur_line[cidx + 1]);
+                pixels[oidx + 2] = @intCast(cur_line[cidx + 2]);
+            } else {
+                const v0: u16 = @intCast(cur_line[cidx]);
+                const v1: u16 = @intCast(cur_line[cidx + 1]);
+                const v2: u16 = @intCast(cur_line[cidx + 2]);
+                std.mem.writeInt(u16, pixels[oidx..][0..2], v0, native_endian);
+                std.mem.writeInt(u16, pixels[oidx + 2 ..][0..2], v1, native_endian);
+                std.mem.writeInt(u16, pixels[oidx + 4 ..][0..2], v2, native_endian);
+            }
         }
         @memcpy(prev_line, cur_line);
     }
@@ -615,7 +624,7 @@ fn decodeScan8Rgb(
         .width = W,
         .height = H,
         .channels = 3,
-        .bits_per_sample = 8,
+        .bits_per_sample = P,
         .source_color_space = .rgb,
         .layout = .rgb,
     };

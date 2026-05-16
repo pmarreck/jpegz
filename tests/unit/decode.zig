@@ -606,6 +606,11 @@ const fixture_jpegls_4x4_gray16 = @embedFile("fixtures/jpegls_4x4_gray16.jls");
 /// B = (x+y)*0x20.
 const fixture_jpegls_4x4_rgb8 = @embedFile("fixtures/jpegls_4x4_rgb8.jls");
 
+/// 4×4 RGB 16-bit JPEG-LS, sample-interleaved. Same gradient shape as
+/// the 8-bit fixture, scaled into the upper byte: R = x*0x4000,
+/// G = y*0x4000, B = (x+y)*0x2000.
+const fixture_jpegls_4x4_rgb16 = @embedFile("fixtures/jpegls_4x4_rgb16.jls");
+
 test "B2: JPEG-LS 4x4 8-bit grayscale lossless round-trip via charls wrapper" {
     const allocator = std.testing.allocator;
     var image = try jpegz.decode(allocator, fixture_jpegls_4x4_gray8);
@@ -654,6 +659,31 @@ test "B2: JPEG-LS 4x4 16-bit grayscale lossless round-trip" {
     try std.testing.expectEqual(@as(usize, 16), px.len);
     for (px, 0..) |s, i| {
         try std.testing.expectEqual(@as(u16, @intCast(i * 0x1111)), s);
+    }
+}
+
+test "B2.2 RGB16: JPEG-LS 4x4 RGB 16-bit cleanroom (direct entry)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, fixture_jpegls_4x4_rgb16);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+    try std.testing.expectEqual(@as(u8, 16), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.rgb, image.layout);
+    try std.testing.expectEqual(@as(usize, 4 * 4 * 3 * 2), image.pixels.len);
+    const px = image.pixelsU16();
+    try std.testing.expectEqual(@as(usize, 4 * 4 * 3), px.len);
+    var y: u32 = 0;
+    while (y < 4) : (y += 1) {
+        var x: u32 = 0;
+        while (x < 4) : (x += 1) {
+            const off: usize = (@as(usize, y) * 4 + @as(usize, x)) * 3;
+            try std.testing.expectEqual(@as(u16, @intCast(x * 0x4000)), px[off]);
+            try std.testing.expectEqual(@as(u16, @intCast(y * 0x4000)), px[off + 1]);
+            try std.testing.expectEqual(@as(u16, @intCast((x + y) * 0x2000)), px[off + 2]);
+        }
     }
 }
 
