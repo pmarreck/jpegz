@@ -227,6 +227,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(arith_coder_tests).step);
 
+    const jpegls_bitstream_mod = b.createModule(.{
+        .root_source_file = b.path("src/decode/jpegls_bitstream.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const jpegls_bitstream_tests = b.addTest(.{
+        .name = "decode_jpegls_bitstream",
+        .root_module = jpegls_bitstream_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(jpegls_bitstream_tests).step);
+
     // Cleanroom decoder modules (baseline.zig etc.) are tested
     // implicitly via the dispatch in src/jpegz.zig — when a fixture
     // matches the cleanroom's supported shape (8-bit, no subsampling,
