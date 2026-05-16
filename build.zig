@@ -238,20 +238,15 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(jpegls_bitstream_tests).step);
 
-    const jpegls_codec_mod = b.createModule(.{
-        .root_source_file = b.path("src/decode/jpegls_codec.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    // Module-level import to avoid the "file belongs to two modules"
-    // error: codec consumes the bit reader via `@import("jpegls_bitstream")`
-    // rather than a relative file path.
-    jpegls_codec_mod.addImport("jpegls_bitstream", jpegls_bitstream_mod);
-    const jpegls_codec_tests = b.addTest(.{
-        .name = "decode_jpegls_codec",
-        .root_module = jpegls_codec_mod,
-    });
-    test_step.dependOn(&b.addRunArtifact(jpegls_codec_tests).step);
+    // The jpegls cleanroom (`src/decode/jpegls.zig`) and its codec
+    // helpers (`jpegls_codec.zig`) belong to jpegz_mod via relative
+    // @imports from `src/jpegz.zig`'s dispatch. The codec module
+    // pulls in the bit reader via the named import `"jpegls_bitstream"`,
+    // which we wire on jpegz_mod here so it resolves transitively.
+    // Their inline tests run via `jpegz_inline_tests` (no separate
+    // test target — that would put their files in two modules and
+    // Zig 0.16 rejects it).
+    jpegz_mod.addImport("jpegls_bitstream", jpegls_bitstream_mod);
 
     // Cleanroom decoder modules (baseline.zig etc.) are tested
     // implicitly via the dispatch in src/jpegz.zig — when a fixture

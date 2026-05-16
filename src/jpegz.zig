@@ -186,9 +186,17 @@ pub fn decodeWithOptions(
     // JPEG-LS comes first: T.87 uses a different SOF marker (SOF55 =
     // 0xF7) that the other cleanroom paths' marker walkers don't
     // recognize — they'd misclassify and surface InvalidMarker
-    // instead of NotImplemented. charls_wrapper's `looksLikeJpegLs`
-    // pre-flights cheaply (just walks the marker chain for FF F7);
-    // non-JPEG-LS inputs return NotImplemented and fall through.
+    // instead of NotImplemented. Try the cleanroom first (B2.2),
+    // fall through to charls (B2.1) for variants the cleanroom
+    // doesn't yet handle.
+    const jpegls_cleanroom = @import("decode/jpegls.zig");
+    if (jpegls_cleanroom.decode(allocator, data)) |img| {
+        return img;
+    } else |err| switch (err) {
+        error.NotImplemented => {},
+        else => return err,
+    }
+
     const charls_wrapper = @import("ffi/charls_wrapper.zig");
     if (charls_wrapper.decode(allocator, data)) |img| {
         return img;
