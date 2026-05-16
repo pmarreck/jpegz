@@ -65,6 +65,10 @@ pub const ScanState = struct {
     /// Quantized bpp: ceil(log2(RANGE / (2*NEAR + 1))) per T.87
     /// §A.2.1. For NEAR=0 this equals bpp.
     qbpp: u8,
+    /// RANGE = (MAXVAL + 2*NEAR) / (2*NEAR + 1) + 1 (T.87 §A.2.1).
+    /// Drives the reconstruction wrap interval. For NEAR=0 this is
+    /// MAXVAL + 1.
+    RANGE: u32,
     /// LIMIT for unary Golomb-Rice (T.87 §A.5.3, Eq. A.18):
     /// `2 * (bpp + max(8, bpp)) - qbpp - 1`. At bpp=8: 23.
     LIMIT: u8,
@@ -84,6 +88,7 @@ pub const ScanState = struct {
         self.bpp = bpp;
         self.qbpp = qbpp;
         self.LIMIT = computeLimit(bpp, qbpp);
+        self.RANGE = RANGE;
         self.run_index = .{ 0, 0, 0, 0 };
         // Per-context init — direct fill to keep Zig's type inference
         // simple (nested struct literals through 3 array dimensions
@@ -215,14 +220,36 @@ pub inline fn applySign(value: i32, sign: i8) i32 {
     return if (sign < 0) -value else value;
 }
 
-/// `computeReconstructed(predicted, error)`: `(predicted + error)
-/// mod RANGE`, with RANGE = MAXVAL + 1. T.87 §A.5.
-pub inline fn computeReconstructed(predicted: i32, errval: i32, MAXVAL: u32) i32 {
-    var v: i32 = predicted + errval;
-    const range: i32 = @intCast(MAXVAL + 1);
-    if (v < 0) v += range;
-    if (v > @as(i32, @intCast(MAXVAL))) v -= range;
-    return v;
+/// `computeReconstructed(predicted, error, MAXVAL, NEAR, RANGE)`:
+/// applies T.87 §A.5 reconstruction —
+/// `correct_prediction(predicted + dequantize(error))` with the
+/// NEAR-aware wrap interval `[-NEAR, MAXVAL + NEAR]`. NEAR=0 collapses
+/// to the lossless `(predicted + error) mod (MAXVAL+1)` path.
+///
+/// Mirrors charls' `default_traits::compute_reconstructed_sample`
+/// composed with `dequantize` + `fix_reconstructed_value` +
+/// `correct_prediction`. RANGE is `(MAXVAL + 2*NEAR) / (2*NEAR+1) + 1`
+/// — wrap step is `RANGE * (2*NEAR + 1)`.
+pub inline fn computeReconstructed(
+    predicted: i32,
+    errval: i32,
+    MAXVAL: u32,
+    NEAR: u32,
+    RANGE: u32,
+) i32 {
+    const step: i32 = @intCast(2 * NEAR + 1);
+    var v: i32 = predicted + errval * step;
+    const near_i: i32 = @intCast(NEAR);
+    const maxv_i: i32 = @intCast(MAXVAL);
+    const wrap: i32 = @intCast(RANGE * (2 * NEAR + 1));
+    if (v < -near_i) {
+        v += wrap;
+    } else if (v > maxv_i + near_i) {
+        v -= wrap;
+    }
+    // `correct_prediction`: clip to [0, MAXVAL].
+    if ((v & maxv_i) == v) return v;
+    return if (v < 0) 0 else maxv_i;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -442,13 +469,23 @@ test "applySign: passthrough vs negate" {
     try std.testing.expectEqual(@as(i32, 5), applySign(-5, -1));
 }
 
-test "computeReconstructed: in-range / wrap-low / wrap-high" {
-    // RANGE = 256.
-    try std.testing.expectEqual(@as(i32, 100), computeReconstructed(80, 20, 255));
+test "computeReconstructed: NEAR=0 in-range / wrap-low / wrap-high" {
+    // MAXVAL=255, NEAR=0, RANGE=256.
+    try std.testing.expectEqual(@as(i32, 100), computeReconstructed(80, 20, 255, 0, 256));
     // -1 wraps to 255.
-    try std.testing.expectEqual(@as(i32, 255), computeReconstructed(0, -1, 255));
+    try std.testing.expectEqual(@as(i32, 255), computeReconstructed(0, -1, 255, 0, 256));
     // 256 wraps to 0.
-    try std.testing.expectEqual(@as(i32, 0), computeReconstructed(255, 1, 255));
+    try std.testing.expectEqual(@as(i32, 0), computeReconstructed(255, 1, 255, 0, 256));
+}
+
+test "computeReconstructed: NEAR=2 dequantize scales the error" {
+    // NEAR=2, RANGE = (255+4)/5 + 1 = 52. Error=1 → contributes 5.
+    try std.testing.expectEqual(@as(i32, 85), computeReconstructed(80, 1, 255, 2, 52));
+    // Error=-1 → contributes -5.
+    try std.testing.expectEqual(@as(i32, 75), computeReconstructed(80, -1, 255, 2, 52));
+    // Clip-high: predicted=255 + 1*5 = 260 > MAXVAL+NEAR=257 → wrap by
+    // RANGE*(2*NEAR+1) = 52*5 = 260 → 0. Then correct_prediction returns 0.
+    try std.testing.expectEqual(@as(i32, 0), computeReconstructed(255, 1, 255, 2, 52));
 }
 
 test "computeK: simple cases" {

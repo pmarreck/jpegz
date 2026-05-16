@@ -611,6 +611,12 @@ const fixture_jpegls_4x4_rgb8 = @embedFile("fixtures/jpegls_4x4_rgb8.jls");
 /// G = y*0x4000, B = (x+y)*0x2000.
 const fixture_jpegls_4x4_rgb16 = @embedFile("fixtures/jpegls_4x4_rgb16.jls");
 
+/// 8×8 grayscale 8-bit JPEG-LS at NEAR=2 (near-lossless). Original
+/// pattern: `(x * 17 + y * 9) & 0xFF`. Side-car .raw holds the
+/// unencoded pixels so the test can assert `|decoded - original| ≤ NEAR`.
+const fixture_jpegls_8x8_gray8_near2 = @embedFile("fixtures/jpegls_8x8_gray8_near2.jls");
+const fixture_jpegls_8x8_gray8_near2_raw = @embedFile("fixtures/jpegls_8x8_gray8_near2.raw");
+
 test "B2: JPEG-LS 4x4 8-bit grayscale lossless round-trip via charls wrapper" {
     const allocator = std.testing.allocator;
     var image = try jpegz.decode(allocator, fixture_jpegls_4x4_gray8);
@@ -659,6 +665,26 @@ test "B2: JPEG-LS 4x4 16-bit grayscale lossless round-trip" {
     try std.testing.expectEqual(@as(usize, 16), px.len);
     for (px, 0..) |s, i| {
         try std.testing.expectEqual(@as(u16, @intCast(i * 0x1111)), s);
+    }
+}
+
+test "B2.2 NEAR=2: JPEG-LS 8x8 grayscale near-lossless cleanroom (direct entry)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, fixture_jpegls_8x8_gray8_near2);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 8), image.width);
+    try std.testing.expectEqual(@as(u32, 8), image.height);
+    try std.testing.expectEqual(@as(u8, 1), image.channels);
+    try std.testing.expectEqual(@as(u8, 8), image.bits_per_sample);
+    try std.testing.expectEqual(@as(usize, 64), image.pixels.len);
+
+    // Near-lossless guarantee: every reconstructed sample is within
+    // NEAR of the original. (NEAR=2 here.)
+    const NEAR: i32 = 2;
+    for (image.pixels, fixture_jpegls_8x8_gray8_near2_raw) |dec, orig| {
+        const diff = @abs(@as(i32, dec) - @as(i32, orig));
+        try std.testing.expect(diff <= NEAR);
     }
 }
 

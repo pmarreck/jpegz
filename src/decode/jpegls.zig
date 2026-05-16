@@ -110,7 +110,6 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
                 if (frame == null) return error.InvalidMarker;
                 const scan = try parseSos(data, pos, &frame.?);
                 pos += parseSegmentLength(data, pos);
-                if (scan.NEAR != 0) return error.NotImplemented; // NEAR > 0 deferred
                 if (scan.ILV != 0 and scan.ILV != 2) return error.NotImplemented;
                 if (frame.?.num_components == 1) {
                     return try decodeScanMono(allocator, data[pos..], &frame.?, &scan, &preset);
@@ -297,14 +296,13 @@ fn decodeScanMono(
     scan: *const ScanInfo,
     preset: *const PresetParams,
 ) Error!types.Image {
-    _ = scan;
     const W: u32 = frame.width;
     const H: u32 = frame.height;
     const P: u8 = frame.P;
     const bytes_per_sample: usize = if (P <= 8) 1 else 2;
 
     var state: codec.ScanState = undefined;
-    state.reset(P, 0);
+    state.reset(P, scan.NEAR);
     // Apply LSE preset overrides if present.
     if (preset.MAXVAL != 0) state.MAXVAL = preset.MAXVAL;
     if (preset.T1 != 0) state.T1 = preset.T1;
@@ -376,7 +374,7 @@ fn decodeScanMono(
                 }
                 codec.updateState(&state, 0, ctx.q, errval);
                 const signed_err = codec.applySign(errval, ctx.sign);
-                const sample = codec.computeReconstructed(px, signed_err, state.MAXVAL);
+                const sample = codec.computeReconstructed(px, signed_err, state.MAXVAL, state.NEAR, state.RANGE);
                 cur_line[x + 1] = sample;
                 x += 1;
             }
@@ -472,8 +470,8 @@ fn decodeRun(
     const sample: i32 = if (ri_type == 0) blk: {
         // Edge case: predict from Rb, sign-flip error by sign(Rb - Ra).
         const s: i32 = if (rb_v > ra) 1 else if (rb_v < ra) -1 else 0;
-        break :blk codec.computeReconstructed(rb_v, errval * s, state.MAXVAL);
-    } else codec.computeReconstructed(ra, errval, state.MAXVAL);
+        break :blk codec.computeReconstructed(rb_v, errval * s, state.MAXVAL, state.NEAR, state.RANGE);
+    } else codec.computeReconstructed(ra, errval, state.MAXVAL, state.NEAR, state.RANGE);
     cur_line[start_x + index + 1] = sample;
 
     if (state.run_index[0] > 0) state.run_index[0] -= 1;
@@ -499,14 +497,13 @@ fn decodeScanRgb(
     scan: *const ScanInfo,
     preset: *const PresetParams,
 ) Error!types.Image {
-    _ = scan;
     const W: u32 = frame.width;
     const H: u32 = frame.height;
     const P: u8 = frame.P;
     const bytes_per_sample: usize = if (P <= 8) 1 else 2;
 
     var state: codec.ScanState = undefined;
-    state.reset(P, 0);
+    state.reset(P, scan.NEAR);
     if (preset.MAXVAL != 0) state.MAXVAL = preset.MAXVAL;
     if (preset.T1 != 0) state.T1 = preset.T1;
     if (preset.T2 != 0) state.T2 = preset.T2;
@@ -592,7 +589,7 @@ fn decodeScanRgb(
                     }
                     codec.updateState(&state, 0, ctx[ci].q, errval);
                     const signed_err = codec.applySign(errval, ctx[ci].sign);
-                    const sample = codec.computeReconstructed(px, signed_err, state.MAXVAL);
+                    const sample = codec.computeReconstructed(px, signed_err, state.MAXVAL, state.NEAR, state.RANGE);
                     cur_line[cur_idx + ci] = sample;
                 }
                 x += 1;
@@ -697,7 +694,7 @@ fn decodeRunRgb(
         // unlike a standard signum. When `rb == ra` the encoder used +1
         // here, so the round-trip relies on the same convention.
         const sgn: i32 = if (rb[ci] - ra[ci] < 0) -1 else 1;
-        const sample = codec.computeReconstructed(rb[ci], errval * sgn, state.MAXVAL);
+        const sample = codec.computeReconstructed(rb[ci], errval * sgn, state.MAXVAL, state.NEAR, state.RANGE);
         cur_line[cur_idx + ci] = sample;
     }
 
