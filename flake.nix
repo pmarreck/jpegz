@@ -55,7 +55,21 @@
         # with a C ABI (charls_jpegls_decoder_*); we consume via cImport.
         # libjpeg-turbo does not ship a JPEG-LS path, so this is the only
         # T.87 oracle available for cleanroom-vs-wrapper testing.
-        charlsPkg = if isLinux then pkgs.pkgsStatic.charls else pkgs.charls;
+        #
+        # On Linux pkgsStatic the default stdenv is gcc + libstdc++_static.
+        # Zig's `link_libcpp` resolves to its bundled LLVM libc++, which has
+        # DIFFERENT symbol mangling from libstdc++ (`std::__cxx11::basic_string`,
+        # `std::_V2::error_category`, etc. vs libc++'s `std::__1::basic_string`).
+        # Linking pkgsStatic.charls.a against Zig's libc++ fails with ~12
+        # undefined-symbol errors. Rebuild charls with the libc++ stdenv so its
+        # symbols match what Zig links: `pkgsStatic.llvmPackages.libcxxStdenv`
+        # is clang + libc++ + musl libc — the same triple Zig is targeting.
+        # macOS uses the system libc++ for both sides; no override needed.
+        charlsPkg = if isLinux then
+          pkgs.pkgsStatic.charls.override {
+            stdenv = pkgs.pkgsStatic.llvmPackages.libcxxStdenv;
+          }
+        else pkgs.charls;
 
         # When cross-targeting (musl on Linux), Zig's host NIX_LDFLAGS /
         # NIX_CFLAGS don't apply, and `--search-prefix` only handles
