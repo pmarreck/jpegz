@@ -51,25 +51,30 @@
         # built against musl + statically linkable.
         libjpegTurbo = if isLinux then pkgs.pkgsStatic.libjpeg else pkgs.libjpeg;
         openjpegPkg  = if isLinux then pkgs.pkgsStatic.openjpeg else pkgs.openjpeg;
-        # charls — BSD-3, JPEG-LS (T.87) reference codec. C++ implementation
-        # with a C ABI (charls_jpegls_decoder_*); we consume via cImport.
-        # libjpeg-turbo does not ship a JPEG-LS path, so this is the only
-        # T.87 oracle available for cleanroom-vs-wrapper testing.
+        # charls — BSD-3, JPEG-LS (T.87) reference codec. We vendor the
+        # source (not a binary package) and compile it via Zig's own
+        # bundled clang + libc++. Two attempts at consuming the binary
+        # package failed:
         #
-        # On Linux pkgsStatic the default stdenv is gcc + libstdc++_static.
-        # Zig's `link_libcpp` resolves to its bundled LLVM libc++, which has
-        # DIFFERENT symbol mangling from libstdc++ (`std::__cxx11::basic_string`,
-        # `std::_V2::error_category`, etc. vs libc++'s `std::__1::basic_string`).
-        # Linking pkgsStatic.charls.a against Zig's libc++ fails with ~12
-        # undefined-symbol errors. Rebuild charls with the libc++ stdenv so its
-        # symbols match what Zig links: `pkgsStatic.llvmPackages.libcxxStdenv`
-        # is clang + libc++ + musl libc — the same triple Zig is targeting.
-        # macOS uses the system libc++ for both sides; no override needed.
-        charlsPkg = if isLinux then
-          pkgs.pkgsStatic.charls.override {
-            stdenv = pkgs.pkgsStatic.llvmPackages.libcxxStdenv;
-          }
-        else pkgs.charls;
+        #   1. pkgsStatic.charls (gcc + libstdc++_static): linker error
+        #      "undefined symbol: std::__cxx11::basic_string..." — Zig's
+        #      `link_libcpp` resolves to libc++ which uses different
+        #      symbol mangling (`std::__1::basic_string` etc.).
+        #   2. pkgsStatic.charls overridden to libcxxStdenv: the
+        #      libcxxStdenv on musl can't even compile a trivial C
+        #      executable ("cannot find -lgcc_eh") — the libc++/musl
+        #      static toolchain in nixpkgs is incomplete.
+        #
+        # Vendoring is the robust path: Zig's bundled clang compiles the
+        # 8 charls .cpp files into a static lib, links against Zig's
+        # libc++, end-to-end consistent on every target. The C ABI we
+        # consume is unchanged.
+        charlsSrc = pkgs.fetchFromGitHub {
+          owner = "team-charls";
+          repo = "charls";
+          rev = "2.4.3";
+          sha256 = "1zhfz5qn22fh0qznh8wrzq68l77wv36wi3ji0hwx4g2kaism4vak";
+        };
 
         # When cross-targeting (musl on Linux), Zig's host NIX_LDFLAGS /
         # NIX_CFLAGS don't apply, and `--search-prefix` only handles
@@ -88,12 +93,11 @@
           "-Dlibjpeg-lib=${libjpegTurbo.out}/lib"
           "-Dopenjpeg-include=${openjpegPkg.dev}/include/openjpeg-2.5"
           "-Dopenjpeg-lib=${openjpegPkg.out}/lib"
-          "-Dcharls-include=${charlsPkg}/include"
-          "-Dcharls-lib=${charlsPkg}/lib"
+          "-Dcharls-src=${charlsSrc}"
         ];
 
         commonNativeBuildInputs = [ zigPkg pkgs.git pkgs.cacert ];
-        commonBuildInputs = [ libjpegTurbo openjpegPkg charlsPkg ];
+        commonBuildInputs = [ libjpegTurbo openjpegPkg ];
 
         # Phase 1 has no external Zig dependencies — `build.zig.zon` will be
         # added when the first dependency is introduced. Until then we don't
@@ -151,10 +155,13 @@
         devShells.default = pkgs.mkShell {
           # Dev shell uses the host's default libjpeg/openjpeg (glibc on
           # Linux, native on macOS). The musl pinning above is sandbox-only
-          # — interactive dev doesn't need it.
-          packages = [ zigPkg pkgs.git pkgs.cacert pkgs.libjpeg pkgs.openjpeg pkgs.charls pkgs.hyperfine pkgs.pkg-config ];
+          # — interactive dev doesn't need it. charls is built from
+          # vendored source (Zig compiles 8 .cpp files); CHARLS_SRC tells
+          # build.zig where the source tree is.
+          packages = [ zigPkg pkgs.git pkgs.cacert pkgs.libjpeg pkgs.openjpeg pkgs.hyperfine pkgs.pkg-config ];
+          CHARLS_SRC = charlsSrc;
           shellHook = ''
-            echo "jpegz devShell — zig $(zig version), libjpeg-turbo ${pkgs.libjpeg.version}, openjpeg ${pkgs.openjpeg.version}, charls ${pkgs.charls.version}"
+            echo "jpegz devShell — zig $(zig version), libjpeg-turbo ${pkgs.libjpeg.version}, openjpeg ${pkgs.openjpeg.version}, charls 2.4.3 (vendored)"
           '';
         };
 

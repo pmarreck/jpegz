@@ -24,10 +24,10 @@ pub fn build(b: *std.Build) void {
     //   - libjpeg-turbo (jpeglib.h, used by src/ffi/libjpeg_wrapper.zig)
     //   - openjpeg     (openjpeg.h, used by src/ffi/openjpeg_wrapper.zig)
     //   - charls       (charls/charls.h, used by src/ffi/charls_wrapper.zig)
+    //                   — VENDORED: compiled from source via -Dcharls-src
+    //                   or CHARLS_SRC env, see the charls block below.
     jpegz_mod.linkSystemLibrary("jpeg", .{});
     jpegz_mod.linkSystemLibrary("openjp2", .{});
-    jpegz_mod.linkSystemLibrary("charls", .{});
-    // charls is a C++ library — pull in libc++ for the dylib's symbols.
     jpegz_mod.link_libcpp = true;
     jpegz_mod.link_libc = true;
 
@@ -40,14 +40,69 @@ pub fn build(b: *std.Build) void {
     const opt_libjpeg_lib = b.option([]const u8, "libjpeg-lib", "Path to libjpeg library directory");
     const opt_openjpeg_inc = b.option([]const u8, "openjpeg-include", "Path to openjpeg headers (incl. version subdir)");
     const opt_openjpeg_lib = b.option([]const u8, "openjpeg-lib", "Path to openjpeg library directory");
-    const opt_charls_inc = b.option([]const u8, "charls-include", "Path to charls headers");
-    const opt_charls_lib = b.option([]const u8, "charls-lib", "Path to charls library directory");
     if (opt_libjpeg_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
     if (opt_libjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
     if (opt_openjpeg_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
     if (opt_openjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
-    if (opt_charls_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
-    if (opt_charls_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
+
+    // ── charls — vendored, compiled by Zig ────────────────────
+    //
+    // We tried two paths through nixpkgs binaries first; both broke
+    // (gcc/libstdc++ vs Zig's libc++ symbol mismatch on Linux musl,
+    // then libcxxStdenv-on-musl missing libgcc_eh). Vendoring the
+    // source and compiling via Zig's own clang+libc++ keeps the C++
+    // stdlib consistent end-to-end. The 8 .cpp files take a few
+    // seconds to compile; the resulting `libcharls.a` ships with us.
+    //
+    // Source path comes from `-Dcharls-src=...` (set by flake) or
+    // `CHARLS_SRC` env var (set by dev shell).
+    const charls_src_path: ?[]const u8 = b.option(
+        []const u8, "charls-src",
+        "Path to vendored charls source tree (with src/ + include/charls/)",
+    ) orelse b.graph.environ_map.get("CHARLS_SRC");
+
+    const charls_lib: *std.Build.Step.Compile = blk: {
+        const path = charls_src_path orelse @panic(
+            "charls source path required: pass -Dcharls-src=PATH or set CHARLS_SRC env. " ++
+            "Inside the nix devShell or nix build, both are configured automatically.",
+        );
+        const charls_mod = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        charls_mod.link_libcpp = true;
+        charls_mod.addCSourceFiles(.{
+            .root = .{ .cwd_relative = path },
+            .files = &.{
+                "src/charls_jpegls_decoder.cpp",
+                "src/charls_jpegls_encoder.cpp",
+                "src/jpeg_stream_reader.cpp",
+                "src/jpeg_stream_writer.cpp",
+                "src/jpegls_error.cpp",
+                "src/jpegls.cpp",
+                "src/validate_spiff_header.cpp",
+                "src/version.cpp",
+            },
+            .flags = &.{
+                "-std=c++17",
+                "-fexceptions",
+                "-Wno-unused-parameter",
+            },
+        });
+        charls_mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{path}) });
+        charls_mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/src", .{path}) });
+        const lib = b.addLibrary(.{
+            .name = "charls",
+            .linkage = .static,
+            .root_module = charls_mod,
+        });
+        break :blk lib;
+    };
+    jpegz_mod.linkLibrary(charls_lib);
+    if (charls_src_path) |path| {
+        jpegz_mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{path}) });
+    }
 
     const lib = b.addLibrary(.{
         .name = "jpegz",
@@ -285,11 +340,9 @@ pub fn build(b: *std.Build) void {
     // unset and Zig finds the libs via the host wrapper-cc.
     c_smoke_mod.linkSystemLibrary("jpeg", .{});
     c_smoke_mod.linkSystemLibrary("openjp2", .{});
-    c_smoke_mod.linkSystemLibrary("charls", .{});
-    c_smoke_mod.link_libcpp = true;
+    c_smoke_mod.link_libcpp = true; // libjpegz.a pulls in vendored charls (C++)
     if (opt_libjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
     if (opt_openjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
-    if (opt_charls_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
     const c_smoke = b.addExecutable(.{
         .name = "c_smoke",
         .root_module = c_smoke_mod,
