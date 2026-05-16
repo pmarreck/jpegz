@@ -274,8 +274,18 @@ machinery where possible).
 - [ ] **M2.4 — 12-bit precision.** Rare but spec-mandatory.
 - [ ] **M2.5 — Arithmetic coding (T.81 §F).** Q-coder + conditioning.
       Last among T.81 codecs.
-- [ ] **M2.6 — JPEG-LS (T.87).** LOCO-I predictor + Golomb-Rice. Independent
-      of T.81 work. charls (Apache-2) reading allowed.
+- [~] **M2.6 — JPEG-LS (T.87).** LOCO-I predictor + Golomb-Rice cleanroom
+      shipped 2026-05-16: marker walker (SOI/SOF55/LSE/SOS/EOI), bit-stuffed
+      reader (T.87 §A.1.3), context quantization + sign canonicalization
+      (q1*9+q2)*9+q3 ∈ [-364, 364], MED predictor, Golomb-Rice with k=0
+      sign trick and escape branch, full A/B/C/N state update with bias
+      correction, run mode (J-table, RItype 0/1 interrupt for mono, ctx[0]
+      always for triplet), 8-bit + 16-bit mono and RGB sample-interleaved,
+      NEAR > 0 near-lossless. Direct-entry tests
+      (`jpegz.jpegls_cleanroom_decode`) round-trip 5 fixtures bit-exact /
+      within-NEAR. Open: ILV=1 line-interleaved, RST markers in JPEG-LS
+      (rare), 4-component quad. charls (BSD-3, vendored) still wired as
+      fallback for variants the cleanroom doesn't cover. _(2026-05-16 EST)_
 - [ ] **M2.7 — JPEG 2000 (T.800).** Wavelet + EBCOT + tier-1/tier-2.
       Multi-month effort. Confirm patent posture with Peter before
       shipping.
