@@ -640,6 +640,29 @@ test "B2: JPEG-LS 4x4 16-bit grayscale lossless round-trip" {
     }
 }
 
+test "B2.2 §3: JPEG-LS 4x4 RGB 8-bit cleanroom (direct entry, no charls fallback)" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, fixture_jpegls_4x4_rgb8);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+    try std.testing.expectEqual(@as(u8, 8), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.rgb, image.layout);
+    try std.testing.expectEqual(@as(usize, 4 * 4 * 3), image.pixels.len);
+    var y: u32 = 0;
+    while (y < 4) : (y += 1) {
+        var x: u32 = 0;
+        while (x < 4) : (x += 1) {
+            const off: usize = (@as(usize, y) * 4 + @as(usize, x)) * 3;
+            try std.testing.expectEqual(@as(u8, @intCast(x * 0x40)), image.pixels[off]);
+            try std.testing.expectEqual(@as(u8, @intCast(y * 0x40)), image.pixels[off + 1]);
+            try std.testing.expectEqual(@as(u8, @intCast((x + y) * 0x20)), image.pixels[off + 2]);
+        }
+    }
+}
+
 test "B2: JPEG-LS 4x4 RGB 8-bit lossless round-trip" {
     const allocator = std.testing.allocator;
     var image = try jpegz.decode(allocator, fixture_jpegls_4x4_rgb8);

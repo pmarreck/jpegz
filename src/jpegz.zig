@@ -30,6 +30,12 @@ pub const ImageMetadata = core_types.ImageMetadata;
 
 pub const version: [:0]const u8 = "0.1.0";
 
+/// Direct entry into the JPEG-LS cleanroom decoder. The main `decode`
+/// dispatcher tries cleanroom first and falls back to the charls
+/// wrapper on `NotImplemented`; this entry skips that fallback so
+/// cleanroom-coverage tests can't be masked by charls.
+pub const jpegls_cleanroom_decode = @import("decode/jpegls.zig").decode;
+
 const last_error = @import("core/last_error.zig");
 
 /// Return the thread-local last-error message, or an empty slice if

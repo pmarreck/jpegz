@@ -111,8 +111,13 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
                 if (scan.NEAR != 0) return error.NotImplemented; // NEAR > 0 deferred
                 if (scan.ILV != 0 and scan.ILV != 2) return error.NotImplemented;
                 if (frame.?.P > 8) return error.NotImplemented; // §4 covers 16-bit
-                if (frame.?.num_components != 1) return error.NotImplemented; // §3 covers RGB
-                return try decodeScan8Mono(allocator, data[pos..], &frame.?, &scan, &preset);
+                if (frame.?.num_components == 1) {
+                    return try decodeScan8Mono(allocator, data[pos..], &frame.?, &scan, &preset);
+                }
+                if (frame.?.num_components == 3 and scan.ILV == 2) {
+                    return try decodeScan8Rgb(allocator, data[pos..], &frame.?, &scan, &preset);
+                }
+                return error.NotImplemented;
             },
             // Standalone markers we can skip safely (RST, TEM, SOI/EOI
             // shouldn't appear here; treat as no-op).
@@ -465,8 +470,222 @@ fn decodeRun(
     return index + 1;
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Scan body — 8-bit, 3-component sample-interleaved (Session 3 scope).
+// ─────────────────────────────────────────────────────────────────
+
+/// Decode a 3-component 8-bit sample-interleaved (ILV=2) JPEG-LS scan.
+/// Mirrors charls' `do_line<triplet<sample_type>>`. Contexts are
+/// SHARED across components in sample-interleaved mode (T.87 §A.3.5 +
+/// charls' single `contexts_[]` array per codec instance); the run-
+/// interruption sample always uses `context_run_mode_[0]` (edge) for
+/// all three components — the run only initiates over identical
+/// triplets, so its termination implies an edge.
+fn decodeScan8Rgb(
+    allocator: Allocator,
+    data: []const u8,
+    frame: *const FrameInfo,
+    scan: *const ScanInfo,
+    preset: *const PresetParams,
+) Error!types.Image {
+    _ = scan;
+    const W: u32 = frame.width;
+    const H: u32 = frame.height;
+
+    var state: codec.ScanState = undefined;
+    state.reset(8, 0); // 8-bit, NEAR=0 (lossless)
+    if (preset.MAXVAL != 0) state.MAXVAL = preset.MAXVAL;
+    if (preset.T1 != 0) state.T1 = preset.T1;
+    if (preset.T2 != 0) state.T2 = preset.T2;
+    if (preset.T3 != 0) state.T3 = preset.T3;
+    if (preset.RESET != 0) state.RESET = preset.RESET;
+
+    var br = bitstream.BitReader.init(data);
+    const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H) * 3);
+    errdefer allocator.free(pixels);
+
+    // (W+2) triplets per line × 3 components = (W+2)*3 i32 entries.
+    //   indices 0..2    = left sentinel (col -1)
+    //   indices 3..5    = pixel x=0
+    //   ...
+    //   indices 3*W..3*W+2 = pixel x=W-1
+    //   indices 3*(W+1)..3*(W+1)+2 = right sentinel (unused; Rd replicates Rb at x=W-1)
+    const line_len: usize = (@as(usize, W) + 2) * 3;
+    const cur_line = try allocator.alloc(i32, line_len);
+    defer allocator.free(cur_line);
+    const prev_line = try allocator.alloc(i32, line_len);
+    defer allocator.free(prev_line);
+    @memset(prev_line, 0);
+
+    var y: u32 = 0;
+    while (y < H) : (y += 1) {
+        @memset(cur_line, 0);
+        // T.87 §A.1.2: at start of line, Ra(comp) ← Rb(comp). The left
+        // sentinel (col -1) of cur_line takes prev_line's col 0 values.
+        cur_line[0] = prev_line[3];
+        cur_line[1] = prev_line[4];
+        cur_line[2] = prev_line[5];
+
+        var x: u32 = 0;
+        while (x < W) {
+            // Gather per-component neighbors and quantized contexts.
+            const t1_i: i32 = @intCast(state.T1);
+            const t2_i: i32 = @intCast(state.T2);
+            const t3_i: i32 = @intCast(state.T3);
+            const near_i: i32 = @intCast(state.NEAR);
+
+            var ra: [3]i32 = undefined;
+            var rb: [3]i32 = undefined;
+            var rc: [3]i32 = undefined;
+            var rd: [3]i32 = undefined;
+            var ctx: [3]codec.ContextLookup = undefined;
+            var all_zero_q: bool = true;
+
+            const cur_idx: usize = (@as(usize, x) + 1) * 3;
+            const left_idx: usize = @as(usize, x) * 3;
+            const right_idx: usize = (@as(usize, x) + 2) * 3;
+
+            var ci: usize = 0;
+            while (ci < 3) : (ci += 1) {
+                ra[ci] = cur_line[left_idx + ci];
+                rb[ci] = prev_line[cur_idx + ci];
+                rc[ci] = prev_line[left_idx + ci];
+                rd[ci] = if (x + 1 < W) prev_line[right_idx + ci] else rb[ci];
+                const q1 = codec.quantize(rd[ci] - rb[ci], t1_i, t2_i, t3_i, near_i);
+                const q2 = codec.quantize(rb[ci] - rc[ci], t1_i, t2_i, t3_i, near_i);
+                const q3 = codec.quantize(rc[ci] - ra[ci], t1_i, t2_i, t3_i, near_i);
+                ctx[ci] = codec.computeContextIndex(q1, q2, q3);
+                if (ctx[ci].q != 0) all_zero_q = false;
+            }
+
+            if (all_zero_q) {
+                const consumed = try decodeRunRgb(&state, &br, ra, cur_line, prev_line, x, W);
+                x += consumed;
+            } else {
+                ci = 0;
+                while (ci < 3) : (ci += 1) {
+                    const cstate = &state.contexts[0][ctx[ci].q];
+                    var px = codec.predictMed(ra[ci], rb[ci], rc[ci]);
+                    px += codec.applySign(@as(i32, cstate.C), ctx[ci].sign);
+                    if (px < 0) px = 0 else if (px > @as(i32, @intCast(state.MAXVAL))) px = @intCast(state.MAXVAL);
+
+                    const k = codec.computeK(cstate.N, cstate.A);
+                    const merrval = codec.decodeGolombRice(&br, k, state.LIMIT, state.qbpp);
+                    var errval = codec.mapMErrvalToErrval(merrval);
+                    if (k == 0) {
+                        const b = cstate.B;
+                        const n_i: i32 = @intCast(cstate.N);
+                        if (2 * b + n_i - 1 < 0) errval = ~errval;
+                    }
+                    codec.updateState(&state, 0, ctx[ci].q, errval);
+                    const signed_err = codec.applySign(errval, ctx[ci].sign);
+                    const sample = codec.computeReconstructed(px, signed_err, state.MAXVAL);
+                    cur_line[cur_idx + ci] = sample;
+                }
+                x += 1;
+            }
+        }
+        // Drain decoded line → RGB-interleaved raster pixels.
+        var xc: u32 = 0;
+        while (xc < W) : (xc += 1) {
+            const cidx: usize = (@as(usize, xc) + 1) * 3;
+            const oidx: usize = (@as(usize, y) * @as(usize, W) + @as(usize, xc)) * 3;
+            pixels[oidx]     = @intCast(cur_line[cidx]);
+            pixels[oidx + 1] = @intCast(cur_line[cidx + 1]);
+            pixels[oidx + 2] = @intCast(cur_line[cidx + 2]);
+        }
+        @memcpy(prev_line, cur_line);
+    }
+
+    return types.Image{
+        .pixels = pixels,
+        .width = W,
+        .height = H,
+        .channels = 3,
+        .bits_per_sample = 8,
+        .source_color_space = .rgb,
+        .layout = .rgb,
+    };
+}
+
+/// Triplet run mode. The run-length code itself is byte-identical to
+/// the mono path (one J-table-indexed state); the interruption sample
+/// decodes three errors via `context_run_mode_[0]` and reconstructs
+/// each component via `Rb + Errval * sign(Rb - Ra)` per charls'
+/// `decode_run_interruption_pixel(triplet)`.
+fn decodeRunRgb(
+    state: *codec.ScanState,
+    br: *bitstream.BitReader,
+    ra: [3]i32,
+    cur_line: []i32,
+    prev_line: []const i32,
+    start_x: u32,
+    W: u32,
+) Error!u32 {
+    const pixel_count: u32 = W - start_x;
+    var index: u32 = 0;
+    while (br.readBits(1) == 1) {
+        const step: u32 = @as(u32, 1) << @intCast(codec.J_TABLE[state.run_index[0]]);
+        const count: u32 = @min(step, pixel_count - index);
+        index += count;
+        if (count == step and state.run_index[0] < 31) state.run_index[0] += 1;
+        if (index == pixel_count) break;
+    }
+    if (index != pixel_count) {
+        const j = codec.J_TABLE[state.run_index[0]];
+        if (j > 0) {
+            const residual: u32 = br.readBits(@intCast(j));
+            index += residual;
+        }
+    }
+    if (index > pixel_count) return error.BackendError;
+
+    // Fill run with Ra triplet.
+    var i: u32 = 0;
+    while (i < index) : (i += 1) {
+        const cidx: usize = (@as(usize, start_x) + 1 + @as(usize, i)) * 3;
+        cur_line[cidx]     = ra[0];
+        cur_line[cidx + 1] = ra[1];
+        cur_line[cidx + 2] = ra[2];
+    }
+
+    if (start_x + index == W) return index;
+
+    // Run interruption sample. Per charls' triplet path, all three
+    // components use context_run_mode_[0] (RItype = 0, edge case)
+    // since the run was over identical triplets.
+    const cur_idx: usize = (@as(usize, start_x) + @as(usize, index) + 1) * 3;
+    const rb: [3]i32 = .{
+        prev_line[cur_idx],
+        prev_line[cur_idx + 1],
+        prev_line[cur_idx + 2],
+    };
+    const rc = &state.run_contexts[0][0];
+    var ci: usize = 0;
+    while (ci < 3) : (ci += 1) {
+        const k = codec.runModeGetK(rc, 0);
+        const e_mapped = codec.decodeGolombRice(
+            br, k,
+            @as(u8, @intCast(@as(i32, state.LIMIT) - codec.J_TABLE[state.run_index[0]] - 1)),
+            state.qbpp,
+        );
+        const errval = codec.runModeComputeError(rc, e_mapped, k, 0);
+        codec.runModeUpdate(rc, errval, e_mapped, 0, state.RESET);
+        // charls' `sign(n) = (n >> 31) | 1` collapses to +1 / -1 (never 0)
+        // unlike a standard signum. When `rb == ra` the encoder used +1
+        // here, so the round-trip relies on the same convention.
+        const sgn: i32 = if (rb[ci] - ra[ci] < 0) -1 else 1;
+        const sample = codec.computeReconstructed(rb[ci], errval * sgn, state.MAXVAL);
+        cur_line[cur_idx + ci] = sample;
+    }
+
+    if (state.run_index[0] > 0) state.run_index[0] -= 1;
+    return index + 1;
+}
+
 // Force-import the codec module so its inline tests run if this is the
 // test root (not necessary for the jpegls module's own tests; harmless).
 comptime {
     _ = codec;
 }
+
