@@ -3,7 +3,6 @@
 
 const std = @import("std");
 const jpegz = @import("jpegz");
-const build_options = @import("build_options");
 
 test "version is exposed" {
     try std.testing.expect(jpegz.version.len > 0);
@@ -135,7 +134,6 @@ test "decodeStreamingRows: lossless SOF3 grayscale streams rows" {
 }
 
 test "decodeStreamingRows: JPEG-LS streams rows matching decode()" {
-    if (!build_options.with_charls) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var ref = try jpegz.decode(allocator, fixture_jpegls_4x4_gray8);
     defer ref.deinit(allocator);
