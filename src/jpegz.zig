@@ -30,6 +30,21 @@ pub const ImageMetadata = core_types.ImageMetadata;
 
 pub const version: [:0]const u8 = "0.1.0";
 
+const last_error = @import("core/last_error.zig");
+
+/// Return the thread-local last-error message, or an empty slice if
+/// none has been recorded since the last successful call on this
+/// thread. The slice borrows from a static per-thread buffer — copy
+/// the bytes if you need them past the next public API call.
+///
+/// Useful when a generic `DecodeError` (e.g. `error.CallbackAborted`)
+/// hides the underlying detail; this gives callers the original
+/// reason. Same buffer the C ABI surfaces via
+/// `jpegz_last_error_message()` — no duplication.
+pub fn lastErrorMessage() []const u8 {
+    return last_error.current();
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // 1. Pixel-data types
 // ─────────────────────────────────────────────────────────────────────
@@ -260,15 +275,25 @@ pub fn decodeStreamingRows(
     data: []const u8,
     cb: RowCallback,
 ) DecodeError!ImageMetadata {
-    if (data.len < 4) return error.TruncatedStream;
-    if (data[0] != 0xFF or data[1] != 0xD8) return error.InvalidMarker;
+    last_error.clear();
+    if (data.len < 4) {
+        last_error.set("input too short ({d} bytes)", .{data.len});
+        return error.TruncatedStream;
+    }
+    if (data[0] != 0xFF or data[1] != 0xD8) {
+        last_error.set("missing SOI marker (got 0x{x:0>2}{x:0>2})", .{ data[0], data[1] });
+        return error.InvalidMarker;
+    }
 
     // Reject progressive scans up front. T.81 §G.1 progressive bitstreams
     // are inherently multi-pass: every coefficient is touched across all
     // scans before its block is complete, so row-by-row delivery isn't
     // possible without full materialization. Callers wanting that
     // experience should call `decode` and iterate the pixel buffer.
-    if (peekIsProgressive(data)) return error.NotRowStreamable;
+    if (peekIsProgressive(data)) {
+        last_error.set("progressive scan — call decode() and iterate the buffer", .{});
+        return error.NotRowStreamable;
+    }
 
     // v1 strategy: materialize the full image via `decode`, then iterate
     // rows. Memory profile is identical to plain `decode`; the API
@@ -282,7 +307,16 @@ pub fn decodeStreamingRows(
     var y: u32 = 0;
     while (y < image.height) : (y += 1) {
         const row = image.pixels[@as(usize, y) * stride ..][0..stride];
-        cb.on_row(cb.ctx, row, y) catch return error.CallbackAborted;
+        cb.on_row(cb.ctx, row, y) catch |e| {
+            // Preserve the original error name so callers can recover it
+            // via `lastErrorMessage()` — the API contract collapses any
+            // callback error to `CallbackAborted`, but the detail isn't
+            // lost. Same buffer C consumers read via
+            // `jpegz_last_error_message()` (single backing memory, no
+            // duplication).
+            last_error.set("row {d}: callback returned error.{s}", .{ y, @errorName(e) });
+            return error.CallbackAborted;
+        };
     }
 
     return ImageMetadata{

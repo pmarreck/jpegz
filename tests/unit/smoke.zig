@@ -168,6 +168,24 @@ test "decodeStreamingRows: callback error propagates as CallbackAborted" {
     );
 }
 
+test "decodeStreamingRows: callback error preserves original name via lastErrorMessage" {
+    // CallbackAborted is the API-level error code (the contract); the
+    // ORIGINAL error name should be recoverable through the thread-local
+    // last-error buffer for both Zig and C callers.
+    const cb = jpegz.RowCallback{
+        .on_row = struct {
+            fn cb(_: ?*anyopaque, _: []const u8, _: u32) anyerror!void {
+                return error.UserAborted;
+            }
+        }.cb,
+    };
+    _ = jpegz.decodeStreamingRows(std.testing.allocator, fixture_baseline_2x2_rgb, cb) catch {};
+    const msg = jpegz.lastErrorMessage();
+    try std.testing.expect(msg.len > 0);
+    // Detail string must mention the original error name.
+    try std.testing.expect(std.mem.indexOf(u8, msg, "UserAborted") != null);
+}
+
 test "FindingCode numeric values are stable" {
     // Spot-check a few — these are wire-format values per the design
     // doc § 4.1; reordering is a wire-break.

@@ -44,28 +44,18 @@ fn toCStatus(err: errors.DecodeError) c_int {
 // ─────────────────────────────────────────────────────────────────────
 // Thread-local last-error message
 // ─────────────────────────────────────────────────────────────────────
+//
+// The backing buffer + setter live in `src/core/last_error.zig` so the
+// public Zig API can read the same memory via `jpegz.lastErrorMessage()`
+// without duplicating storage. The two locals below are thin aliases
+// that keep existing call sites in this file unchanged.
 
-threadlocal var last_error_buf: [512]u8 = undefined;
-threadlocal var last_error_len: usize = 0;
-
-fn clearLastError() void {
-    last_error_len = 0;
-    last_error_buf[0] = 0;
-}
-
-fn setLastError(comptime fmt: []const u8, args: anytype) void {
-    const slice = std.fmt.bufPrint(&last_error_buf, fmt, args) catch &last_error_buf;
-    last_error_len = slice.len;
-    if (last_error_len < last_error_buf.len) last_error_buf[last_error_len] = 0;
-}
+const last_error = @import("../core/last_error.zig");
+const clearLastError = last_error.clear;
+const setLastError = last_error.set;
 
 export fn jpegz_last_error_message() [*:0]const u8 {
-    if (last_error_len < last_error_buf.len) {
-        last_error_buf[last_error_len] = 0;
-    } else {
-        last_error_buf[last_error_buf.len - 1] = 0;
-    }
-    return @ptrCast(&last_error_buf[0]);
+    return last_error.cPtr();
 }
 
 // ─────────────────────────────────────────────────────────────────────

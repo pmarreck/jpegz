@@ -150,6 +150,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(idct_tests).step);
 
+    const last_error_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/last_error.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const last_error_tests = b.addTest(.{
+        .name = "core_last_error",
+        .root_module = last_error_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(last_error_tests).step);
+
     const arith_coder_mod = b.createModule(.{
         .root_source_file = b.path("src/decode/arith_coder.zig"),
         .target = target,
