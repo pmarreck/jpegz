@@ -275,6 +275,19 @@ pub fn decodeStreamingRows(
     data: []const u8,
     cb: RowCallback,
 ) DecodeError!ImageMetadata {
+    return decodeStreamingRowsWithOptions(allocator, data, .{}, cb);
+}
+
+/// Same as `decodeStreamingRows` but accepts a `DecodeOptions` struct
+/// for caller-controlled behavior (today: thread budget). Pairs with
+/// `decodeWithOptions` — every public API surface has a `_ex`-style
+/// option-bearing variant so consumers can pass `threads` consistently.
+pub fn decodeStreamingRowsWithOptions(
+    allocator: Allocator,
+    data: []const u8,
+    options: DecodeOptions,
+    cb: RowCallback,
+) DecodeError!ImageMetadata {
     last_error.clear();
     if (data.len < 4) {
         last_error.set("input too short ({d} bytes)", .{data.len});
@@ -299,8 +312,9 @@ pub fn decodeStreamingRows(
     // rows. Memory profile is identical to plain `decode`; the API
     // contract is what callers depend on. A future per-decoder
     // implementation can deliver rows incrementally without touching
-    // the public surface.
-    var image = try decode(allocator, data);
+    // the public surface. Thread budget plumbs through to the
+    // underlying decoder.
+    var image = try decodeWithOptions(allocator, data, options);
     defer image.deinit(allocator);
 
     const stride = image.rowStride();

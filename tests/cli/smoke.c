@@ -28,6 +28,29 @@ static const size_t baseline_2x2_rgb_len = sizeof(baseline_2x2_rgb);
     } \
 } while (0)
 
+/* Streaming-rows test helpers — hoisted to file scope because C23
+ * doesn't allow nested functions (GCC extension only). */
+typedef struct {
+    uint8_t buf[12];      /* 2 * 2 * 3 channels for the baseline fixture */
+    uint32_t rows_seen;
+    int32_t last_y;
+    int in_order;
+} stream_collector_t;
+
+static int stream_collect_cb(void *ctx, const uint8_t *row, size_t row_len, uint32_t y) {
+    stream_collector_t *c = (stream_collector_t *)ctx;
+    if ((int32_t)y <= c->last_y) c->in_order = 0;
+    c->last_y = (int32_t)y;
+    memcpy(c->buf + (size_t)y * row_len, row, row_len);
+    c->rows_seen++;
+    return 0;
+}
+
+static int stream_abort_cb(void *ctx, const uint8_t *row, size_t row_len, uint32_t y) {
+    (void)ctx; (void)row; (void)row_len; (void)y;
+    return 42;  /* caller-defined non-zero — preserved in last_error_message */
+}
+
 int main(void) {
     /* Version is non-empty. */
     const char *v = jpegz_version();
@@ -107,6 +130,34 @@ int main(void) {
     ASSERT(!has_fail_finding, "no FAIL findings on a clean JPEG");
     jpegz_validation_report_free(&rpt);
 
+    /* Streaming-rows C ABI: rows delivered in raster order. */
+    {
+        /* Reference decode for byte-equality assertion. */
+        jpegz_image_t ref = {0};
+        rc = jpegz_decode(baseline_2x2_rgb, baseline_2x2_rgb_len, &ref);
+        ASSERT(rc == JPEGZ_OK, "ref decode OK");
+
+        stream_collector_t col = { .last_y = -1, .in_order = 1 };
+        jpegz_image_metadata_t meta = {0};
+        rc = jpegz_decode_streaming_rows(
+            baseline_2x2_rgb, baseline_2x2_rgb_len, stream_collect_cb, &col, &meta);
+        ASSERT(rc == JPEGZ_OK, "streaming returns OK");
+        ASSERT(meta.width == 2 && meta.height == 2, "streaming meta dims");
+        ASSERT(meta.channels == 3, "streaming meta channels");
+        ASSERT(col.rows_seen == 2, "streaming saw 2 rows");
+        ASSERT(col.in_order, "streaming rows in raster order");
+        ASSERT(memcmp(col.buf, ref.pixels, 12) == 0, "streaming bytes == decode bytes");
+        jpegz_image_free(&ref);
+
+        /* Callback abort: non-zero return → CALLBACK_ABORTED, detail preserved. */
+        rc = jpegz_decode_streaming_rows(
+            baseline_2x2_rgb, baseline_2x2_rgb_len, stream_abort_cb, NULL, NULL);
+        ASSERT(rc == JPEGZ_ERR_CALLBACK_ABORTED, "abort returns CALLBACK_ABORTED");
+        const char *msg = jpegz_last_error_message();
+        ASSERT(msg != NULL && strstr(msg, "42") != NULL,
+               "abort preserves return code in last_error_message");
+    }
+
     /* Validate empty input: FAIL, missing_soi finding. */
     jpegz_validation_report_t rpt_empty = {0};
     rc = jpegz_validate((const unsigned char *)"", 0, &rpt_empty);
@@ -120,6 +171,6 @@ int main(void) {
     ASSERT(found_missing_soi, "empty -> MISSING_SOI finding present");
     jpegz_validation_report_free(&rpt_empty);
 
-    printf("PASS: jpegz C FFI smoke (14 assertions across 7 calls)\n");
+    printf("PASS: jpegz C FFI smoke (23 assertions, decode + streaming + validate)\n");
     return 0;
 }

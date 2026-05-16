@@ -169,6 +169,112 @@ export fn jpegz_jp2_decode_ex(
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Row-streaming decode — C ABI surface parity with the Zig
+// `decodeStreamingRows` / `decodeStreamingRowsWithOptions` entries.
+// ─────────────────────────────────────────────────────────────────────
+
+const CImageMetadata = extern struct {
+    width: u32,
+    height: u32,
+    channels: u8,
+    bits_per_sample: u8,
+    source_color_space: c_int,
+    layout: c_int,
+};
+
+const CRowCallbackFn = *const fn (
+    ctx: ?*anyopaque,
+    row: [*c]const u8,
+    row_len: usize,
+    y: u32,
+) callconv(.c) c_int;
+
+/// Bridge between the C-shaped row callback (returns int) and Zig's
+/// `RowCallback` shape (returns `anyerror!void`). Lives on the
+/// caller's stack during the streaming call.
+const CRowBridge = struct {
+    c_fn: CRowCallbackFn,
+    c_ctx: ?*anyopaque,
+    last_c_rc: c_int,
+};
+
+fn zigRowBridge(ctx_opaque: ?*anyopaque, row: []const u8, y: u32) anyerror!void {
+    const bridge: *CRowBridge = @ptrCast(@alignCast(ctx_opaque.?));
+    const rc = bridge.c_fn(bridge.c_ctx, row.ptr, row.len, y);
+    if (rc != 0) {
+        bridge.last_c_rc = rc;
+        return error.CallbackAborted;
+    }
+}
+
+fn doStreamingWithOptions(
+    data: [*c]const u8,
+    len: usize,
+    c_options: ?*const CDecodeOptions,
+    on_row: ?CRowCallbackFn,
+    ctx: ?*anyopaque,
+    out_meta: ?*CImageMetadata,
+) c_int {
+    clearLastError();
+    const cb_fn = on_row orelse {
+        setLastError("on_row must not be NULL", .{});
+        return -3;
+    };
+    const slice: []const u8 = if (data == null or len == 0) &[_]u8{} else data[0..len];
+    const opts: jpegz.DecodeOptions = if (c_options) |co|
+        .{ .threads = co.threads }
+    else
+        .{};
+
+    var bridge = CRowBridge{ .c_fn = cb_fn, .c_ctx = ctx, .last_c_rc = 0 };
+    const meta = jpegz.decodeStreamingRowsWithOptions(c_allocator, slice, opts, .{
+        .on_row = zigRowBridge,
+        .ctx = &bridge,
+    }) catch |err| {
+        // The library's last_error path already records detail for
+        // most errors; for callback aborts the message will say
+        // "row N: callback returned error.CallbackAborted" which is
+        // less helpful than the original C return value. Overwrite
+        // with the C-friendly form.
+        if (err == error.CallbackAborted) {
+            setLastError("callback returned {d}", .{bridge.last_c_rc});
+        }
+        return toCStatus(err);
+    };
+
+    if (out_meta) |m| m.* = .{
+        .width = meta.width,
+        .height = meta.height,
+        .channels = meta.channels,
+        .bits_per_sample = meta.bits_per_sample,
+        .source_color_space = @intFromEnum(meta.source_color_space),
+        .layout = @intFromEnum(meta.layout),
+    };
+    return 0;
+}
+
+export fn jpegz_decode_streaming_rows(
+    data: [*c]const u8,
+    len: usize,
+    on_row: ?CRowCallbackFn,
+    ctx: ?*anyopaque,
+    out_metadata: ?*CImageMetadata,
+) c_int {
+    return doStreamingWithOptions(data, len, null, on_row, ctx, out_metadata);
+}
+
+export fn jpegz_decode_streaming_rows_ex(
+    data: [*c]const u8,
+    len: usize,
+    options: ?*const CDecodeOptions,
+    on_row: ?CRowCallbackFn,
+    ctx: ?*anyopaque,
+    out_metadata: ?*CImageMetadata,
+) c_int {
+    return doStreamingWithOptions(data, len, options, on_row, ctx, out_metadata);
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Validation — C representation
 // ─────────────────────────────────────────────────────────────────────
 

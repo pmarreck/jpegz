@@ -158,6 +158,83 @@ jpegz_status_t jpegz_jp2_decode_ex(
     jpegz_image_t                       *out_image
 );
 
+/* ── Row-streaming decode ──────────────────────────────────────── */
+
+/* Returned by jpegz_decode_streaming_rows. Same fields as
+ * jpegz_image_t minus the pixel buffer (rows are delivered to the
+ * callback, not collected here). */
+typedef struct {
+    uint32_t              width;
+    uint32_t              height;
+    uint8_t               channels;
+    uint8_t               bits_per_sample;
+    jpegz_color_space_t   source_color_space;
+    jpegz_pixel_layout_t  layout;
+} jpegz_image_metadata_t;
+
+/* Row callback. Invoked once per emitted row in raster order (y =
+ * 0, 1, ..., height-1).
+ *
+ * Parameters:
+ *   ctx     — opaque pointer the caller passed in. Library never
+ *             dereferences it.
+ *   row     — borrowed slice of pixels for this row. Length is
+ *             width * channels * (bits_per_sample > 8 ? 2 : 1)
+ *             bytes. Lifetime: only valid for this call.
+ *   row_len — `row`'s length in bytes. Equal to the formula above;
+ *             provided for convenience so callbacks don't recompute.
+ *   y       — 0-based row index.
+ *
+ * Return value:
+ *   0       — continue.
+ *   non-0   — abort. Library returns JPEGZ_ERR_CALLBACK_ABORTED;
+ *             the return value is preserved as the "original error"
+ *             in jpegz_last_error_message ("callback returned N").
+ *             Convention: positive non-zero codes are caller-defined
+ *             (e.g. a TIFF strip writer might use 1 for "out of
+ *             disk space"). */
+typedef int (*jpegz_row_callback_fn)(
+    void           *ctx,
+    const uint8_t  *row,
+    size_t          row_len,
+    uint32_t        y
+);
+
+/* Stream decode by calling `on_row` for each output row in raster
+ * order. Materializes no pixel buffer at the API surface; pixels
+ * live transiently in `row` slices passed to the callback.
+ *
+ * Returns:
+ *   JPEGZ_OK                      — all rows delivered; *out_metadata populated.
+ *   JPEGZ_ERR_NOT_ROW_STREAMABLE  — progressive scan (caller should
+ *                                   fall back to jpegz_decode).
+ *   JPEGZ_ERR_CALLBACK_ABORTED    — callback returned non-zero.
+ *                                   Detail in jpegz_last_error_message.
+ *   Other JPEGZ_ERR_* on decode failure.
+ *
+ * Same dispatch chain as jpegz_decode (cleanroom paths first,
+ * wrappers as fallback).
+ *
+ * `out_metadata` may be NULL if the caller doesn't need the
+ * geometry summary; the callback still fires for every row. */
+jpegz_status_t jpegz_decode_streaming_rows(
+    const uint8_t            *data,
+    size_t                    len,
+    jpegz_row_callback_fn     on_row,
+    void                     *ctx,
+    jpegz_image_metadata_t   *out_metadata
+);
+
+/* Same with caller-controlled options. */
+jpegz_status_t jpegz_decode_streaming_rows_ex(
+    const uint8_t                       *data,
+    size_t                               len,
+    const jpegz_decode_options_t        *options,
+    jpegz_row_callback_fn                on_row,
+    void                                *ctx,
+    jpegz_image_metadata_t              *out_metadata
+);
+
 /* ── Validation ────────────────────────────────────────────────── */
 
 typedef enum {
