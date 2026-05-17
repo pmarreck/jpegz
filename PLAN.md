@@ -261,16 +261,21 @@ machinery where possible).
       12-bit precision, all 4 chroma sampling factors (4:4:4, 4:2:2,
       4:2:0, 4:4:0), IJG-compatible fancy chroma upsampling.
 
-      **2026-05-16 sweep results (cleanroom vs libjpeg-turbo wrapper):**
-        - 8-bit progressive (3 fixtures: gray, RGB, DRI): **byte-perfect**
-          (max_delta = 0, 100% exact). Locked in by regression test.
-        - 12-bit grayscale: max_delta = 1 (98% exact).
-        - 12-bit RGB at 4:4:4 / 4:2:0 / 4:2:2 / 4:4:0: max_delta = 2–3
-          (93–95% exact). Sub-pixel rounding noise in u16 path; well
-          within the existing ≤4 LSB tolerance gate. Tightening to
-          byte-perfect would require aligning to libjpeg-turbo's
-          rounding mode in the 12-bit IDCT + YCbCr→RGB path — back-of-
-          cabinet polish, not blocking.
+      **2026-05-16 sweep + PASS1_BITS fix — every DCT fixture is now
+      byte-perfect vs libjpeg-turbo wrapper:**
+        - 8-bit progressive (3 fixtures: gray, RGB, DRI): max_delta = 0.
+        - 12-bit progressive (gray + RGB at 4 sampling factors): max_delta = 0.
+        - 12-bit baseline DCT (gray + RGB at 4 sampling factors): max_delta = 0.
+
+      Root cause of the residual 12-bit deltas was a single one-bit
+      shift constant: libjpeg-turbo's `jidctint.c` defines
+      `PASS1_BITS = 2` at `BITS_IN_JSAMPLE == 8` and `PASS1_BITS = 1`
+      at higher precisions ("lose a little precision to avoid
+      overflow", lines 102-108). Our cleanroom IDCT hardcoded 2 for
+      both. Parameterizing `pass1Bits(P)` (= 2 at P=8, 1 at P=12)
+      brought 13 DCT fixtures from 93-98% exact up to 100% across the
+      board. All previous ≤2-4 LSB tolerance gates tightened to == 0;
+      one consolidated regression test sweeps all 13 fixtures.
 
       Validation history: against 276 real-world progressive JPEGs
       from Peter's corpus on 2026-05-08, 199 byte-perfect / 77 within

@@ -39,9 +39,21 @@ const PI: f64 = 3.141592653589793;
 /// Number of fractional bits in fixed-point IDCT constants. Matches
 /// libjpeg-turbo's CONST_BITS in jidctint.c.
 const CONST_BITS: u5 = 13;
+
 /// Bits added to column-pass output that the row pass then absorbs.
-/// Matches libjpeg-turbo's PASS1_BITS.
-const PASS1_BITS: u5 = 2;
+/// libjpeg-turbo (jidctint.c lines 102-108) defines PASS1_BITS per
+/// the BITS_IN_JSAMPLE compile flag:
+///   - BITS_IN_JSAMPLE == 8  → PASS1_BITS = 2
+///   - BITS_IN_JSAMPLE  > 8  → PASS1_BITS = 1 ("lose a little precision
+///                                              to avoid overflow")
+/// Per the same comment block (lines 97-99), the constraint is
+/// `BITS_IN_JSAMPLE + CONST_BITS + PASS1_BITS <= 26` for 32-bit
+/// intermediate safety in pass 2. The 12-bit cleanroom widens its
+/// accumulator to i64 anyway, but we mirror libjpeg's PASS1_BITS=1
+/// at P=12 to keep byte-identical rounding output.
+fn pass1Bits(comptime P: u8) comptime_int {
+    return if (P == 8) 2 else 1;
+}
 
 // Fixed-point multiplier constants from libjpeg-turbo:
 // FIX(x) = round(x * 2^CONST_BITS).
@@ -115,6 +127,7 @@ pub fn idct8x8Generic(comptime P: u8, coeffs: *const [64]i32, out: *[64]Sample(P
     const SampleT = Sample(P);
     const level_shift: comptime_int = 1 << (P - 1); // 128 for P=8, 2048 for P=12
     const sample_max: comptime_int = (1 << P) - 1; // 255 for P=8, 4095 for P=12
+    const PASS1_BITS: comptime_int = pass1Bits(P);
     var workspace: [64]Acc = undefined;
 
     // ── Column pass: process 8 columns of the 8×8 input ──────────

@@ -508,27 +508,45 @@ test "decode 8x8 progressive grayscale (currently wrapper; cleanroom WIP)" {
 // closely enough to wire into dispatch.
 // ─────────────────────────────────────────────────────────────────────
 
-test "M2.2 regression: 8-bit progressive cleanroom is byte-perfect vs wrapper" {
-    // 2026-05-16 sweep showed cleanroom is byte-exact (max_delta = 0)
-    // on every 8-bit progressive fixture in tree: prog_8x8_gray (1ch),
-    // prog_8x8_rgb (3ch), prog_32x32_dri (DRI > 0). Tightening from
-    // ≤2 LSB to == 0 to catch any future regression in the IDCT /
-    // YCbCr→RGB / chroma upsample paths. (12-bit tests keep their
-    // ≤2..4 LSB gate — sub-pixel rounding in u16 path is not yet
-    // fully aligned to libjpeg-turbo's rounding mode.)
+test "DCT cleanroom is byte-perfect vs libjpeg-turbo wrapper (8-bit + 12-bit, baseline + progressive)" {
+    // 2026-05-16: after fixing PASS1_BITS to 1 at P=12 (matching
+    // libjpeg-turbo's jidctint.c #if BITS_IN_JSAMPLE == 8 / #else
+    // branch), every DCT fixture in tree decodes byte-identically to
+    // libjpeg-turbo: 8-bit progressive (gray/RGB/DRI), 12-bit
+    // progressive (gray + RGB at 4:4:4 / 4:2:0 / 4:2:2 / 4:4:0), and
+    // 12-bit baseline DCT (gray + RGB at all 4 sampling factors).
+    // 13 fixtures × byte-perfect locks the cleanroom rounding-mode
+    // alignment in place; any future IDCT / dequant / YCbCr→RGB /
+    // chroma-upsample tweak that drifts from libjpeg's output fails
+    // this test immediately.
     const allocator = std.testing.allocator;
-    const cases = [_][]const u8{
-        fixture_progressive_8x8_gray,
-        fixture_progressive_8x8,
-        fixture_progressive_32x32_dri,
+    const Case = struct { name: []const u8, data: []const u8 };
+    const cases = [_]Case{
+        .{ .name = "prog_8x8_gray",        .data = fixture_progressive_8x8_gray },
+        .{ .name = "prog_8x8_rgb",         .data = fixture_progressive_8x8 },
+        .{ .name = "prog_32x32_dri",       .data = fixture_progressive_32x32_dri },
+        .{ .name = "prog_8x8_gray12",      .data = fixture_progressive_8x8_gray12 },
+        .{ .name = "prog_16x16_rgb12_444", .data = fixture_progressive_16x16_rgb12_444 },
+        .{ .name = "prog_16x16_rgb12_420", .data = fixture_progressive_16x16_rgb12_420 },
+        .{ .name = "prog_16x16_rgb12_422", .data = fixture_progressive_16x16_rgb12_422 },
+        .{ .name = "prog_16x16_rgb12_440", .data = fixture_progressive_16x16_rgb12_440 },
+        .{ .name = "base_16x16_rgb12_444", .data = fixture_baseline_16x16_rgb12_444 },
+        .{ .name = "base_16x16_rgb12_420", .data = fixture_baseline_16x16_rgb12_420 },
+        .{ .name = "base_16x16_rgb12_422", .data = fixture_baseline_16x16_rgb12_422 },
+        .{ .name = "base_16x16_rgb12_440", .data = fixture_baseline_16x16_rgb12_440 },
+        .{ .name = "base_4x4_gray12_dct",  .data = fixture_baseline_4x4_gray12_dct },
     };
-    for (cases) |data| {
-        var cleanroom = try jpegz.internal.progressiveDecode(allocator, data);
-        defer cleanroom.deinit(allocator);
-        var wrapper = try jpegz.internal.wrapperDecode(allocator, data);
-        defer wrapper.deinit(allocator);
-        try std.testing.expectEqual(wrapper.pixels.len, cleanroom.pixels.len);
-        try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+    for (cases) |c| {
+        var clean = jpegz.internal.progressiveDecode(allocator, c.data) catch
+            try jpegz.internal.cleanroomDecode(allocator, c.data);
+        defer clean.deinit(allocator);
+        var wrap = try jpegz.internal.wrapperDecode(allocator, c.data);
+        defer wrap.deinit(allocator);
+        try std.testing.expectEqual(wrap.pixels.len, clean.pixels.len);
+        std.testing.expectEqualSlices(u8, wrap.pixels, clean.pixels) catch |err| {
+            std.debug.print("byte-exact mismatch on {s}\n", .{c.name});
+            return err;
+        };
     }
 }
 
@@ -918,15 +936,13 @@ test "A3: SOF2 12-bit progressive cleanroom (gray + RGB at all sampling factors)
         const c_u16 = cleanroom.pixelsU16();
         const w_u16 = wrapper.pixelsU16();
         try std.testing.expectEqual(w_u16.len, c_u16.len);
-        // ≤4 LSB tolerance per spec; same gate as A1 Part B (12-bit
-        // YCbCr→RGB with chroma upsample amplifies sub-pixel rounding).
-        for (c_u16, w_u16) |a, b| {
-            const ad: u32 = @abs(@as(i32, a) - @as(i32, b));
-            try std.testing.expect(ad <= 4);
-        }
+        // 2026-05-16: PASS1_BITS=1 fix at P=12 brought the cleanroom
+        // into byte-identical alignment with libjpeg-turbo across the
+        // entire 12-bit DCT path. Tightened from ≤4 LSB to == 0.
+        try std.testing.expectEqual(w_u16.len, c_u16.len);
+        for (c_u16, w_u16) |a, b| try std.testing.expectEqual(b, a);
     }
-    // Grayscale case — no chroma upsample, no color conversion, so
-    // tighter tolerance (≤2 LSB, same as 8-bit progressive).
+    // Grayscale case — no chroma upsample, no color conversion.
     {
         var cleanroom = try jpegz.internal.progressiveDecode(allocator, fixture_progressive_8x8_gray12);
         defer cleanroom.deinit(allocator);
@@ -935,12 +951,10 @@ test "A3: SOF2 12-bit progressive cleanroom (gray + RGB at all sampling factors)
         try std.testing.expectEqual(@as(u8, 12), cleanroom.bits_per_sample);
         try std.testing.expectEqual(@as(u8, 1), cleanroom.channels);
         try std.testing.expectEqual(jpegz.PixelLayout.grayscale, cleanroom.layout);
-        const c_u16 = cleanroom.pixelsU16();
-        const w_u16 = wrapper.pixelsU16();
-        for (c_u16, w_u16) |a, b| {
-            const ad: u32 = @abs(@as(i32, a) - @as(i32, b));
-            try std.testing.expect(ad <= 2);
-        }
+        const cw = wrapper.pixelsU16();
+        const cc = cleanroom.pixelsU16();
+        try std.testing.expectEqual(cw.len, cc.len);
+        for (cc, cw) |a, b| try std.testing.expectEqual(b, a);
     }
 }
 
@@ -988,17 +1002,10 @@ test "A1 Part B: SOF1 12-bit RGB cleanroom decodes vs wrapper, all sampling fact
         const c_u16 = cleanroom.pixelsU16();
         const w_u16 = wrapper.pixelsU16();
         try std.testing.expectEqual(w_u16.len, c_u16.len);
-        // 12-bit YCbCr→RGB with chroma upsample amplifies sub-pixel
-        // rounding: a 1-LSB chroma diff propagates to ≤2 LSB in B
-        // (Cb·116130/2^16 ≈ 1.77). Empirical max across all 4 sampling
-        // factors is ≤3 LSB (4:4:4 / 4:2:0 are ≤2; H2V1 / H1V2 fancy
-        // upsample land at 3). Tolerance set to ≤4 with 1 LSB headroom.
-        // Cleanroom matches libjpeg's IJG-fancy output exactly at 4:4:4.
-        for (c_u16, w_u16) |a, b| {
-            const delta = @as(i32, a) - @as(i32, b);
-            const ad: u32 = @abs(delta);
-            try std.testing.expect(ad <= 4);
-        }
+        // 2026-05-16: PASS1_BITS=1 fix at P=12 (libjpeg-turbo parity)
+        // collapsed the rounding mismatch — tightened from ≤4 LSB to == 0.
+        try std.testing.expectEqual(w_u16.len, c_u16.len);
+        for (c_u16, w_u16) |a, b| try std.testing.expectEqual(b, a);
     }
 }
 
@@ -1018,13 +1025,8 @@ test "A1: SOF1 12-bit grayscale cleanroom decodes byte-for-byte vs wrapper" {
     const wrapper_u16 = wrapper.pixelsU16();
     try std.testing.expectEqual(@as(usize, 16), cleanroom_u16.len);
     try std.testing.expectEqual(wrapper_u16.len, cleanroom_u16.len);
-    // ≤2 LSB tolerance per spec (DCT rounding); uniform-input fixture
-    // produces DC-only coefficients so in practice this should match
-    // wrapper byte-exact, but the spec tolerance is the contractual gate.
-    for (cleanroom_u16, wrapper_u16) |c, w| {
-        const delta = @as(i32, c) - @as(i32, w);
-        try std.testing.expect(@abs(delta) <= 2);
-    }
+    // 2026-05-16: PASS1_BITS=1 fix at P=12 — tightened from ≤2 LSB to ==0.
+    for (cleanroom_u16, wrapper_u16) |c, w| try std.testing.expectEqual(w, c);
 }
 
 test "M2.8: lossless SOF3 cleanroom decodes 12/14/16-bit grayscale precision byte-for-byte" {
