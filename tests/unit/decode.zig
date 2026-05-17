@@ -1183,3 +1183,65 @@ test "M2.2: progressive cleanroom decodes 8x8 RGB fixture" {
     }
     try std.testing.expect(max_delta <= 2);
 }
+
+// ── Cleanroom FindingsSink (NEXT_STEPS §"Validation-strictness") ─────
+//
+// The cleanroom baseline decoder tolerates "extraneous bytes before
+// marker" (T.81 §B.1.1.2 marker self-synchronization) — same behavior
+// as djpeg/libjpeg-turbo, which would WARNMS about it. When a caller
+// attaches a `FindingsSink`, the cleanroom must surface that tolerance
+// as a `Finding(.warn, .extraneous_bytes_before_marker)` so strict
+// consumers (validate, format-integrity tools) see the spec deviation.
+
+test "cleanroom emits Finding(.warn, .extraneous_bytes_before_marker) when tolerated" {
+    const allocator = std.testing.allocator;
+
+    // Inject 4 garbage bytes between SOI (offset 0..1) and the next
+    // marker. The cleanroom's marker walker scans forward past 0xAA's
+    // until it finds the next 0xFF, decode succeeds (tolerance), and
+    // the sink should receive a warn finding for the skip.
+    var corrupted = try allocator.alloc(u8, fixture_baseline_2x2_rgb.len + 4);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0..2], fixture_baseline_2x2_rgb[0..2]);
+    corrupted[2] = 0xAA;
+    corrupted[3] = 0xAA;
+    corrupted[4] = 0xAA;
+    corrupted[5] = 0xAA;
+    @memcpy(corrupted[6..], fixture_baseline_2x2_rgb[2..]);
+
+    var sink = jpegz.internal.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.cleanroomDecodeWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    // Decode must still succeed — tolerance is the whole point.
+    try std.testing.expectEqual(@as(u32, 2), image.width);
+    try std.testing.expectEqual(@as(u32, 2), image.height);
+
+    // Sink must have at least one warn for the injected extraneous bytes.
+    var found = false;
+    var offset_seen: ?u64 = null;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .extraneous_bytes_before_marker) {
+            found = true;
+            offset_seen = f.offset;
+        }
+    }
+    try std.testing.expect(found);
+    // Offset should point at the first injected garbage byte (just after SOI).
+    try std.testing.expectEqual(@as(?u64, 2), offset_seen);
+}
+
+test "cleanroom emits no findings for clean baseline JPEG" {
+    const allocator = std.testing.allocator;
+
+    var sink = jpegz.internal.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.cleanroomDecodeWithFindings(
+        allocator, fixture_baseline_2x2_rgb, &sink);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), sink.items().len);
+}

@@ -456,6 +456,26 @@ comptime {
 /// call cleanroom and wrapper paths directly without going through
 /// the dispatcher in `decode`.
 pub const internal = struct {
+    /// Re-export of the cleanroom decoder's `FindingsSink` so that
+    /// tests can pass one through `cleanroomDecodeWithFindings` without
+    /// reaching into `src/decode/findings.zig` directly. NOT part of
+    /// the stable ABI.
+    pub const FindingsSink = @import("decode/findings.zig").FindingsSink;
+
+    /// Decode via the cleanroom baseline path, attaching a
+    /// `FindingsSink` so spec-deviation findings (extraneous bytes,
+    /// premature EOI with recovered data, etc.) are surfaced as warns.
+    /// This is the entry point validate(...) will use once cleanroom
+    /// becomes the source of truth for warnings on owned variants.
+    pub fn cleanroomDecodeWithFindings(
+        allocator: Allocator,
+        data: []const u8,
+        sink: *FindingsSink,
+    ) DecodeError!Image {
+        const baseline = @import("decode/baseline.zig");
+        return baseline.decodeWithOptions(allocator, data, .{ .findings_sink = sink });
+    }
+
     pub fn cleanroomDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/baseline.zig").decode(allocator, data);
     }

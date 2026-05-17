@@ -26,6 +26,7 @@ const bitstream = @import("bitstream.zig");
 const huffman = @import("huffman.zig");
 const idct = @import("idct.zig");
 const color = @import("color.zig");
+const findings_mod = @import("findings.zig");
 const thread_pool = @import("thread_pool.zig");
 
 const builtin = @import("builtin");
@@ -86,6 +87,13 @@ pub const Error = errors.DecodeError;
 /// Today only `threads` is honored; struct can grow more knobs.
 pub const DecodeOptions = struct {
     threads: u8 = 1,
+    /// Optional side-channel for spec-deviation findings. When non-null,
+    /// the cleanroom emits a `Finding` at each tolerance site (e.g.
+    /// extraneous bytes before marker, premature EOI with recovered
+    /// data) so strict consumers like `validate(...)` can surface them.
+    /// Caller owns the sink. `null` (default) skips emission — matches
+    /// libjpeg's silent-tolerance behavior.
+    findings_sink: ?*findings_mod.FindingsSink = null,
 };
 
 /// Decode an 8-bit baseline JPEG. Sequential / single-threaded.
@@ -128,7 +136,22 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
         // Tolerate "extraneous bytes before marker" — djpeg/libjpeg-turbo
         // recover from this and so do we (per T.81 §B.1.1.2 markers are
         // self-synchronizing). Scan forward to the next 0xFF byte.
+        const skip_start = pos;
         while (pos < data.len and data[pos] != 0xFF) pos += 1;
+        if (pos > skip_start) {
+            if (options.findings_sink) |sink| {
+                // Mirror libjpeg's "Corrupt JPEG data: N extraneous bytes
+                // before marker 0xXX" warning text so consumers can grep
+                // across cleanroom and wrapper paths uniformly.
+                var buf: [96]u8 = undefined;
+                const next_marker: u8 = if (pos + 1 < data.len) data[pos + 1] else 0;
+                const detail = std.fmt.bufPrint(&buf,
+                    "Corrupt JPEG data: {d} extraneous bytes before marker 0x{x:0>2}",
+                    .{ pos - skip_start, next_marker }) catch buf[0..0];
+                sink.emit(.warn, .extraneous_bytes_before_marker,
+                    @intCast(skip_start), detail) catch return error.OutOfMemory;
+            }
+        }
         if (pos + 1 >= data.len) return fail("walker_eof_after_ff", error.TruncatedStream);
         // Skip 0xFF padding bytes.
         while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
