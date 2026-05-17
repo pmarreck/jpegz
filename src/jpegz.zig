@@ -243,8 +243,10 @@ pub fn decodeWithOptions(
     }
 
     // Try lossless cleanroom (SOF3, T.81 §H — predictive coding).
-    // v1 handles 8-bit single-component only; 12/16-bit and multi-
-    // component lossless fall through to wrapper via NotImplemented.
+    // Byte-perfect vs libjpeg-turbo across all 13 lossless fixtures:
+    // precision 8/12/14/16, 1- and 3-component, DRI > 0, all 7
+    // predictors. NotImplemented falls through to wrapper for non-1×1
+    // sampling factors and point transform Al > 0.
     const lossless = @import("decode/lossless.zig");
     if (lossless.decode(allocator, data)) |img| {
         return img;

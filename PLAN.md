@@ -288,8 +288,20 @@ machinery where possible).
       Remaining NotImplemented gates (intentional fall-through to
       wrapper): 4-component (CMYK) progressive — no real-world demand,
       no fixture in tree. _(2026-05-08 EST; sweep 2026-05-16 EST)_
-- [ ] **M2.3 — Lossless audit.** Audit the lifted decoder against T.81
-      §13 + libjpeg-turbo oracle.
+- [x] **M2.3 — Lossless audit.** Audited 2026-05-16. The lossless
+      cleanroom in `src/decode/lossless.zig` is actually a full pure-
+      Zig implementation of T.81 §H predictive coding — not a "lifted"
+      port. Sweep result: **all 13 lossless fixtures byte-perfect** vs
+      libjpeg-turbo wrapper:
+        - precision 8 / 12 / 14 / 16 grayscale,
+        - 8-bit RGB 3-component,
+        - 16×16 with DRI > 0 (restart markers),
+        - all 7 predictors (Ss = 1..7) tested independently.
+      Already covered by M2.4–M2.8 byte-equality regression tests.
+      Stale docstring and dispatcher comment refreshed.
+      Remaining gates fall through to wrapper for non-1×1 sampling
+      factors and point transform Al > 0 — no fixtures in tree, no
+      real-world demand. _(2026-05-16 EST)_
 - [ ] **M2.4 — 12-bit precision.** Rare but spec-mandatory.
 - [ ] **M2.5 — Arithmetic coding (T.81 §F).** Q-coder + conditioning.
       Last among T.81 codecs.

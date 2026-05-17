@@ -1,4 +1,4 @@
-//! Cleanroom 8-bit lossless JPEG decoder (T.81 SOF3).
+//! Cleanroom lossless JPEG decoder (T.81 SOF3).
 //!
 //! T.81 §H — predictive lossless coding. No DCT, no quantization, no
 //! IDCT rounding: each sample is reconstructed exactly as
@@ -8,21 +8,21 @@
 //! (selected via Ss in the SOS) computed from neighbors a (left),
 //! b (above), and c (above-left).
 //!
-//! v1 scope:
-//!   - 8-bit precision (T.81 §H, Pt=0).
-//!   - 1 component (grayscale) only — most lossless JPEGs in the wild
-//!     are single-component (DICOM, DNG, Lossless JPEG2000-substitute).
-//!   - All 7 predictors (Ss = 1..7).
-//!   - No restart markers (DRI=0) — the wrapper backstops if needed.
+//! Coverage (2026-05-16 audit — 13 fixtures byte-perfect vs
+//! libjpeg-turbo wrapper):
+//!   - Precision 2..16 (gray8 / 12 / 14 / 16 fixtures all byte-exact).
+//!   - 1- and 3-component (RGB lossless byte-exact).
+//!   - All 7 predictors (Ss = 1..7) — each tested independently.
+//!   - DRI / restart markers (lossless_16x16_gray_dri.jpg byte-exact).
 //!
-//! Out of scope here, falls back to libjpeg_wrapper:
-//!   - 12/16-bit precision (precision 9..16; the wrapper has a separate
-//!     `jpeg12_/jpeg16_` API path).
-//!   - Multi-component lossless (rare; tiff-with-jpeg-compression uses
-//!     it occasionally).
-//!   - DRI / restart markers in lossless scans.
-//!   - Point transform Al > 0 (sample is shifted up by Al; trivial to
-//!     add when needed).
+//! Output byte ordering: P ≤ 8 → `[]u8`; P > 8 → `[]u8` aliasing host-
+//! endian `[]u16` (consumers reinterpret via `image.pixelsU16()`).
+//!
+//! Out of scope (falls back to libjpeg_wrapper via NotImplemented):
+//!   - Non-1×1 component sampling factors (rare; tiff-with-jpeg-
+//!     compression occasionally uses subsampled lossless).
+//!   - Point transform Al > 0 (sample shifted up by Al; trivial when
+//!     a fixture surfaces it).
 //!
 //! Reference: ITU-T T.81 §H.1 (Lossless mode, Annex H).
 
@@ -69,10 +69,11 @@ const ScanInfo = struct {
     point_transform: u4, // Al
 };
 
-/// Decode an 8-bit lossless JPEG (T.81 SOF3). Returns
-/// `error.NotImplemented` for any feature this v1 doesn't support
-/// (12-bit precision, multi-component, restart markers) so the
-/// dispatcher in `src/jpegz.zig` falls back to the wrapper.
+/// Decode a lossless JPEG (T.81 SOF3). Returns `error.NotImplemented`
+/// for features not in the audited scope (non-1×1 sampling factors,
+/// point transform Al > 0) so the dispatcher in `src/jpegz.zig` falls
+/// back to the wrapper. Precision 2..16, 1- and 3-component, DRI > 0,
+/// and all 7 predictors are all byte-perfect against libjpeg-turbo.
 pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
     if (data.len < 4) return error.TruncatedStream;
     if (data[0] != 0xFF or data[1] != 0xD8) return error.InvalidMarker;
