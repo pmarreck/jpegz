@@ -32,6 +32,7 @@ const bitstream = @import("bitstream.zig");
 const huffman = @import("huffman.zig");
 const idct = @import("idct.zig");
 const color = @import("color.zig");
+const findings_mod = @import("findings.zig");
 
 const PROG_DEBUG: bool = false;
 inline fn dbg(comptime fmt: []const u8, args: anytype) void {
@@ -225,11 +226,30 @@ pub fn decodeAndDumpCoefs(allocator: Allocator, data: []const u8) Error!CoefDump
     };
 }
 
-/// Decode an 8-bit progressive JPEG (T.81 SOF2). Returns
-/// `error.NotImplemented` for any feature this v1 cleanroom doesn't
-/// support so the dispatcher in `src/jpegz.zig` can fall back to
-/// the libjpeg-turbo wrapper.
+/// Caller-supplied knobs. Structurally mirrors `baseline.DecodeOptions`
+/// so the dispatcher can pass through a `FindingsSink` uniformly.
+/// `null` sink = libjpeg-style silent tolerance (default).
+pub const DecodeOptions = struct {
+    findings_sink: ?*findings_mod.FindingsSink = null,
+};
+
+/// Decode an 8-bit progressive JPEG (T.81 SOF2). Default-options entry
+/// point — `null` `findings_sink`, silent tolerance.
 pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
+    return decodeWithOptions(allocator, data, .{});
+}
+
+/// Same as `decode` but accepts a `DecodeOptions`. Currently the only
+/// honored knob is `findings_sink`: when non-null, the cleanroom emits
+/// a `Finding(.warn, .insufficient_data)` the first time within each
+/// scan that the entropy stream runs out before the scan completes —
+/// matching libjpeg-turbo's `JWRN_HIT_MARKER` / `JWRN_JPEG_EOF`
+/// behavior surfaced through `validate(...)`.
+pub fn decodeWithOptions(
+    allocator: Allocator,
+    data: []const u8,
+    options: DecodeOptions,
+) Error!types.Image {
     if (data.len < 4) return error.TruncatedStream;
     if (data[0] != 0xFF or data[1] != 0xD8) return error.InvalidMarker;
 
@@ -343,6 +363,7 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
                     max_v,
                     &scan,
                     restart_interval,
+                    options.findings_sink,
                 );
             },
             // Standalone markers we can skip safely.
@@ -516,6 +537,20 @@ fn handleRestart(
 
 /// Decode one progressive scan and return the byte position immediately
 /// after the entropy data (at the next marker's 0xFF byte).
+/// Mirror libjpeg's "Corrupt JPEG data: premature end of data segment"
+/// `JWRN_HIT_MARKER` / `JWRN_JPEG_EOF` text so consumers can grep both
+/// cleanroom and wrapper paths uniformly. No-op when sink is null.
+inline fn emitInsufficientData(
+    sink: ?*findings_mod.FindingsSink,
+    byte_pos: usize,
+) Error!void {
+    if (sink) |s| {
+        s.emit(.warn, .insufficient_data, @intCast(byte_pos),
+            "Corrupt JPEG data: premature end of data segment") catch
+            return error.OutOfMemory;
+    }
+}
+
 fn decodeOneScan(
     data: []const u8,
     entropy_start: usize,
@@ -529,6 +564,7 @@ fn decodeOneScan(
     max_v: u32,
     scan: *const ScanInfo,
     restart_interval: u16,
+    sink: ?*findings_mod.FindingsSink,
 ) Error!usize {
     var br = bitstream.BitReader.init(data[entropy_start..]);
     var prev_dc: [3]i16 = .{ 0, 0, 0 };
@@ -578,7 +614,7 @@ fn decodeOneScan(
                             const block = coefs[comp_idx][off .. off + 64];
                             try decodeProgressiveBlock(
                                 &br, comp, dc_tables, ac_tables,
-                                &prev_dc, &eob_run, comp_idx, block, scan,
+                                &prev_dc, &eob_run, comp_idx, block, scan, sink,
                             );
                         }
                     }
@@ -621,7 +657,7 @@ fn decodeOneScan(
                 const block = coefs[comp_idx][off .. off + 64];
                 try decodeProgressiveBlock(
                     &br, comp, dc_tables, ac_tables,
-                    &prev_dc, &eob_run, comp_idx, block, scan,
+                    &prev_dc, &eob_run, comp_idx, block, scan, sink,
                 );
                 units_since_rst += 1;
             }
@@ -653,6 +689,7 @@ fn decodeProgressiveBlock(
     comp_idx: usize,
     block: []i16,
     scan: *const ScanInfo,
+    sink: ?*findings_mod.FindingsSink,
 ) Error!void {
     // libjpeg-turbo `insufficient_data` parity: if the entropy stream has
     // already hit the next marker and the bit buffer is empty, leave this
@@ -660,15 +697,20 @@ fn decodeProgressiveBlock(
     // scans, prior coefficients for refinement scans). Per
     // libjpeg-turbo/jdphuff.c decode_mcu_AC_first: "If we've run out of
     // data, just leave the MCU set to zeroes."
+    //
+    // No `emitInsufficientData` here — once markerHit transitions true,
+    // every remaining block in the scan re-enters this guard and returns.
+    // The first-detection emit lives in the leaves below; this guard
+    // would only ever spam duplicates.
     if (br.markerHit() and br.bits_valid == 0) return;
     if (scan.ss == 0) {
         // DC scan
-        if (scan.ah == 0) try decodeProgressiveDcFirst(br, comp, dc_tables, prev_dc, comp_idx, block, scan)
-        else try decodeProgressiveDcRefine(br, block, scan);
+        if (scan.ah == 0) try decodeProgressiveDcFirst(br, comp, dc_tables, prev_dc, comp_idx, block, scan, sink)
+        else try decodeProgressiveDcRefine(br, block, scan, sink);
     } else {
         // AC scan (single-component)
-        if (scan.ah == 0) try decodeProgressiveAcFirst(br, comp, ac_tables, eob_run, block, scan)
-        else try decodeProgressiveAcRefine(br, comp, ac_tables, eob_run, block, scan);
+        if (scan.ah == 0) try decodeProgressiveAcFirst(br, comp, ac_tables, eob_run, block, scan, sink)
+        else try decodeProgressiveAcRefine(br, comp, ac_tables, eob_run, block, scan, sink);
     }
 }
 
@@ -683,22 +725,32 @@ fn decodeProgressiveDcFirst(
     comp_idx: usize,
     block: []i16,
     scan: *const ScanInfo,
+    sink: ?*findings_mod.FindingsSink,
 ) Error!void {
     const dc_t = dc_tables[comp.dc_table] orelse return error.InvalidMarker;
     const dc_size: u8 = dc_t.decode(br) catch |e| {
-        if (br.markerHit()) return; // insufficient_data tolerance
+        if (br.markerHit()) {
+            try emitInsufficientData(sink, br.byte_pos);
+            return;
+        }
         dbg("[prog:dc_first] huff fail comp={d} dc_table={d} byte_pos={d} bits_valid={d} buf=0x{x} err={s}\n", .{ comp_idx, comp.dc_table, br.byte_pos, br.bits_valid, br.buf, @errorName(e) });
         return error.BackendError;
     };
     if (dc_size > 11) {
-        if (br.markerHit()) return; // garbage bits from past-marker buffer
+        if (br.markerHit()) {
+            try emitInsufficientData(sink, br.byte_pos);
+            return; // garbage bits from past-marker buffer
+        }
         dbg("[prog:dc_first] dc_size>11 ({d}) comp={d} byte_pos={d}\n", .{ dc_size, comp_idx, br.byte_pos });
         return error.BackendError;
     }
     var dc_diff: i16 = 0;
     if (dc_size > 0) {
         const bits = br.readBits(@intCast(dc_size)) catch {
-            if (br.markerHit()) return;
+            if (br.markerHit()) {
+                try emitInsufficientData(sink, br.byte_pos);
+                return;
+            }
             return error.TruncatedStream;
         };
         dc_diff = huffman.extendSign(bits, @intCast(dc_size));
@@ -713,9 +765,13 @@ fn decodeProgressiveDcRefine(
     br: *bitstream.BitReader,
     block: []i16,
     scan: *const ScanInfo,
+    sink: ?*findings_mod.FindingsSink,
 ) Error!void {
     const bit = br.readBits(1) catch {
-        if (br.markerHit()) return;
+        if (br.markerHit()) {
+            try emitInsufficientData(sink, br.byte_pos);
+            return;
+        }
         return error.TruncatedStream;
     };
     if (bit == 1) {
@@ -734,6 +790,7 @@ fn decodeProgressiveAcFirst(
     eob_run: *u32,
     block: []i16,
     scan: *const ScanInfo,
+    sink: ?*findings_mod.FindingsSink,
 ) Error!void {
     if (eob_run.* > 0) {
         eob_run.* -= 1;
@@ -744,7 +801,10 @@ fn decodeProgressiveAcFirst(
     var k: u8 = scan.ss;
     while (k <= scan.se) {
         const rs: u8 = ac_t.decode(br) catch |e| {
-            if (br.markerHit()) return; // insufficient_data tolerance
+            if (br.markerHit()) {
+                try emitInsufficientData(sink, br.byte_pos);
+                return;
+            }
             dbg("[prog:ac_first] huff fail ac_table={d} k={d} ss={d} se={d} byte_pos={d} bits_valid={d} buf=0x{x} err={s}\n", .{ comp.ac_table, k, scan.ss, scan.se, br.byte_pos, br.bits_valid, br.buf, @errorName(e) });
             return error.BackendError;
         };
@@ -760,7 +820,10 @@ fn decodeProgressiveAcFirst(
                 eob_run.* = (@as(u32, 1) << @intCast(run));
                 if (run > 0) {
                     const extra = br.readBits(@intCast(run)) catch {
-                        if (br.markerHit()) return;
+                        if (br.markerHit()) {
+                            try emitInsufficientData(sink, br.byte_pos);
+                            return;
+                        }
                         return error.TruncatedStream;
                     };
                     eob_run.* += @intCast(extra);
@@ -771,12 +834,18 @@ fn decodeProgressiveAcFirst(
         }
         k += run;
         if (k > scan.se) {
-            if (br.markerHit()) return;
+            if (br.markerHit()) {
+                try emitInsufficientData(sink, br.byte_pos);
+                return;
+            }
             dbg("[prog:ac_first] k>se after run k={d} se={d} byte_pos={d}\n", .{ k, scan.se, br.byte_pos });
             return error.BackendError;
         }
         const bits = br.readBits(@intCast(size)) catch {
-            if (br.markerHit()) return;
+            if (br.markerHit()) {
+                try emitInsufficientData(sink, br.byte_pos);
+                return;
+            }
             return error.TruncatedStream;
         };
         const val = huffman.extendSign(bits, @intCast(size));
@@ -802,6 +871,7 @@ fn decodeProgressiveAcRefine(
     eob_run: *u32,
     block: []i16,
     scan: *const ScanInfo,
+    sink: ?*findings_mod.FindingsSink,
 ) Error!void {
     const ac_t = ac_tables[comp.ac_table] orelse return error.InvalidMarker;
     const positive: i16 = @as(i16, @intCast(@as(i32, 1) << @intCast(scan.al)));
@@ -813,7 +883,7 @@ fn decodeProgressiveAcRefine(
         // EOB-run carry-over from a previous block: just refine
         // remaining nonzeros in this block, no new nonzeros.
         while (k <= scan.se) : (k += 1) {
-            try refineExistingNonzero(br, block, k, positive, negative);
+            try refineExistingNonzero(br, block, k, positive, negative, sink);
         }
         eob_run.* -= 1;
         return;
@@ -821,7 +891,10 @@ fn decodeProgressiveAcRefine(
 
     while (k <= scan.se) {
         const rs: u8 = ac_t.decode(br) catch |e| {
-            if (br.markerHit()) return;
+            if (br.markerHit()) {
+                try emitInsufficientData(sink, br.byte_pos);
+                return;
+            }
             const remaining: usize = if (br.byte_pos < br.data.len) br.data.len - br.byte_pos else 0;
             const next3: [3]u8 = if (br.byte_pos + 2 < br.data.len) .{ br.data[br.byte_pos], br.data[br.byte_pos + 1], br.data[br.byte_pos + 2] } else .{ 0, 0, 0 };
             dbg("[prog:ac_refine] huff fail ac_table={d} k={d} byte_pos={d} bytes_left={d} next3={x:0>2}{x:0>2}{x:0>2} buf=0x{x} bits_valid={d} marker_seen={} err={s}\n", .{ comp.ac_table, k, br.byte_pos, remaining, next3[0], next3[1], next3[2], br.buf, br.bits_valid, br.marker_seen, @errorName(e) });
@@ -835,12 +908,18 @@ fn decodeProgressiveAcRefine(
 
         if (size != 0) {
             if (size != 1) {
-                if (br.markerHit()) return;
+                if (br.markerHit()) {
+                    try emitInsufficientData(sink, br.byte_pos);
+                    return;
+                }
                 dbg("[prog:ac_refine] size!=1 (size={d}) k={d} se={d} byte_pos={d}\n", .{ size, k, scan.se, br.byte_pos });
                 return error.BackendError; // refinement always ±1 LSB
             }
             const bit = br.readBits(1) catch {
-                if (br.markerHit()) return;
+                if (br.markerHit()) {
+                    try emitInsufficientData(sink, br.byte_pos);
+                    return;
+                }
                 return error.TruncatedStream;
             };
             new_val = if (bit == 1) positive else negative;
@@ -854,14 +933,17 @@ fn decodeProgressiveAcRefine(
             var count: u32 = (@as(u32, 1) << @intCast(run_field));
             if (run_field > 0) {
                 const extra = br.readBits(@intCast(run_field)) catch {
-                    if (br.markerHit()) return;
+                    if (br.markerHit()) {
+                        try emitInsufficientData(sink, br.byte_pos);
+                        return;
+                    }
                     return error.TruncatedStream;
                 };
                 count += @intCast(extra);
             }
             eob_run.* = count - 1; // current block consumed inline below
             while (k <= scan.se) : (k += 1) {
-                try refineExistingNonzero(br, block, k, positive, negative);
+                try refineExistingNonzero(br, block, k, positive, negative, sink);
             }
             return;
         }
@@ -882,7 +964,7 @@ fn decodeProgressiveAcRefine(
         const is_zrl = (size == 0 and run_field == 15);
         while (k <= scan.se) {
             if (block[k] != 0) {
-                try refineExistingNonzero(br, block, k, positive, negative);
+                try refineExistingNonzero(br, block, k, positive, negative, sink);
             } else {
                 if (zeros_remaining == 0) {
                     if (has_pending_new) {
@@ -911,10 +993,14 @@ inline fn refineExistingNonzero(
     k: u8,
     positive: i16,
     negative: i16,
+    sink: ?*findings_mod.FindingsSink,
 ) Error!void {
     if (block[k] == 0) return;
     const bit = br.readBits(1) catch {
-        if (br.markerHit()) return;
+        if (br.markerHit()) {
+            try emitInsufficientData(sink, br.byte_pos);
+            return;
+        }
         return error.TruncatedStream;
     };
     if (bit == 0) return;

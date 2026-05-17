@@ -490,6 +490,19 @@ pub const internal = struct {
     pub fn progressiveDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/progressive.zig").decode(allocator, data);
     }
+    /// Progressive cleanroom decode that emits a `Finding(.warn,
+    /// .insufficient_data)` into the supplied sink the first time
+    /// within each scan that the entropy stream runs out before
+    /// the scan completes (libjpeg `JWRN_HIT_MARKER`/`JWRN_JPEG_EOF`
+    /// parity). Other tolerance sites are silent in v1.
+    pub fn progressiveDecodeWithFindings(
+        allocator: Allocator,
+        data: []const u8,
+        sink: *FindingsSink,
+    ) DecodeError!Image {
+        const progressive = @import("decode/progressive.zig");
+        return progressive.decodeWithOptions(allocator, data, .{ .findings_sink = sink });
+    }
     pub fn losslessDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/lossless.zig").decode(allocator, data);
     }

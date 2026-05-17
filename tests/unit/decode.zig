@@ -1245,3 +1245,57 @@ test "cleanroom emits no findings for clean baseline JPEG" {
 
     try std.testing.expectEqual(@as(usize, 0), sink.items().len);
 }
+
+test "cleanroom progressive emits Finding(.warn, .insufficient_data) on truncated entropy" {
+    const allocator = std.testing.allocator;
+
+    // Cut bytes off the end of the last scan's entropy data, then
+    // re-attach FFD9. Cleanroom progressive sees markerHit mid-scan
+    // and tolerates it (libjpeg `insufficient_data` parity); the sink
+    // receives the first-detection warn. We use the 1190-byte 16×16
+    // 12-bit RGB fixture because its final scan has ~39 bytes of
+    // entropy, leaving room to cut within entropy without landing in
+    // an upstream DHT segment. (The small 8×8 fixtures have ~1-byte
+    // trailing scans that any non-trivial cut would punch right
+    // through a header.)
+    const full = fixture_progressive_16x16_rgb12_444;
+    try std.testing.expectEqual(@as(u8, 0xFF), full[full.len - 2]);
+    try std.testing.expectEqual(@as(u8, 0xD9), full[full.len - 1]);
+
+    const cut: usize = 16;
+    var corrupted = try allocator.alloc(u8, full.len - cut);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0 .. full.len - cut - 2], full[0 .. full.len - cut - 2]);
+    corrupted[full.len - cut - 2] = 0xFF;
+    corrupted[full.len - cut - 1] = 0xD9;
+
+    var sink = jpegz.internal.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.progressiveDecodeWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    // Decode succeeded — tolerance was exercised.
+    try std.testing.expectEqual(@as(u32, 16), image.width);
+    try std.testing.expectEqual(@as(u32, 16), image.height);
+
+    // Sink must have at least one warn for insufficient_data.
+    var found = false;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .insufficient_data) found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "cleanroom progressive emits no findings for clean fixture" {
+    const allocator = std.testing.allocator;
+
+    var sink = jpegz.internal.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.progressiveDecodeWithFindings(
+        allocator, fixture_progressive_8x8, &sink);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), sink.items().len);
+}
