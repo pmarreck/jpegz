@@ -19,6 +19,7 @@ const types = @import("../core/types.zig");
 const arith_coder = @import("arith_coder.zig");
 const baseline = @import("baseline.zig");
 const progressive = @import("progressive.zig");
+const findings_mod = @import("findings.zig");
 
 const Error = errors.DecodeError;
 
@@ -27,14 +28,39 @@ comptime {
     _ = arith_coder;
 }
 
+/// Caller-supplied knobs. Mirrors `baseline.DecodeOptions` shape so the
+/// dispatcher can pass through a `FindingsSink` uniformly. The arith
+/// progressive path is strict on marker prefix and the Q-coder
+/// explicitly never uses `markerHit` (zero-bit-supply per T.81 §F.1.4),
+/// so only `decodeArithBaseline`'s extraneous-bytes walker emits today.
+pub const DecodeOptions = struct {
+    findings_sink: ?*findings_mod.FindingsSink = null,
+};
+
 /// Public entry. Walks markers, classifies SOF9/SOF10/SOF11, dispatches.
-/// Returns `error.NotImplemented` for variants we don't yet cleanroom
-/// (currently SOF10 + SOF11) so the caller falls back to the wrapper.
+/// Default-options entry — null sink, silent tolerance.
 pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
+    return decodeWithOptions(allocator, data, .{});
+}
+
+/// Same as `decode` but accepts a `DecodeOptions`. Currently the only
+/// honored knob is `findings_sink`: when non-null and the bitstream is
+/// SOF9 sequential, the cleanroom emits a `Finding(.warn,
+/// .extraneous_bytes_before_marker)` for each gap of non-0xFF bytes
+/// the marker walker silently skips — mirroring libjpeg-turbo's
+/// `JWRN_EXTRANEOUS_DATA`.
+pub fn decodeWithOptions(
+    allocator: Allocator,
+    data: []const u8,
+    options: DecodeOptions,
+) Error!types.Image {
     if (data.len < 4) return error.TruncatedStream;
     if (data[0] != 0xFF or data[1] != 0xD8) return error.InvalidMarker;
 
     // Peek SOF: scan markers until we hit a SOFn byte to classify.
+    // (Extraneous-bytes findings emit during the real decode walker
+    // below, not this lightweight peek — the peek calls back into the
+    // full decoder which re-walks from offset 0.)
     var pos: usize = 2;
     while (pos + 1 < data.len) {
         while (pos < data.len and data[pos] != 0xFF) pos += 1;
@@ -47,7 +73,7 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
             continue;
         }
         switch (marker) {
-            0xC9 => return decodeArithBaseline(allocator, data),
+            0xC9 => return decodeArithBaseline(allocator, data, options.findings_sink),
             0xCA => return decodeArithProgressive(allocator, data),
             0xCB => return error.NotImplemented, // SOF11 deferred (no encoder produces it).
             0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7 => return error.NotImplemented,
@@ -221,7 +247,11 @@ fn dumpScanCoefsSof9(
 
 /// SOF9 sequential arithmetic baseline. Marker walk → SOS → MCU loop
 /// (Q-coder entropy decode → dequant → IDCT) → assemble.
-fn decodeArithBaseline(allocator: Allocator, data: []const u8) Error!types.Image {
+fn decodeArithBaseline(
+    allocator: Allocator,
+    data: []const u8,
+    sink: ?*findings_mod.FindingsSink,
+) Error!types.Image {
     var pos: usize = 2;
     var frame: ?baseline.FrameInfo = null;
     var quant_tables: [4]?[64]u16 = .{ null, null, null, null };
@@ -236,7 +266,19 @@ fn decodeArithBaseline(allocator: Allocator, data: []const u8) Error!types.Image
     // SOS order). Stored on the FrameInfo for the entropy loop to read.
 
     while (pos + 1 < data.len) {
+        const skip_start = pos;
         while (pos < data.len and data[pos] != 0xFF) pos += 1;
+        if (pos > skip_start) {
+            if (sink) |s| {
+                var buf: [96]u8 = undefined;
+                const next_marker: u8 = if (pos + 1 < data.len) data[pos + 1] else 0;
+                const detail = std.fmt.bufPrint(&buf,
+                    "Corrupt JPEG data: {d} extraneous bytes before marker 0x{x:0>2}",
+                    .{ pos - skip_start, next_marker }) catch buf[0..0];
+                s.emit(.warn, .extraneous_bytes_before_marker,
+                    @intCast(skip_start), detail) catch return error.OutOfMemory;
+            }
+        }
         if (pos + 1 >= data.len) return error.TruncatedStream;
         while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
         if (pos + 1 >= data.len) return error.TruncatedStream;

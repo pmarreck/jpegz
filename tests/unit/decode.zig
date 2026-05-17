@@ -1299,3 +1299,38 @@ test "cleanroom progressive emits no findings for clean fixture" {
 
     try std.testing.expectEqual(@as(usize, 0), sink.items().len);
 }
+
+test "cleanroom arith SOF9 emits Finding(.warn, .extraneous_bytes_before_marker)" {
+    const allocator = std.testing.allocator;
+
+    // Inject 4 garbage bytes between SOI and the next marker. SOF9
+    // walker scans forward past them; decode succeeds; sink receives
+    // a warn for the skip.
+    var corrupted = try allocator.alloc(u8, fixture_arith_baseline_8x8_gray.len + 4);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0..2], fixture_arith_baseline_8x8_gray[0..2]);
+    corrupted[2] = 0xAA;
+    corrupted[3] = 0xAA;
+    corrupted[4] = 0xAA;
+    corrupted[5] = 0xAA;
+    @memcpy(corrupted[6..], fixture_arith_baseline_8x8_gray[2..]);
+
+    var sink = jpegz.internal.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.arithDecodeWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 8), image.width);
+
+    var found = false;
+    var offset_seen: ?u64 = null;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .extraneous_bytes_before_marker) {
+            found = true;
+            offset_seen = f.offset;
+        }
+    }
+    try std.testing.expect(found);
+    try std.testing.expectEqual(@as(?u64, 2), offset_seen);
+}

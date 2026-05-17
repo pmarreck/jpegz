@@ -536,6 +536,19 @@ pub const internal = struct {
     pub fn arithDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/arith_decode.zig").decode(allocator, data);
     }
+    /// SOF9 arithmetic cleanroom decode that emits findings into the
+    /// supplied sink. The Q-coder explicitly supplies zero bits past
+    /// markers (T.81 §F.1.4), so the only emit site today is
+    /// `extraneous_bytes_before_marker` in the SOF9 walker. SOF10/SOF11
+    /// have no findings to surface in v1.
+    pub fn arithDecodeWithFindings(
+        allocator: Allocator,
+        data: []const u8,
+        sink: *FindingsSink,
+    ) DecodeError!Image {
+        const arith = @import("decode/arith_decode.zig");
+        return arith.decodeWithOptions(allocator, data, .{ .findings_sink = sink });
+    }
 };
 
 // ─────────────────────────────────────────────────────────────────────

@@ -70,6 +70,14 @@ const ScanInfo = struct {
 };
 
 /// Decode a lossless JPEG (T.81 SOF3). Returns `error.NotImplemented`
+///
+/// FindingsSink note: lossless predictive coding has NO silent
+/// tolerance sites — the marker walker hard-fails on non-0xFF
+/// (no extraneous-bytes tolerance), and a missing sample would
+/// cascade through the predictor chain making `insufficient_data`
+/// recovery meaningless. No `decodeWithOptions` / sink threading
+/// is provided for this reason. If you're auditing for option-4
+/// parity: this file is intentionally empty of warn sites.
 /// for features not in the audited scope (non-1×1 sampling factors,
 /// point transform Al > 0) so the dispatcher in `src/jpegz.zig` falls
 /// back to the wrapper. Precision 2..16, 1- and 3-component, DRI > 0,
