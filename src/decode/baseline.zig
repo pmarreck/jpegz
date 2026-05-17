@@ -978,38 +978,6 @@ fn transformBlockRow(
     }
 }
 
-/// Per-row worker: convert one row of YCbCr canvas planes into the
-/// interleaved RGB output buffer. libjpeg-turbo's fixed-point math
-/// (jdcolor.c, 16-bit SCALEBITS, FIX(x) = round(x * 2^16)):
-///   Cred=91881, Cgreen_cb=-22554, Cgreen_cr=-46802, Cblue=116130,
-///   ONE_HALF=32768. Output is bit-identical to libjpeg's
-///   ycc_rgb_convert for the same input. Each row writes a disjoint
-///   `width*3`-byte stripe of `pixels`, safe for concurrent rows.
-fn ycbcrRowToRgb(
-    plane_y: []const u8,
-    plane_cb: []const u8,
-    plane_cr: []const u8,
-    canvas_w: u32,
-    width: u32,
-    pixels: []u8,
-    y: u32,
-) void {
-    var x: u32 = 0;
-    while (x < width) : (x += 1) {
-        const off_in: usize = @as(usize, y) * @as(usize, canvas_w) + @as(usize, x);
-        const Y: i32 = @intCast(plane_y[off_in]);
-        const Cb: i32 = @as(i32, plane_cb[off_in]) - 128;
-        const Cr: i32 = @as(i32, plane_cr[off_in]) - 128;
-        const r: i32 = Y + ((Cr * 91881 + 32768) >> 16);
-        const g: i32 = Y + ((Cb * -22554 + Cr * -46802 + 32768) >> 16);
-        const b: i32 = Y + ((Cb * 116130 + 32768) >> 16);
-        const out_off: usize = (@as(usize, y) * @as(usize, width) + @as(usize, x)) * 3;
-        pixels[out_off + 0] = clampSampleI32(r);
-        pixels[out_off + 1] = clampSampleI32(g);
-        pixels[out_off + 2] = clampSampleI32(b);
-    }
-}
-
 /// Phase 1: decode a single 8×8 block from the entropy stream into the
 /// natural-order coefficient buffer at `out`. Performs Huffman decode
 /// (DC + 63 AC), dequantization in zig-zag space, and un-zig-zag into
@@ -1128,148 +1096,6 @@ inline fn sampleComponent(
     return plane[cy * plane_w + cx];
 }
 
-/// "Fancy" chroma upsampling matching libjpeg-turbo's default behavior.
-/// Allocates a new full-resolution plane (`out_w` × `out_h`) and fills
-/// it from the subsampled `src` plane (`src_w` × `src_h`) using the
-/// IJG cosited-center filter (T.81 informative; jdsample.c reference).
-/// Supports H2V2 (4:2:0), H2V1 (4:2:2), V2H1 (4:4:0). For other ratios,
-/// falls back to nearest-neighbor.
-///
-/// `active_w` / `active_h` are the chroma's IN-FRAME dimensions —
-/// libjpeg-turbo replicates at the frame boundary, not the MCU-padded
-/// boundary, so for tiny images (e.g. 2×2 with 4:2:0 → 1×1 active
-/// chroma in an 8×8 MCU-padded plane) the H/V/D neighbor samples must
-/// clamp to `active − 1`, not `src − 1`. Otherwise garbage padding
-/// chroma bleeds into visible pixels.
-///
-/// H2V2 weights (per output 2×2 from chroma center C, with H/V/D the
-/// horizontal/vertical/diagonal neighbors): (9·C + 3·H + 3·V + D + 8) / 16.
-/// Edges replicate the boundary chroma sample.
-fn fancyUpsample(
-    allocator: Allocator,
-    src: []const u8,
-    src_w: u32,
-    src_h: u32,
-    out_w: u32,
-    out_h: u32,
-    active_w: u32,
-    active_h: u32,
-    h_ratio: u32,
-    v_ratio: u32,
-) Error![]u8 {
-    const dst = try allocator.alloc(u8, @as(usize, out_w) * @as(usize, out_h));
-    errdefer allocator.free(dst);
-
-    // For boundary clamping, use the active (in-frame) chroma extent
-    // rather than the MCU-padded plane size — see fn doc.
-    const cw: u32 = @max(active_w, 1);
-    const ch: u32 = @max(active_h, 1);
-    // libjpeg-turbo `h2v2_fancy_upsample` uses asymmetric rounding
-    // +8 (left output) / +7 (right output) so the 2×2 outputs round in
-    // opposite directions, cancelling the bias across the pair. Same
-    // convention as `color.fancyUpsample12`.
-    if (h_ratio == 2 and v_ratio == 2) {
-        var cy: u32 = 0;
-        while (cy < ch) : (cy += 1) {
-            const cy_up: u32 = if (cy == 0) 0 else cy - 1;
-            const cy_dn: u32 = if (cy + 1 < ch) cy + 1 else cy;
-            var cx: u32 = 0;
-            while (cx < cw) : (cx += 1) {
-                const cx_lf: u32 = if (cx == 0) 0 else cx - 1;
-                const cx_rt: u32 = if (cx + 1 < cw) cx + 1 else cx;
-                const c: i32 = src[cy * src_w + cx];
-                const c_l: i32 = src[cy * src_w + cx_lf];
-                const c_r: i32 = src[cy * src_w + cx_rt];
-                const c_u: i32 = src[cy_up * src_w + cx];
-                const c_ul: i32 = src[cy_up * src_w + cx_lf];
-                const c_ur: i32 = src[cy_up * src_w + cx_rt];
-                const c_d: i32 = src[cy_dn * src_w + cx];
-                const c_dl: i32 = src[cy_dn * src_w + cx_lf];
-                const c_dr: i32 = src[cy_dn * src_w + cx_rt];
-                const tl: i32 = (9 * c + 3 * c_l + 3 * c_u + c_ul + 8) >> 4;
-                const tr: i32 = (9 * c + 3 * c_r + 3 * c_u + c_ur + 7) >> 4;
-                const bl: i32 = (9 * c + 3 * c_l + 3 * c_d + c_dl + 8) >> 4;
-                const br: i32 = (9 * c + 3 * c_r + 3 * c_d + c_dr + 7) >> 4;
-                const ox: u32 = cx * 2;
-                const oy: u32 = cy * 2;
-                if (oy < out_h and ox < out_w) dst[oy * out_w + ox] = clampSampleI32(tl);
-                if (oy < out_h and ox + 1 < out_w) dst[oy * out_w + ox + 1] = clampSampleI32(tr);
-                if (oy + 1 < out_h and ox < out_w) dst[(oy + 1) * out_w + ox] = clampSampleI32(bl);
-                if (oy + 1 < out_h and ox + 1 < out_w) dst[(oy + 1) * out_w + ox + 1] = clampSampleI32(br);
-            }
-        }
-        return dst;
-    }
-    // libjpeg `h2v1_fancy_upsample`: leftmost output column = chroma sample
-    // itself; general case uses bias +1 (left) / +2 (right); rightmost = chroma.
-    if (h_ratio == 2 and v_ratio == 1) {
-        var cy: u32 = 0;
-        while (cy < ch and cy < out_h) : (cy += 1) {
-            var cx: u32 = 0;
-            while (cx < cw) : (cx += 1) {
-                const c: i32 = src[cy * src_w + cx];
-                const ox: u32 = cx * 2;
-                if (cx == 0) {
-                    const c_r: i32 = if (cx + 1 < cw) @as(i32, src[cy * src_w + cx + 1]) else c;
-                    const rt: i32 = (3 * c + c_r + 2) >> 2;
-                    if (ox < out_w) dst[cy * out_w + ox] = clampSampleI32(c);
-                    if (ox + 1 < out_w) dst[cy * out_w + ox + 1] = clampSampleI32(rt);
-                } else if (cx == cw - 1) {
-                    const c_l: i32 = src[cy * src_w + cx - 1];
-                    const lf: i32 = (3 * c + c_l + 1) >> 2;
-                    if (ox < out_w) dst[cy * out_w + ox] = clampSampleI32(lf);
-                    if (ox + 1 < out_w) dst[cy * out_w + ox + 1] = clampSampleI32(c);
-                } else {
-                    const c_l: i32 = src[cy * src_w + cx - 1];
-                    const c_r: i32 = src[cy * src_w + cx + 1];
-                    const lf: i32 = (3 * c + c_l + 1) >> 2;
-                    const rt: i32 = (3 * c + c_r + 2) >> 2;
-                    if (ox < out_w) dst[cy * out_w + ox] = clampSampleI32(lf);
-                    if (ox + 1 < out_w) dst[cy * out_w + ox + 1] = clampSampleI32(rt);
-                }
-            }
-        }
-        return dst;
-    }
-    // libjpeg `h1v2_fancy_upsample`: bias=1 top, bias=2 bottom.
-    if (h_ratio == 1 and v_ratio == 2) {
-        var cy: u32 = 0;
-        while (cy < ch) : (cy += 1) {
-            const cy_up: u32 = if (cy == 0) 0 else cy - 1;
-            const cy_dn: u32 = if (cy + 1 < ch) cy + 1 else cy;
-            var cx: u32 = 0;
-            while (cx < cw and cx < out_w) : (cx += 1) {
-                const c: i32 = src[cy * src_w + cx];
-                const c_u: i32 = src[cy_up * src_w + cx];
-                const c_d: i32 = src[cy_dn * src_w + cx];
-                const up: i32 = (3 * c + c_u + 1) >> 2;
-                const dn: i32 = (3 * c + c_d + 2) >> 2;
-                const oy: u32 = cy * 2;
-                if (oy < out_h) dst[oy * out_w + cx] = clampSampleI32(up);
-                if (oy + 1 < out_h) dst[(oy + 1) * out_w + cx] = clampSampleI32(dn);
-            }
-        }
-        return dst;
-    }
-    // Fallback: nearest-neighbor for unusual ratios.
-    var y: u32 = 0;
-    while (y < out_h) : (y += 1) {
-        const sy: u32 = @min((y * src_h) / out_h, src_h - 1);
-        var x: u32 = 0;
-        while (x < out_w) : (x += 1) {
-            const sx: u32 = @min((x * src_w) / out_w, src_w - 1);
-            dst[y * out_w + x] = src[sy * src_w + sx];
-        }
-    }
-    return dst;
-}
-
-inline fn clampSampleI32(v: i32) u8 {
-    if (v < 0) return 0;
-    if (v > 255) return 255;
-    return @intCast(v);
-}
-
 /// After all blocks are decoded into per-component planes, convert
 /// to interleaved output (grayscale or RGB) at canvas resolution.
 /// Subsampled chroma is upsampled nearest-neighbor (good enough for
@@ -1334,7 +1160,7 @@ pub fn assembleOutput(
                 // (width here is the FRAME width, not MCU-padded plane width).
                 const active_w: u32 = (width * @as(u32, comp.h_factor) + max_h - 1) / max_h;
                 const active_h: u32 = (height * @as(u32, comp.v_factor) + max_v - 1) / max_v;
-                canvas_planes[ci_idx] = try fancyUpsample(
+                canvas_planes[ci_idx] = try color.fancyUpsample(
                     allocator,
                     planes[ci_idx],
                     plane_w[ci_idx],
@@ -1358,7 +1184,7 @@ pub fn assembleOutput(
             var wg: thread_pool.WaitGroup = .{};
             var y: u32 = 0;
             while (y < height) : (y += 1) {
-                p.spawnWg(&wg, ycbcrRowToRgb, .{
+                p.spawnWg(&wg, color.ycbcrRowToRgb, .{
                     canvas_planes[0],
                     canvas_planes[1],
                     canvas_planes[2],
@@ -1372,7 +1198,7 @@ pub fn assembleOutput(
         } else {
             var y: u32 = 0;
             while (y < height) : (y += 1) {
-                ycbcrRowToRgb(canvas_planes[0], canvas_planes[1], canvas_planes[2], canvas_w, width, pixels, y);
+                color.ycbcrRowToRgb(canvas_planes[0], canvas_planes[1], canvas_planes[2], canvas_w, width, pixels, y);
             }
         }
     }
@@ -1392,9 +1218,3 @@ pub fn assembleOutput(
     };
 }
 
-fn clampU8(v: f32) u8 {
-    const r = @round(v);
-    if (r < 0) return 0;
-    if (r > 255) return 255;
-    return @intFromFloat(r);
-}
