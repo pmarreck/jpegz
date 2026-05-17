@@ -303,8 +303,29 @@ machinery where possible).
       factors and point transform Al > 0 — no fixtures in tree, no
       real-world demand. _(2026-05-16 EST)_
 - [ ] **M2.4 — 12-bit precision.** Rare but spec-mandatory.
-- [ ] **M2.5 — Arithmetic coding (T.81 §F).** Q-coder + conditioning.
-      Last among T.81 codecs.
+- [~] **M2.5 — Arithmetic coding (T.81 §F).** Q-coder + conditioning
+      shipped 2026-05-13 (SOF9 sequential) and 2026-05-15 (SOF10
+      progressive). Both wired into dispatch and pass existing
+      ≤2 LSB tolerance tests.
+
+      **2026-05-16 audit sweep (cleanroom arith vs libjpeg-turbo
+      wrapper, 10 fixtures):**
+        - SOF9 gray: byte-perfect (max_delta = 0).
+        - SOF9 RGB 4:4:4: byte-perfect.
+        - SOF9 RGB 4:2:0 / 4:2:2 / 4:4:0: max_delta = 2 on 6-12% of pixels.
+        - SOF10 gray: byte-perfect.
+        - SOF10 RGB 4:4:4: byte-perfect.
+        - SOF10 RGB 4:2:0 / 4:2:2 / 4:4:0: max_delta = 2 on 6-12% of pixels.
+
+      The byte-perfect cases (gray + 4:4:4) are locked in by a new
+      regression test. The ≤2 LSB residual on subsampled-RGB arith is
+      stable, sub-perceptual, and isolated to the arithmetic decode —
+      Huffman 8-bit subsampled and 12-bit Huffman 16×16 subsampled
+      are both byte-perfect, so the chroma upsample + YCbCr→RGB
+      pipeline isn't the source. Root cause is in the arithmetic
+      coefficient producer for subsampled-RGB; under-investigated.
+      Open as a back-of-cabinet polish item; not blocking M2.5
+      completion. _(2026-05-16 EST)_
 - [~] **M2.6 — JPEG-LS (T.87).** LOCO-I predictor + Golomb-Rice cleanroom
       shipped 2026-05-16: marker walker (SOI/SOF55/LSE/SOS/EOI), bit-stuffed
       reader (T.87 §A.1.3), context quantization + sign canonicalization

@@ -508,6 +508,29 @@ test "decode 8x8 progressive grayscale (currently wrapper; cleanroom WIP)" {
 // closely enough to wire into dispatch.
 // ─────────────────────────────────────────────────────────────────────
 
+test "arithmetic cleanroom is byte-perfect on gray + 4:4:4 RGB (SOF9 + SOF10)" {
+    // 2026-05-16 sweep: cleanroom arithmetic matches libjpeg-turbo
+    // byte-for-byte on every grayscale arithmetic fixture and every
+    // 4:4:4 RGB arithmetic fixture across both SOF9 (sequential) and
+    // SOF10 (progressive). Subsampled-RGB cases (4:2:0/4:2:2/4:4:0)
+    // show a stable ≤2 LSB residual on ~6-12% of pixels and are
+    // covered by their own tolerance test below.
+    const allocator = std.testing.allocator;
+    const cases = [_][]const u8{
+        fixture_arith_baseline_8x8_gray,
+        fixture_arith_baseline_16x16_rgb_444,
+        fixture_arith_progressive_8x8_gray,
+        fixture_arith_progressive_16x16_rgb_444,
+    };
+    for (cases) |data| {
+        var clean = try jpegz.internal.arithDecode(allocator, data);
+        defer clean.deinit(allocator);
+        var wrap = try jpegz.internal.wrapperDecode(allocator, data);
+        defer wrap.deinit(allocator);
+        try std.testing.expectEqualSlices(u8, wrap.pixels, clean.pixels);
+    }
+}
+
 test "DCT cleanroom is byte-perfect vs libjpeg-turbo wrapper (8-bit + 12-bit, baseline + progressive)" {
     // 2026-05-16: after fixing PASS1_BITS to 1 at P=12 (matching
     // libjpeg-turbo's jidctint.c #if BITS_IN_JSAMPLE == 8 / #else
