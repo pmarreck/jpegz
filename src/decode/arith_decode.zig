@@ -65,6 +65,160 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
     return error.TruncatedStream;
 }
 
+/// Diagnostic-only: same shape as `decodeArithBaseline`'s Phase 1 but
+/// stops after entropy decode + un-zig-zag (NO dequant, NO IDCT). Output
+/// matches libjpeg-turbo's `jpeg_read_coefficients` byte-for-byte when
+/// the cleanroom arithmetic decoder is correct. Used by the M2.5 audit
+/// to localize coefficient-level divergence on subsampled-RGB fixtures.
+pub const CoefDump = struct {
+    num_components: u8,
+    blocks_w: [4]u32 = .{ 0, 0, 0, 0 },
+    blocks_h: [4]u32 = .{ 0, 0, 0, 0 },
+    coefs: [4][]i16 = .{ &.{}, &.{}, &.{}, &.{} },
+
+    pub fn deinit(self: *CoefDump, allocator: Allocator) void {
+        for (&self.coefs) |*slot| {
+            if (slot.len > 0) allocator.free(slot.*);
+        }
+        self.* = undefined;
+    }
+};
+
+pub fn dumpCoefsSof9(allocator: Allocator, data: []const u8) Error!CoefDump {
+    if (data.len < 4) return error.TruncatedStream;
+    if (data[0] != 0xFF or data[1] != 0xD8) return error.InvalidMarker;
+
+    var pos: usize = 2;
+    var frame: ?baseline.FrameInfo = null;
+    var quant_tables: [4]?[64]u16 = .{ null, null, null, null };
+    var restart_interval: u32 = 0;
+    var dac_dc_L: [4]u8 = .{ 0, 0, 0, 0 };
+    var dac_dc_U: [4]u8 = .{ 1, 1, 1, 1 };
+    var dac_ac_K: [4]u8 = .{ 5, 5, 5, 5 };
+
+    while (pos + 1 < data.len) {
+        while (pos < data.len and data[pos] != 0xFF) pos += 1;
+        if (pos + 1 >= data.len) return error.TruncatedStream;
+        while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
+        if (pos + 1 >= data.len) return error.TruncatedStream;
+        const marker = data[pos + 1];
+        if (marker == 0x00) { pos += 1; continue; }
+        pos += 2;
+        switch (marker) {
+            0xD9 => return error.TruncatedStream,
+            0xC9 => {
+                frame = try baseline.parseSof(data, pos);
+                if (frame.?.precision != 8) return error.NotImplemented;
+                pos += baseline.parseSegmentLength(data, pos);
+            },
+            0xDB => { try baseline.parseDqt(data, pos, &quant_tables); pos += baseline.parseSegmentLength(data, pos); },
+            0xCC => { try parseDac(data, pos, &dac_dc_L, &dac_dc_U, &dac_ac_K); pos += baseline.parseSegmentLength(data, pos); },
+            0xDD => {
+                const seg_len = baseline.parseSegmentLength(data, pos);
+                if (seg_len < 4 or pos + seg_len > data.len) return error.TruncatedStream;
+                restart_interval = (@as(u32, data[pos + 2]) << 8) | data[pos + 3];
+                pos += seg_len;
+            },
+            0xDA => {
+                if (frame == null) return error.InvalidMarker;
+                try baseline.parseSos(data, pos, &frame.?);
+                pos += baseline.parseSegmentLength(data, pos);
+                return try dumpScanCoefsSof9(allocator, data[pos..], &frame.?, &dac_dc_L, &dac_dc_U, &dac_ac_K, restart_interval);
+            },
+            0x01, 0xD0...0xD7 => continue,
+            else => pos += baseline.parseSegmentLength(data, pos),
+        }
+    }
+    return error.TruncatedStream;
+}
+
+fn dumpScanCoefsSof9(
+    allocator: Allocator,
+    data: []const u8,
+    frame: *const baseline.FrameInfo,
+    dac_dc_L: *const [4]u8,
+    dac_dc_U: *const [4]u8,
+    dac_ac_K: *const [4]u8,
+    restart_interval: u32,
+) Error!CoefDump {
+    const channels: u8 = frame.num_components;
+    var max_h: u32 = 1;
+    var max_v: u32 = 1;
+    var i: usize = 0;
+    while (i < channels) : (i += 1) {
+        const c = &frame.components[i];
+        if (@as(u32, c.h_factor) > max_h) max_h = @intCast(c.h_factor);
+        if (@as(u32, c.v_factor) > max_v) max_v = @intCast(c.v_factor);
+    }
+    const mcu_pixel_w: u32 = max_h * 8;
+    const mcu_pixel_h: u32 = max_v * 8;
+    const mcu_cols: u32 = (frame.width + mcu_pixel_w - 1) / mcu_pixel_w;
+    const mcu_rows: u32 = (frame.height + mcu_pixel_h - 1) / mcu_pixel_h;
+
+    var dump: CoefDump = .{ .num_components = channels };
+    errdefer dump.deinit(allocator);
+    i = 0;
+    while (i < channels) : (i += 1) {
+        const eff_h: u32 = if (channels == 1) 1 else @as(u32, frame.components[i].h_factor);
+        const eff_v: u32 = if (channels == 1) 1 else @as(u32, frame.components[i].v_factor);
+        const bw = mcu_cols * eff_h;
+        const bh = mcu_rows * eff_v;
+        dump.blocks_w[i] = bw;
+        dump.blocks_h[i] = bh;
+        const total: usize = @as(usize, bw) * @as(usize, bh) * 64;
+        dump.coefs[i] = try allocator.alloc(i16, total);
+        @memset(dump.coefs[i], 0);
+    }
+
+    var state = arith_coder.ScanState.init(data);
+    state.arith_dc_L = dac_dc_L.*;
+    state.arith_dc_U = dac_dc_U.*;
+    state.arith_ac_K = dac_ac_K.*;
+
+    var mcus_since_rst: u32 = 0;
+    var expected_rst: u8 = 0xD0;
+    var mcu_y: u32 = 0;
+    while (mcu_y < mcu_rows) : (mcu_y += 1) {
+        var mcu_x: u32 = 0;
+        while (mcu_x < mcu_cols) : (mcu_x += 1) {
+            if (restart_interval > 0 and mcus_since_rst == restart_interval) {
+                if (!state.qcoder.marker_seen) return error.InvalidMarker;
+                if (state.qcoder.marker_byte != expected_rst) return error.InvalidMarker;
+                state.resetForRestart(data[state.qcoder.pos..]);
+                mcus_since_rst = 0;
+                expected_rst = 0xD0 + ((expected_rst - 0xD0 + 1) & 0x07);
+            }
+            var ci: usize = 0;
+            while (ci < channels) : (ci += 1) {
+                const comp = &frame.components[ci];
+                const bvm: u32 = if (channels == 1) 1 else @intCast(comp.v_factor);
+                const bhm: u32 = if (channels == 1) 1 else @intCast(comp.h_factor);
+                var bv: u32 = 0;
+                while (bv < bvm) : (bv += 1) {
+                    var bh: u32 = 0;
+                    while (bh < bhm) : (bh += 1) {
+                        const bx: u32 = mcu_x * bhm + bh;
+                        const by: u32 = mcu_y * bvm + bv;
+                        const off: usize = (@as(usize, by) * @as(usize, dump.blocks_w[ci]) + @as(usize, bx)) * 64;
+                        // Decode block: dc + 63 ac, in zig-zag space; then
+                        // un-zig-zag into natural order (no dequant).
+                        var zz: [64]i32 = .{0} ** 64;
+                        const dc = arith_coder.decodeDcSof9(&state, ci, comp.dc_table) catch return error.BackendError;
+                        zz[0] = dc;
+                        arith_coder.decodeAcSof9(&state, comp.ac_table, &zz) catch return error.BackendError;
+                        var n: usize = 0;
+                        while (n < 64) : (n += 1) {
+                            dump.coefs[ci][off + baseline.ZIGZAG[n]] = @intCast(zz[n]);
+                        }
+                    }
+                }
+            }
+            mcus_since_rst += 1;
+        }
+    }
+    return dump;
+}
+
 /// SOF9 sequential arithmetic baseline. Marker walk → SOS → MCU loop
 /// (Q-coder entropy decode → dequant → IDCT) → assemble.
 fn decodeArithBaseline(allocator: Allocator, data: []const u8) Error!types.Image {

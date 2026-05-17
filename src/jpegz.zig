@@ -488,6 +488,18 @@ pub const internal = struct {
     /// Arithmetic-coded JPEG decode (SOF9 / SOF10). Returns
     /// `error.NotImplemented` until B1 lands; tests calling this
     /// entry point use that as their RED gate.
+    /// Diagnostic: dump per-block coefs from the arith SOF9 cleanroom.
+    /// Output mirrors libjpeg-turbo's `jpeg_read_coefficients`.
+    pub const ArithCoefDump = @import("decode/arith_decode.zig").CoefDump;
+    pub fn arithDumpCoefsSof9(allocator: Allocator, data: []const u8) DecodeError!ArithCoefDump {
+        return @import("decode/arith_decode.zig").dumpCoefsSof9(allocator, data);
+    }
+    /// Diagnostic: dump per-block coefs from libjpeg-turbo via
+    /// `jpeg_read_coefficients` — RAW, natural order, pre-dequant.
+    pub const WrapperCoefDump = @import("ffi/libjpeg_wrapper.zig").CoefDump;
+    pub fn wrapperDumpCoefs(allocator: Allocator, data: []const u8) DecodeError!WrapperCoefDump {
+        return @import("ffi/libjpeg_wrapper.zig").dumpCoefs(allocator, data);
+    }
     pub fn arithDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/arith_decode.zig").decode(allocator, data);
     }

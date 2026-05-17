@@ -440,6 +440,85 @@ pub fn libjpegWarnToFindingCode(code: c_int) errors.FindingCode {
 
 /// Map a libjpeg error code into our DecodeError set. libjpeg's
 /// jpeg_error_mgr.msg_code is the canonical classification; the message
+/// Per-component coefficient buffer matching libjpeg-turbo's output
+/// from `jpeg_read_coefficients` — RAW (post-entropy, PRE-dequant)
+/// signed coefficients in NATURAL order. Diagnostic-only — used by
+/// the M2.5 audit to diff against cleanroom arith / progressive
+/// decoder output.
+pub const CoefDump = struct {
+    num_components: u8,
+    blocks_w: [4]u32 = .{ 0, 0, 0, 0 },
+    blocks_h: [4]u32 = .{ 0, 0, 0, 0 },
+    coefs: [4][]i16 = .{ &.{}, &.{}, &.{}, &.{} },
+
+    pub fn deinit(self: *CoefDump, allocator: Allocator) void {
+        for (&self.coefs) |*slot| {
+            if (slot.len > 0) allocator.free(slot.*);
+        }
+        self.* = undefined;
+    }
+};
+
+/// Dump per-block coefficients via `jpeg_read_coefficients` — works
+/// for SOF0/1/2/9/10 (any entropy-coded JPEG libjpeg-turbo handles).
+/// Output: i16 natural-order coefficients per block, pre-dequant.
+pub fn dumpCoefs(allocator: Allocator, data: []const u8) errors.DecodeError!CoefDump {
+    if (data.len < 4) return error.TruncatedStream;
+    if (!looksLikeJpeg(data)) return error.InvalidMarker;
+
+    var bridge: ErrorBridge = undefined;
+    var cinfo: c.struct_jpeg_decompress_struct = undefined;
+    cinfo.err = c.jpeg_std_error(&bridge.pub_mgr);
+    initBridgeHandlers(&bridge);
+
+    if (c.setjmp(&bridge.setjmp_buffer) != 0) {
+        c.jpeg_destroy_decompress(&cinfo);
+        return classifyLibjpegError(&bridge);
+    }
+
+    c.jpeg_CreateDecompress(&cinfo, c.JPEG_LIB_VERSION, @sizeOf(c.struct_jpeg_decompress_struct));
+    defer c.jpeg_destroy_decompress(&cinfo);
+    c.jpeg_mem_src(&cinfo, @constCast(data.ptr), @intCast(data.len));
+    if (c.jpeg_read_header(&cinfo, c.TRUE) != c.JPEG_HEADER_OK) return error.InvalidMarker;
+
+    const coef_arrays = c.jpeg_read_coefficients(&cinfo);
+    if (coef_arrays == null) return error.BackendError;
+
+    var dump: CoefDump = .{ .num_components = @intCast(cinfo.num_components) };
+    errdefer dump.deinit(allocator);
+
+    var ci: usize = 0;
+    while (ci < @as(usize, @intCast(cinfo.num_components))) : (ci += 1) {
+        const comp = &cinfo.comp_info[ci];
+        const bw: u32 = @intCast(comp.width_in_blocks);
+        const bh: u32 = @intCast(comp.height_in_blocks);
+        dump.blocks_w[ci] = bw;
+        dump.blocks_h[ci] = bh;
+        const total: usize = @as(usize, bw) * @as(usize, bh) * 64;
+        dump.coefs[ci] = try allocator.alloc(i16, total);
+
+        var by: u32 = 0;
+        while (by < bh) : (by += 1) {
+            const blocks = cinfo.mem.*.access_virt_barray.?(
+                @ptrCast(&cinfo),
+                coef_arrays[ci],
+                by,
+                1,
+                c.FALSE,
+            );
+            var bx: u32 = 0;
+            while (bx < bw) : (bx += 1) {
+                const block_off: usize = (@as(usize, by) * @as(usize, bw) + @as(usize, bx)) * 64;
+                var k: usize = 0;
+                while (k < 64) : (k += 1) {
+                    dump.coefs[ci][block_off + k] = @intCast(blocks[0][bx][k]);
+                }
+            }
+        }
+    }
+    return dump;
+}
+
 /// string in `bridge.last_message` is the human-readable detail.
 fn classifyLibjpegError(bridge: *ErrorBridge) errors.DecodeError {
     // jpeg_error_mgr stores the error code in msg_code (a J_MESSAGE_CODE).

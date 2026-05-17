@@ -366,13 +366,12 @@ test "decode 8x8 baseline JPEG with 4:2:2 chroma subsampling" {
     }
 }
 
-test "islow IDCT + fixed-point YCbCr matches libjpeg-turbo on 4:2:0 (max delta ≤ 2)" {
-    // After replacing the float DCT-direct IDCT with libjpeg-turbo's
-    // islow algorithm and the f32 YCbCr→RGB conversion with the fixed-point
-    // version (jdcolor.c), max divergence vs. the wrapper drops to 2 LSB
-    // sub-pixel rounding noise across the entire corpus. Asserting strict
-    // byte-equality is too tight (1 LSB ties differ by integer-vs-float
-    // rounding edge cases) — assert max-delta ≤ 2 instead.
+test "islow IDCT + fixed-point YCbCr + fancy upsample is byte-perfect on 4:2:0" {
+    // 2026-05-16: after applying libjpeg-turbo's asymmetric +8/+7 bias
+    // to color.fancyUpsample / baseline.fancyUpsample (H2V2, H2V1,
+    // H1V2 — see fancyUpsample12 for the same pattern at P=12), the
+    // 8-bit subsampled pipeline matches libjpeg byte-for-byte.
+    // Tightened from ≤2 LSB to == 0.
     const allocator = std.testing.allocator;
     var cleanroom = try jpegz.internal.cleanroomDecode(allocator, fixture_baseline_8x8_yuv420);
     defer cleanroom.deinit(allocator);
@@ -380,12 +379,7 @@ test "islow IDCT + fixed-point YCbCr matches libjpeg-turbo on 4:2:0 (max delta �
     defer wrapper.deinit(allocator);
     try std.testing.expectEqual(wrapper.width, cleanroom.width);
     try std.testing.expectEqual(wrapper.height, cleanroom.height);
-    var max_delta: u8 = 0;
-    for (cleanroom.pixels, wrapper.pixels) |a, b| {
-        const d: u8 = @intCast(@abs(@as(i32, a) - @as(i32, b)));
-        if (d > max_delta) max_delta = d;
-    }
-    try std.testing.expect(max_delta <= 2);
+    try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
 }
 
 test "decodeWithOptions threading API: default options match decode()" {
@@ -419,6 +413,21 @@ test "decodeWithOptions threading API: threads > 1 currently no-op (parallelism 
     defer auto.deinit(allocator);
     try std.testing.expectEqualSlices(u8, t1.pixels, t4.pixels);
     try std.testing.expectEqualSlices(u8, t1.pixels, auto.pixels);
+}
+
+test "fancy upsampling: 16x16 RGB 4:2:0 Huffman is byte-perfect vs libjpeg-turbo" {
+    // 2026-05-16: catches the asymmetric-bias rounding regression. The
+    // 8x8 fixtures happened to be byte-perfect by content coincidence
+    // even when the bias was wrong; 16x16 surfaces the issue (max_delta
+    // = 2 before the fix). Generated via:
+    //   cjpeg -sample 2x2,1x1,1x1 <gradient_16x16.ppm>
+    const data = @embedFile("fixtures/baseline_16x16_rgb_420.jpg");
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.cleanroomDecode(allocator, data);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, data);
+    defer wrapper.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
 }
 
 test "fancy upsampling matches libjpeg-turbo on 4:2:0 (cleanroom == wrapper)" {
@@ -854,14 +863,11 @@ test "B1 SOF10: arithmetic progressive cleanroom (gray + RGB at all sampling fac
         try std.testing.expectEqual(@as(u32, 16), cleanroom.height);
         try std.testing.expectEqual(jpegz.PixelLayout.rgb, cleanroom.layout);
         try std.testing.expectEqual(wrapper.pixels.len, cleanroom.pixels.len);
-        var max_delta: u8 = 0;
-        for (cleanroom.pixels, wrapper.pixels) |a, b| {
-            const d: u8 = @intCast(@abs(@as(i32, a) - @as(i32, b)));
-            if (d > max_delta) max_delta = d;
-        }
-        try std.testing.expect(max_delta <= 4);
+        // 2026-05-16: libjpeg-turbo asymmetric-bias fancy upsample fix in
+        // color.fancyUpsample / baseline.fancyUpsample brought subsampled-
+        // RGB arith from ≤2 LSB to byte-exact. Tightened from ≤4 to ==0.
+        try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
     }
-    // Grayscale: tighter ≤2 LSB tolerance (no chroma upsample / colorconv).
     {
         var cleanroom = try jpegz.internal.arithDecode(allocator, fixture_arith_progressive_8x8_gray);
         defer cleanroom.deinit(allocator);
@@ -901,14 +907,9 @@ test "B1: SOF9 arithmetic baseline cleanroom (gray + RGB at all sampling factors
         try std.testing.expectEqual(@as(u32, 16), cleanroom.height);
         try std.testing.expectEqual(jpegz.PixelLayout.rgb, cleanroom.layout);
         try std.testing.expectEqual(wrapper.pixels.len, cleanroom.pixels.len);
-        var max_delta: u8 = 0;
-        for (cleanroom.pixels, wrapper.pixels) |a, b| {
-            const d: u8 = @intCast(@abs(@as(i32, a) - @as(i32, b)));
-            if (d > max_delta) max_delta = d;
-        }
-        try std.testing.expect(max_delta <= 4);
+        // 2026-05-16: asymmetric-bias fancy upsample fix — byte-perfect.
+        try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
     }
-    // Grayscale: no chroma upsample, no color conversion → tighter ≤2.
     {
         var cleanroom = try jpegz.internal.arithDecode(allocator, fixture_arith_baseline_8x8_gray);
         defer cleanroom.deinit(allocator);

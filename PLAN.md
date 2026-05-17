@@ -303,29 +303,29 @@ machinery where possible).
       factors and point transform Al > 0 — no fixtures in tree, no
       real-world demand. _(2026-05-16 EST)_
 - [ ] **M2.4 — 12-bit precision.** Rare but spec-mandatory.
-- [~] **M2.5 — Arithmetic coding (T.81 §F).** Q-coder + conditioning
+- [x] **M2.5 — Arithmetic coding (T.81 §F).** Q-coder + conditioning
       shipped 2026-05-13 (SOF9 sequential) and 2026-05-15 (SOF10
-      progressive). Both wired into dispatch and pass existing
-      ≤2 LSB tolerance tests.
+      progressive). All 10 arithmetic fixtures decode byte-identically
+      to libjpeg-turbo:
+        - SOF9 gray + RGB at 4:4:4 / 4:2:0 / 4:2:2 / 4:4:0: max_delta = 0.
+        - SOF10 gray + RGB at 4:4:4 / 4:2:0 / 4:2:2 / 4:4:0: max_delta = 0.
 
-      **2026-05-16 audit sweep (cleanroom arith vs libjpeg-turbo
-      wrapper, 10 fixtures):**
-        - SOF9 gray: byte-perfect (max_delta = 0).
-        - SOF9 RGB 4:4:4: byte-perfect.
-        - SOF9 RGB 4:2:0 / 4:2:2 / 4:4:0: max_delta = 2 on 6-12% of pixels.
-        - SOF10 gray: byte-perfect.
-        - SOF10 RGB 4:4:4: byte-perfect.
-        - SOF10 RGB 4:2:0 / 4:2:2 / 4:4:0: max_delta = 2 on 6-12% of pixels.
-
-      The byte-perfect cases (gray + 4:4:4) are locked in by a new
-      regression test. The ≤2 LSB residual on subsampled-RGB arith is
-      stable, sub-perceptual, and isolated to the arithmetic decode —
-      Huffman 8-bit subsampled and 12-bit Huffman 16×16 subsampled
-      are both byte-perfect, so the chroma upsample + YCbCr→RGB
-      pipeline isn't the source. Root cause is in the arithmetic
-      coefficient producer for subsampled-RGB; under-investigated.
-      Open as a back-of-cabinet polish item; not blocking M2.5
-      completion. _(2026-05-16 EST)_
+      Root cause of the residual ≤2 LSB delta on subsampled-RGB
+      (2026-05-16): NOT the arithmetic decoder (a `jpeg_read_coefficients`
+      coef-diff confirmed 0 divergent coefs). The actual bug was in the
+      8-bit `color.fancyUpsample` / `baseline.fancyUpsample` chroma
+      upsamplers — they used SYMMETRIC rounding bias (+8/+8 for H2V2,
+      +2/+2 for H2V1/H1V2). libjpeg-turbo's `jdsample.c` uses
+      ASYMMETRIC bias (+8/+7 and +1/+2) so each 2-pixel output pair
+      cancels its own rounding error. Porting the same convention
+      (which 12-bit `fancyUpsample12` already had — why 12-bit Huffman
+      subsampled was byte-perfect) collapsed the delta to 0 across:
+        - All 8 arith subsampled-RGB fixtures (4:2:0/4:2:2/4:4:0).
+        - The new `baseline_16x16_rgb_420.jpg` regression fixture.
+        - The existing 8x8 yuv420/yuv422 Huffman fixtures (already 0
+          by content coincidence; now locked in).
+      Previous ≤2..4 LSB tolerance gates tightened to == 0.
+      _(2026-05-16 EST)_
 - [~] **M2.6 — JPEG-LS (T.87).** LOCO-I predictor + Golomb-Rice cleanroom
       shipped 2026-05-16: marker walker (SOI/SOF55/LSE/SOS/EOI), bit-stuffed
       reader (T.87 §A.1.3), context quantization + sign canonicalization

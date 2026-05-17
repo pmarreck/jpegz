@@ -1164,8 +1164,11 @@ fn fancyUpsample(
     // rather than the MCU-padded plane size — see fn doc.
     const cw: u32 = @max(active_w, 1);
     const ch: u32 = @max(active_h, 1);
+    // libjpeg-turbo `h2v2_fancy_upsample` uses asymmetric rounding
+    // +8 (left output) / +7 (right output) so the 2×2 outputs round in
+    // opposite directions, cancelling the bias across the pair. Same
+    // convention as `color.fancyUpsample12`.
     if (h_ratio == 2 and v_ratio == 2) {
-        // H2V2 fancy — produce 2×2 output per chroma sample.
         var cy: u32 = 0;
         while (cy < ch) : (cy += 1) {
             const cy_up: u32 = if (cy == 0) 0 else cy - 1;
@@ -1183,11 +1186,10 @@ fn fancyUpsample(
                 const c_d: i32 = src[cy_dn * src_w + cx];
                 const c_dl: i32 = src[cy_dn * src_w + cx_lf];
                 const c_dr: i32 = src[cy_dn * src_w + cx_rt];
-                // Top-left output samples C with up/left neighbors.
                 const tl: i32 = (9 * c + 3 * c_l + 3 * c_u + c_ul + 8) >> 4;
-                const tr: i32 = (9 * c + 3 * c_r + 3 * c_u + c_ur + 8) >> 4;
+                const tr: i32 = (9 * c + 3 * c_r + 3 * c_u + c_ur + 7) >> 4;
                 const bl: i32 = (9 * c + 3 * c_l + 3 * c_d + c_dl + 8) >> 4;
-                const br: i32 = (9 * c + 3 * c_r + 3 * c_d + c_dr + 8) >> 4;
+                const br: i32 = (9 * c + 3 * c_r + 3 * c_d + c_dr + 7) >> 4;
                 const ox: u32 = cx * 2;
                 const oy: u32 = cy * 2;
                 if (oy < out_h and ox < out_w) dst[oy * out_w + ox] = clampSampleI32(tl);
@@ -1198,28 +1200,39 @@ fn fancyUpsample(
         }
         return dst;
     }
+    // libjpeg `h2v1_fancy_upsample`: leftmost output column = chroma sample
+    // itself; general case uses bias +1 (left) / +2 (right); rightmost = chroma.
     if (h_ratio == 2 and v_ratio == 1) {
-        // H2V1 fancy — horizontal interpolation only.
         var cy: u32 = 0;
         while (cy < ch and cy < out_h) : (cy += 1) {
             var cx: u32 = 0;
             while (cx < cw) : (cx += 1) {
-                const cx_lf: u32 = if (cx == 0) 0 else cx - 1;
-                const cx_rt: u32 = if (cx + 1 < cw) cx + 1 else cx;
                 const c: i32 = src[cy * src_w + cx];
-                const c_l: i32 = src[cy * src_w + cx_lf];
-                const c_r: i32 = src[cy * src_w + cx_rt];
-                const lf: i32 = (3 * c + c_l + 2) >> 2;
-                const rt: i32 = (3 * c + c_r + 2) >> 2;
                 const ox: u32 = cx * 2;
-                if (ox < out_w) dst[cy * out_w + ox] = clampSampleI32(lf);
-                if (ox + 1 < out_w) dst[cy * out_w + ox + 1] = clampSampleI32(rt);
+                if (cx == 0) {
+                    const c_r: i32 = if (cx + 1 < cw) @as(i32, src[cy * src_w + cx + 1]) else c;
+                    const rt: i32 = (3 * c + c_r + 2) >> 2;
+                    if (ox < out_w) dst[cy * out_w + ox] = clampSampleI32(c);
+                    if (ox + 1 < out_w) dst[cy * out_w + ox + 1] = clampSampleI32(rt);
+                } else if (cx == cw - 1) {
+                    const c_l: i32 = src[cy * src_w + cx - 1];
+                    const lf: i32 = (3 * c + c_l + 1) >> 2;
+                    if (ox < out_w) dst[cy * out_w + ox] = clampSampleI32(lf);
+                    if (ox + 1 < out_w) dst[cy * out_w + ox + 1] = clampSampleI32(c);
+                } else {
+                    const c_l: i32 = src[cy * src_w + cx - 1];
+                    const c_r: i32 = src[cy * src_w + cx + 1];
+                    const lf: i32 = (3 * c + c_l + 1) >> 2;
+                    const rt: i32 = (3 * c + c_r + 2) >> 2;
+                    if (ox < out_w) dst[cy * out_w + ox] = clampSampleI32(lf);
+                    if (ox + 1 < out_w) dst[cy * out_w + ox + 1] = clampSampleI32(rt);
+                }
             }
         }
         return dst;
     }
+    // libjpeg `h1v2_fancy_upsample`: bias=1 top, bias=2 bottom.
     if (h_ratio == 1 and v_ratio == 2) {
-        // V2H1 fancy — vertical interpolation only.
         var cy: u32 = 0;
         while (cy < ch) : (cy += 1) {
             const cy_up: u32 = if (cy == 0) 0 else cy - 1;
@@ -1229,7 +1242,7 @@ fn fancyUpsample(
                 const c: i32 = src[cy * src_w + cx];
                 const c_u: i32 = src[cy_up * src_w + cx];
                 const c_d: i32 = src[cy_dn * src_w + cx];
-                const up: i32 = (3 * c + c_u + 2) >> 2;
+                const up: i32 = (3 * c + c_u + 1) >> 2;
                 const dn: i32 = (3 * c + c_d + 2) >> 2;
                 const oy: u32 = cy * 2;
                 if (oy < out_h) dst[oy * out_w + cx] = clampSampleI32(up);
