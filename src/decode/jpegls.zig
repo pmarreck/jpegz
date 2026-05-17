@@ -17,6 +17,7 @@ const errors = @import("../core/errors.zig");
 const types = @import("../core/types.zig");
 const codec = @import("jpegls_codec.zig");
 const bitstream = @import("jpegls_bitstream");
+const findings_mod = @import("findings.zig");
 
 const Error = errors.DecodeError;
 const native_endian = builtin.cpu.arch.endian();
@@ -61,11 +62,30 @@ pub const ScanInfo = struct {
     ILV: u8,
 };
 
-/// Public decode entry. Returns `error.NotImplemented` for every
-/// JPEG-LS bitstream right now — §2 fills in the body. The marker
-/// walker still parses headers so any structural issue surfaces
-/// before falling through to the wrapper.
+/// Caller-supplied knobs. Mirrors `baseline.DecodeOptions` shape so the
+/// dispatcher can pass through a `FindingsSink` uniformly. The only
+/// emit site in v1 JPEG-LS is the marker walker's extraneous-bytes
+/// tolerance; entropy decode itself never early-returns on
+/// `marker_seen` (the codec consumes a fixed pixel count and gets
+/// zero-padded bits past the end, T.87 §A.5.3).
+pub const DecodeOptions = struct {
+    findings_sink: ?*findings_mod.FindingsSink = null,
+};
+
+/// Default-options entry — null sink, silent tolerance.
 pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
+    return decodeWithOptions(allocator, data, .{});
+}
+
+/// Same as `decode` but accepts a `DecodeOptions`. Currently the only
+/// honored knob is `findings_sink`: when non-null, the cleanroom emits
+/// a `Finding(.warn, .extraneous_bytes_before_marker)` for each gap of
+/// non-0xFF bytes the marker walker silently skips.
+pub fn decodeWithOptions(
+    allocator: Allocator,
+    data: []const u8,
+    options: DecodeOptions,
+) Error!types.Image {
     if (data.len < 4) return error.TruncatedStream;
     if (data[0] != 0xFF or data[1] != M_SOI) return error.InvalidMarker;
 
@@ -75,7 +95,19 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
     var preset: PresetParams = .{};
 
     while (pos + 1 < data.len) {
+        const skip_start = pos;
         while (pos < data.len and data[pos] != 0xFF) pos += 1;
+        if (pos > skip_start) {
+            if (options.findings_sink) |sink| {
+                var buf: [96]u8 = undefined;
+                const next_marker: u8 = if (pos + 1 < data.len) data[pos + 1] else 0;
+                const detail = std.fmt.bufPrint(&buf,
+                    "Corrupt JPEG data: {d} extraneous bytes before marker 0x{x:0>2}",
+                    .{ pos - skip_start, next_marker }) catch buf[0..0];
+                sink.emit(.warn, .extraneous_bytes_before_marker,
+                    @intCast(skip_start), detail) catch return error.OutOfMemory;
+            }
+        }
         if (pos + 1 >= data.len) return error.TruncatedStream;
         while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
         if (pos + 1 >= data.len) return error.TruncatedStream;

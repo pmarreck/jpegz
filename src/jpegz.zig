@@ -549,6 +549,19 @@ pub const internal = struct {
         const arith = @import("decode/arith_decode.zig");
         return arith.decodeWithOptions(allocator, data, .{ .findings_sink = sink });
     }
+    /// JPEG-LS (SOF55) cleanroom decode with `FindingsSink`. The only
+    /// emit site in v1 is `extraneous_bytes_before_marker` in the
+    /// marker walker; entropy decode itself is fixed-pixel-count and
+    /// gets zero-padded bits past EOF (T.87 §A.5.3) — no
+    /// `insufficient_data` equivalent.
+    pub fn jpeglsDecodeWithFindings(
+        allocator: Allocator,
+        data: []const u8,
+        sink: *FindingsSink,
+    ) DecodeError!Image {
+        const jpegls = @import("decode/jpegls.zig");
+        return jpegls.decodeWithOptions(allocator, data, .{ .findings_sink = sink });
+    }
 };
 
 // ─────────────────────────────────────────────────────────────────────
