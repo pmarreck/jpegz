@@ -626,6 +626,12 @@ pub const internal = struct {
         const jpegls = @import("decode/jpegls.zig");
         return jpegls.decodeWithOptions(allocator, data, .{ .findings_sink = sink });
     }
+    /// Direct charls wrapper decode — bypasses dispatcher's cleanroom
+    /// preference so tests can compare cleanroom output to charls
+    /// reference output on the same fixture.
+    pub fn charlsDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
+        return @import("ffi/charls_wrapper.zig").decode(allocator, data);
+    }
 };
 
 // ─────────────────────────────────────────────────────────────────────

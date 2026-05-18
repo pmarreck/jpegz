@@ -1491,3 +1491,37 @@ test "public decodeWithOptions: default options stay strict" {
         try std.testing.expect(err == error.TruncatedStream or err == error.BackendError);
     }
 }
+
+// ── JPEG-LS ILV=1 (line-interleaved) cleanroom ─────────────────────
+//
+// T.87 §A.2 line-interleaved decode: per scan line, run a separate
+// single-component pass for each component using per-component
+// context state (`ScanState.contexts[c]`, `run_index[c]`,
+// `run_contexts[c]`). Fixture encodes the same gradient as the
+// sample-interleaved RGB8 fixture above, so decoded pixels must be
+// byte-identical.
+
+const fixture_jpegls_4x4_rgb8_ilv1 = @embedFile("fixtures/jpegls_4x4_rgb8_ilv1.jls");
+
+test "B2.x: JPEG-LS 4x4 RGB 8-bit line-interleaved (ILV=1) cleanroom" {
+    const allocator = std.testing.allocator;
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, fixture_jpegls_4x4_rgb8_ilv1);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+    try std.testing.expectEqual(@as(u8, 3), image.channels);
+    try std.testing.expectEqual(@as(u8, 8), image.bits_per_sample);
+    try std.testing.expectEqual(jpegz.PixelLayout.rgb, image.layout);
+    try std.testing.expectEqual(@as(usize, 4 * 4 * 3), image.pixels.len);
+    var y: u32 = 0;
+    while (y < 4) : (y += 1) {
+        var x: u32 = 0;
+        while (x < 4) : (x += 1) {
+            const off: usize = (@as(usize, y) * 4 + @as(usize, x)) * 3;
+            try std.testing.expectEqual(@as(u8, @intCast(x * 0x40)), image.pixels[off]);
+            try std.testing.expectEqual(@as(u8, @intCast(y * 0x40)), image.pixels[off + 1]);
+            try std.testing.expectEqual(@as(u8, @intCast((x + y) * 0x20)), image.pixels[off + 2]);
+        }
+    }
+}
