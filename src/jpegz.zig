@@ -476,6 +476,23 @@ pub const internal = struct {
         return baseline.decodeWithOptions(allocator, data, .{ .findings_sink = sink });
     }
 
+    /// Lenient baseline cleanroom: tolerates truncated entropy data
+    /// (returns partial pixels + emits a `Finding(.warn,
+    /// .insufficient_data)` via the sink instead of erroring).
+    /// Mirror of libjpeg-turbo's `JWRN_HIT_MARKER` / `JWRN_JPEG_EOF`
+    /// recovery behavior. The default `cleanroomDecode` stays strict.
+    pub fn cleanroomDecodeLenientWithFindings(
+        allocator: Allocator,
+        data: []const u8,
+        sink: *FindingsSink,
+    ) DecodeError!Image {
+        const baseline = @import("decode/baseline.zig");
+        return baseline.decodeWithOptions(allocator, data, .{
+            .findings_sink = sink,
+            .lenient = true,
+        });
+    }
+
     pub fn cleanroomDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/baseline.zig").decode(allocator, data);
     }

@@ -87,13 +87,22 @@ pub const Error = errors.DecodeError;
 /// Today only `threads` is honored; struct can grow more knobs.
 pub const DecodeOptions = struct {
     threads: u8 = 1,
-    /// Optional side-channel for spec-deviation findings. When non-null,
-    /// the cleanroom emits a `Finding` at each tolerance site (e.g.
-    /// extraneous bytes before marker, premature EOI with recovered
-    /// data) so strict consumers like `validate(...)` can surface them.
-    /// Caller owns the sink. `null` (default) skips emission — matches
-    /// libjpeg's silent-tolerance behavior.
+    /// Optional side-channel for spec-deviation findings. Caller owns
+    /// the sink. `null` (default) skips emission entirely. Used both
+    /// for `extraneous_bytes_before_marker` (always emits when sink
+    /// is set, regardless of `lenient`) and — when `lenient` is also
+    /// true — `insufficient_data` on truncated entropy.
     findings_sink: ?*findings_mod.FindingsSink = null,
+    /// When false (default), the decoder is strict: truncated entropy
+    /// returns `error.TruncatedStream`. When true, the decoder mirrors
+    /// libjpeg-turbo's tolerant behavior — partial blocks left at zero,
+    /// scan exits gracefully, the rest of the image decodes from there,
+    /// and a `Finding(.warn, .insufficient_data)` is emitted via
+    /// `findings_sink` (when one is attached). Useful for thumbnail
+    /// generators, validators, viewers — any consumer that prefers
+    /// best-effort over error. The general-purpose `jpegz.decode`
+    /// stays strict by default.
+    lenient: bool = false,
 };
 
 /// Decode an 8-bit baseline JPEG. Sequential / single-threaded.
@@ -224,6 +233,7 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                         &dc_tables,
                         &ac_tables,
                         restart_interval,
+                        options,
                     );
                 }
                 if (frame.?.precision == 12 and frame.?.num_components == 3) {
@@ -235,6 +245,7 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                         &dc_tables,
                         &ac_tables,
                         restart_interval,
+                        options,
                     );
                 }
                 return try decodeScan(
@@ -492,6 +503,13 @@ fn decodeScan(
     var mcus_since_rst: u32 = 0;
     // Expected next RST marker byte (cycles 0xD0..0xD7). T.81 §F.2.1.3.
     var expected_rst: u8 = 0xD0;
+    // Per-scan lenient recovery state — flips on first truncation; all
+    // subsequent blocks short-circuit to zero coefs. No-op when
+    // `options.lenient == false` (i.e., the leaves still hard-fail).
+    var lenient_state: LenientState = .{
+        .lenient = options.lenient,
+        .sink = options.findings_sink,
+    };
 
     // ── Phase 1: serial entropy decode → coefficient buffer ────
     var mcu_y: u32 = 0;
@@ -547,6 +565,7 @@ fn decodeScan(
                             &prev_dc,
                             slot,
                             frame.precision,
+                            &lenient_state,
                         );
                     }
                 }
@@ -669,6 +688,7 @@ fn decodeScan12Gray(
     dc_tables: *const [4]?huffman.HuffmanTable,
     ac_tables: *const [4]?huffman.HuffmanTable,
     restart_interval: u32,
+    options: DecodeOptions,
 ) Error!types.Image {
     const width: u32 = frame.width;
     const height: u32 = frame.height;
@@ -691,6 +711,10 @@ fn decodeScan12Gray(
     var prev_dc: [3]i32 = .{ 0, 0, 0 };
     var mcus_since_rst: u32 = 0;
     var expected_rst: u8 = 0xD0;
+    var lenient_state: LenientState = .{
+        .lenient = options.lenient,
+        .sink = options.findings_sink,
+    };
 
     // ── Phase 1: serial entropy decode (1 block per MCU) ──────────
     var by: u32 = 0;
@@ -718,6 +742,7 @@ fn decodeScan12Gray(
                 &prev_dc,
                 slot,
                 frame.precision,
+                &lenient_state,
             );
             mcus_since_rst += 1;
         }
@@ -782,6 +807,7 @@ fn decodeScan12Rgb(
     dc_tables: *const [4]?huffman.HuffmanTable,
     ac_tables: *const [4]?huffman.HuffmanTable,
     restart_interval: u32,
+    options: DecodeOptions,
 ) Error!types.Image {
     const channels: u8 = 3;
     const width: u32 = frame.width;
@@ -846,6 +872,10 @@ fn decodeScan12Rgb(
     var prev_dc: [3]i32 = .{ 0, 0, 0 };
     var mcus_since_rst: u32 = 0;
     var expected_rst: u8 = 0xD0;
+    var lenient_state: LenientState = .{
+        .lenient = options.lenient,
+        .sink = options.findings_sink,
+    };
     var mcu_y: u32 = 0;
     while (mcu_y < mcu_rows) : (mcu_y += 1) {
         var mcu_x: u32 = 0;
@@ -882,6 +912,7 @@ fn decodeScan12Rgb(
                             &prev_dc,
                             slot,
                             frame.precision,
+                            &lenient_state,
                         );
                     }
                 }
@@ -1007,6 +1038,28 @@ fn transformBlockRow(
 /// natural order — but does NOT IDCT or write spatial samples. Splitting
 /// this from the IDCT pass lets the second pass run in parallel later.
 /// Updates `prev_dc[ci]` (DC differential per component, T.81 §F.2.2.1).
+/// Per-scan recovery state for `lenient = true` mode. The scan
+/// allocates one on the stack and threads `*LenientState` into every
+/// block decode. The flag flips on the FIRST truncation in any block
+/// of the scan; from that point on, every remaining block decode
+/// short-circuits to zero coefficients (no extra findings, no
+/// re-reading of an exhausted bitstream).
+const LenientState = struct {
+    lenient: bool,
+    sink: ?*findings_mod.FindingsSink,
+    truncation_seen: bool = false,
+
+    inline fn emitOnce(self: *LenientState, byte_pos: usize) Error!void {
+        if (self.truncation_seen) return;
+        self.truncation_seen = true;
+        if (self.sink) |s| {
+            s.emit(.warn, .insufficient_data, @intCast(byte_pos),
+                "Corrupt JPEG data: premature end of data segment") catch
+                return error.OutOfMemory;
+        }
+    }
+};
+
 fn decodeBlockCoefficients(
     br: *bitstream.BitReader,
     ci: usize,
@@ -1017,7 +1070,18 @@ fn decodeBlockCoefficients(
     prev_dc: *[3]i32,
     out: *[64]i32,
     precision: u8,
+    lenient: *LenientState,
 ) Error!void {
+    // Lenient short-circuit: once truncation has been detected anywhere
+    // in this scan, every remaining block decodes as zero. This produces
+    // the same partial-recovery shape libjpeg-turbo emits: pixels up to
+    // the truncation point are real, everything past is solid gray
+    // (post-IDCT of an all-zero coefficient block + level shift).
+    if (lenient.truncation_seen) {
+        @memset(out, 0);
+        return;
+    }
+
     const dc_t = dc_tables[comp.dc_table] orelse return fail("block_dc_table_null", error.InvalidMarker);
     const ac_t = ac_tables[comp.ac_table] orelse return fail("block_ac_table_null", error.InvalidMarker);
     const qt = quant_tables[comp.qt_index] orelse return fail("block_qt_null", error.InvalidMarker);
@@ -1036,11 +1100,25 @@ fn decodeBlockCoefficients(
     var zz: [64]i32 = .{0} ** 64;
 
     // ── DC coefficient (T.81 §F.2.2.1) ─────────────────────────
-    const dc_size: u8 = dc_t.decode(br) catch return fail("dc_huffman_decode_failed", error.BackendError);
+    const dc_size: u8 = dc_t.decode(br) catch {
+        if (lenient.lenient and br.marker_seen) {
+            try lenient.emitOnce(br.byte_pos);
+            @memset(out, 0);
+            return;
+        }
+        return fail("dc_huffman_decode_failed", error.BackendError);
+    };
     if (dc_size > max_dc_size) return fail("dc_size_too_large", error.BackendError);
     var dc_diff: i32 = 0;
     if (dc_size > 0) {
-        const bits = br.readBits(@intCast(dc_size)) catch return error.TruncatedStream;
+        const bits = br.readBits(@intCast(dc_size)) catch {
+            if (lenient.lenient) {
+                try lenient.emitOnce(br.byte_pos);
+                @memset(out, 0);
+                return;
+            }
+            return error.TruncatedStream;
+        };
         dc_diff = huffman.extendSign(bits, @intCast(dc_size));
     }
     prev_dc[ci] += dc_diff;
@@ -1049,7 +1127,14 @@ fn decodeBlockCoefficients(
     // ── 63 AC coefficients (T.81 §F.2.2.2) ─────────────────────
     var k: usize = 1;
     while (k < 64) {
-        const rs: u8 = ac_t.decode(br) catch return fail("ac_huffman_decode_failed", error.BackendError);
+        const rs: u8 = ac_t.decode(br) catch {
+            if (lenient.lenient and br.marker_seen) {
+                try lenient.emitOnce(br.byte_pos);
+                @memset(out, 0);
+                return;
+            }
+            return fail("ac_huffman_decode_failed", error.BackendError);
+        };
         if (rs == 0x00) break; // EOB — rest of block is zero
         if (rs == 0xF0) {
             k += 16; // ZRL — 16 zeros (already zeroed; just advance)
@@ -1060,7 +1145,14 @@ fn decodeBlockCoefficients(
         if (size == 0 or size > max_ac_size) return fail("ac_bad_size", error.BackendError);
         k += run;
         if (k >= 64) return fail("ac_k_overflow", error.BackendError);
-        const bits = br.readBits(@intCast(size)) catch return error.TruncatedStream;
+        const bits = br.readBits(@intCast(size)) catch {
+            if (lenient.lenient) {
+                try lenient.emitOnce(br.byte_pos);
+                @memset(out, 0);
+                return;
+            }
+            return error.TruncatedStream;
+        };
         const val = huffman.extendSign(bits, @intCast(size));
         zz[k] = val;
         k += 1;

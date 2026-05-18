@@ -1369,3 +1369,69 @@ test "cleanroom JPEG-LS emits Finding(.warn, .extraneous_bytes_before_marker)" {
     try std.testing.expect(found);
     try std.testing.expectEqual(@as(?u64, 2), offset_seen);
 }
+
+// ── Lenient mode (loose-coupled cleanroom truncation recovery) ─────
+//
+// `DecodeOptions.lenient = true` switches the cleanroom from strict
+// (default) to libjpeg-turbo-style "tolerate truncation, surface a
+// Finding(.warn, .insufficient_data) via the sink, return partial
+// pixels". Useful for thumbnail generators, image viewers, validate's
+// strictness audits — any consumer that prefers "best-effort decode"
+// to "error". Default decode behavior is unchanged.
+
+test "default baseline cleanroom errors on truncated entropy (strict regression)" {
+    const allocator = std.testing.allocator;
+
+    // Same truncation pattern as validate.zig's wrapper-WARNMS test.
+    const full = fixture_baseline_2x2_rgb;
+    try std.testing.expectEqual(@as(u8, 0xFF), full[full.len - 2]);
+    try std.testing.expectEqual(@as(u8, 0xD9), full[full.len - 1]);
+
+    const cut: usize = 24;
+    var corrupted = try allocator.alloc(u8, full.len - cut);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0 .. full.len - cut - 2], full[0 .. full.len - cut - 2]);
+    corrupted[full.len - cut - 2] = 0xFF;
+    corrupted[full.len - cut - 1] = 0xD9;
+
+    // Default cleanroom MUST refuse — strict by design. The exact
+    // error depends on whether the truncation lands in a Huffman code
+    // (→ BackendError) or while reading magnitude bits
+    // (→ TruncatedStream); either is a hard refusal.
+    const result = jpegz.internal.cleanroomDecode(allocator, corrupted);
+    if (result) |img| {
+        var i = img;
+        i.deinit(allocator);
+        try std.testing.expect(false);
+    } else |err| {
+        try std.testing.expect(err == error.TruncatedStream or err == error.BackendError);
+    }
+}
+
+test "lenient baseline cleanroom recovers truncation, emits insufficient_data warn" {
+    const allocator = std.testing.allocator;
+
+    const full = fixture_baseline_2x2_rgb;
+    const cut: usize = 24;
+    var corrupted = try allocator.alloc(u8, full.len - cut);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0 .. full.len - cut - 2], full[0 .. full.len - cut - 2]);
+    corrupted[full.len - cut - 2] = 0xFF;
+    corrupted[full.len - cut - 1] = 0xD9;
+
+    var sink = jpegz.internal.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.cleanroomDecodeLenientWithFindings(
+        allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 2), image.width);
+    try std.testing.expectEqual(@as(u32, 2), image.height);
+
+    var found = false;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .insufficient_data) found = true;
+    }
+    try std.testing.expect(found);
+}
