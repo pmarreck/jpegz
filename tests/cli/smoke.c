@@ -171,6 +171,60 @@ int main(void) {
     ASSERT(found_missing_soi, "empty -> MISSING_SOI finding present");
     jpegz_validation_report_free(&rpt_empty);
 
-    printf("PASS: jpegz C FFI smoke (23 assertions, decode + streaming + validate)\n");
+    /* ── Lenient mode + FindingsSink C ABI ────────────────────────
+     * Truncated baseline + lenient=1 + sink → decode returns partial
+     * pixels and the sink collects a Finding(.warn, .insufficient_data).
+     * Strict-by-default is unchanged (other tests above already
+     * exercise the strict path).
+     *
+     * This block doubles as the canonical C usage example for
+     * external consumers. */
+    {
+        /* Build truncated copy: drop last 24 entropy bytes, re-attach EOI. */
+        const size_t cut = 24;
+        const size_t corrupt_len = baseline_2x2_rgb_len - cut;
+        uint8_t corrupted[2048]; /* fixture is ~690 bytes; ample room */
+        ASSERT(corrupt_len <= sizeof(corrupted), "corrupted fits scratch");
+        memcpy(corrupted, baseline_2x2_rgb, corrupt_len - 2);
+        corrupted[corrupt_len - 2] = 0xFF;
+        corrupted[corrupt_len - 1] = 0xD9;
+
+        jpegz_findings_sink_t *sink = jpegz_findings_sink_create();
+        ASSERT(sink != NULL, "findings_sink_create returns non-NULL");
+        ASSERT(jpegz_findings_sink_count(sink) == 0, "fresh sink is empty");
+
+        jpegz_decode_options_t opts = {0};
+        opts.lenient = 1;
+
+        jpegz_image_t lenient_img = {0};
+        rc = jpegz_decode_with_findings(corrupted, corrupt_len, &opts, sink, &lenient_img);
+        ASSERT(rc == JPEGZ_OK, "lenient decode with findings returns OK");
+        ASSERT(lenient_img.width == 2 && lenient_img.height == 2,
+               "lenient decode preserved image shape");
+        jpegz_image_free(&lenient_img);
+
+        const size_t n = jpegz_findings_sink_count(sink);
+        ASSERT(n >= 1, "sink received at least one finding");
+        int saw_insufficient = 0;
+        for (size_t i = 0; i < n; i++) {
+            jpegz_sink_finding_t f = {0};
+            rc = jpegz_findings_sink_get(sink, i, &f);
+            ASSERT(rc == JPEGZ_OK, "findings_sink_get returns OK for valid idx");
+            if (f.severity == JPEGZ_SEVERITY_WARN &&
+                f.code == JPEGZ_FINDING_INSUFFICIENT_DATA) {
+                saw_insufficient = 1;
+            }
+        }
+        ASSERT(saw_insufficient, "sink contains insufficient_data warn");
+
+        /* Out-of-range index is a soft error, not a crash. */
+        jpegz_sink_finding_t bad = {0};
+        rc = jpegz_findings_sink_get(sink, n, &bad);
+        ASSERT(rc != JPEGZ_OK, "findings_sink_get rejects out-of-range idx");
+
+        jpegz_findings_sink_free(sink);
+    }
+
+    printf("PASS: jpegz C FFI smoke (30 assertions, decode + streaming + validate + findings)\n");
     return 0;
 }

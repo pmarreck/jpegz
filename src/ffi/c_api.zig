@@ -110,18 +110,41 @@ export fn jpegz_image_free(image: ?*CImage) void {
 // ─────────────────────────────────────────────────────────────────────
 
 /// Mirrors `jpegz_decode_options_t` in include/jpegz_core.h.
-/// Layout: `threads: u8` followed by 7 reserved zero bytes for forward
-/// compatibility. Existing fields never shift; new fields append.
+/// Layout: `threads: u8`, `lenient: u8`, 6 reserved zero bytes for
+/// forward compatibility. Existing fields never shift; new fields
+/// append. Total size: 8 bytes (unchanged across versions).
 const CDecodeOptions = extern struct {
     threads: u8,
-    reserved: [7]u8,
+    /// 0 = strict decode (default; truncated entropy → error).
+    /// non-0 = lenient (partial pixels + sink warn). See the Zig
+    /// `DecodeOptions.lenient` doc comment for the full semantics.
+    lenient: u8,
+    reserved: [6]u8,
 };
+
+/// Build the Zig `DecodeOptions` for a C decode call. Threads through
+/// the C options struct's fields plus an optional findings sink (set
+/// by `jpegz_decode_with_findings`; null otherwise).
+fn buildDecodeOptions(
+    c_options: ?*const CDecodeOptions,
+    sink: ?*jpegz.FindingsSink,
+) jpegz.DecodeOptions {
+    if (c_options) |co| {
+        return .{
+            .threads = co.threads,
+            .lenient = co.lenient != 0,
+            .findings_sink = sink,
+        };
+    }
+    return .{ .findings_sink = sink };
+}
 
 fn doDecodeWithOptions(
     decoder: *const fn (std.mem.Allocator, []const u8, jpegz.DecodeOptions) errors.DecodeError!jpegz.Image,
     data: [*c]const u8,
     len: usize,
     c_options: ?*const CDecodeOptions,
+    sink: ?*jpegz.FindingsSink,
     out_image: ?*CImage,
 ) c_int {
     clearLastError();
@@ -130,10 +153,7 @@ fn doDecodeWithOptions(
         return -3;
     };
     const slice: []const u8 = if (data == null or len == 0) &[_]u8{} else data[0..len];
-    const opts: jpegz.DecodeOptions = if (c_options) |co|
-        .{ .threads = co.threads }
-    else
-        .{};
+    const opts = buildDecodeOptions(c_options, sink);
     const img = decoder(c_allocator, slice, opts) catch |err| {
         setLastError("decode failed: {s}", .{@errorName(err)});
         return toCStatus(err);
@@ -143,7 +163,7 @@ fn doDecodeWithOptions(
 }
 
 export fn jpegz_decode(data: [*c]const u8, len: usize, out_image: ?*CImage) c_int {
-    return doDecodeWithOptions(jpegz.decodeWithOptions, data, len, null, out_image);
+    return doDecodeWithOptions(jpegz.decodeWithOptions, data, len, null, null, out_image);
 }
 
 export fn jpegz_decode_ex(
@@ -152,11 +172,11 @@ export fn jpegz_decode_ex(
     options: ?*const CDecodeOptions,
     out_image: ?*CImage,
 ) c_int {
-    return doDecodeWithOptions(jpegz.decodeWithOptions, data, len, options, out_image);
+    return doDecodeWithOptions(jpegz.decodeWithOptions, data, len, options, null, out_image);
 }
 
 export fn jpegz_jp2_decode(data: [*c]const u8, len: usize, out_image: ?*CImage) c_int {
-    return doDecodeWithOptions(jpegz.jpeg2000.decodeWithOptions, data, len, null, out_image);
+    return doDecodeWithOptions(jpegz.jpeg2000.decodeWithOptions, data, len, null, null, out_image);
 }
 
 export fn jpegz_jp2_decode_ex(
@@ -165,7 +185,112 @@ export fn jpegz_jp2_decode_ex(
     options: ?*const CDecodeOptions,
     out_image: ?*CImage,
 ) c_int {
-    return doDecodeWithOptions(jpegz.jpeg2000.decodeWithOptions, data, len, options, out_image);
+    return doDecodeWithOptions(jpegz.jpeg2000.decodeWithOptions, data, len, options, null, out_image);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// FindingsSink C ABI — opaque handle backed by a heap-allocated
+// `jpegz.FindingsSink`. C consumers create one, pass it to
+// `jpegz_decode_with_findings`, walk the collected findings via
+// `_count` + `_get`, and free with `_free`. See the header for usage.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Opaque to C; cast back inside Zig. Allocated via c_allocator so the
+/// caller-owned heap matches all other C-allocated jpegz objects.
+const CFindingsSink = jpegz.FindingsSink;
+
+export fn jpegz_findings_sink_create() ?*CFindingsSink {
+    clearLastError();
+    const sink = c_allocator.create(CFindingsSink) catch {
+        setLastError("findings_sink_create: out of memory", .{});
+        return null;
+    };
+    sink.* = jpegz.FindingsSink.init(c_allocator);
+    return sink;
+}
+
+export fn jpegz_findings_sink_free(sink_opt: ?*CFindingsSink) void {
+    const sink = sink_opt orelse return;
+    sink.deinit();
+    c_allocator.destroy(sink);
+}
+
+export fn jpegz_findings_sink_count(sink_opt: ?*const CFindingsSink) usize {
+    const sink = sink_opt orelse return 0;
+    return sink.items().len;
+}
+
+/// Fills `out_finding` with the finding at `idx`. The `detail`
+/// pointer borrows the sink's internal storage — valid until the
+/// next `_free` or another emission on the same sink. Returns
+/// `JPEGZ_OK` (0) on success, `-3` for invalid args, `-1` for
+/// out-of-range index.
+export fn jpegz_findings_sink_get(
+    sink_opt: ?*const CFindingsSink,
+    idx: usize,
+    out_finding: ?*CSinkFinding,
+) c_int {
+    clearLastError();
+    const sink = sink_opt orelse {
+        setLastError("findings_sink_get: sink must not be NULL", .{});
+        return -3;
+    };
+    const out = out_finding orelse {
+        setLastError("findings_sink_get: out_finding must not be NULL", .{});
+        return -3;
+    };
+    const items = sink.items();
+    if (idx >= items.len) {
+        setLastError("findings_sink_get: idx {d} out of range (count={d})",
+            .{ idx, items.len });
+        return -1;
+    }
+    const f = items[idx];
+    out.severity = @intCast(@intFromEnum(f.severity));
+    out.code = @intCast(@intFromEnum(f.code));
+    if (f.offset) |o| {
+        out.offset = @intCast(o);
+    } else {
+        out.offset = std.math.minInt(i64);
+    }
+    out.detail = if (f.detail) |d| d.ptr else null;
+    out.detail_len = if (f.detail) |d| d.len else 0;
+    return 0;
+}
+
+/// C-side mirror of `jpegz_sink_finding_t` (header). Distinct from
+/// the existing `CFinding` (validation-report shape) on two axes:
+/// (a) an explicit `detail_len` so callers don't have to strlen a
+/// possibly non-NUL-terminated slice, and (b) `detail` is a borrow
+/// from the sink's storage, not an owned C string.
+const CSinkFinding = extern struct {
+    severity: c_int,
+    code: c_int,
+    /// INT64_MIN sentinel = "no offset" (matches `jpegz_finding_t`
+    /// convention); any other value is a real byte offset.
+    offset: i64,
+    /// Borrowed; valid until the sink is freed or mutated. NULL when
+    /// the emitter didn't attach a detail string.
+    detail: ?[*]const u8,
+    detail_len: usize,
+};
+
+/// Decode with both a `CDecodeOptions` and a `FindingsSink`. The
+/// canonical entry point for "tolerant decode that captures
+/// warnings." Pass `lenient = 1` in `options` to mirror libjpeg's
+/// truncation recovery. The sink collects every finding emitted
+/// during decode and remains valid until `_free`. `options` may be
+/// NULL (defaults); `sink` may be NULL if the caller only wants
+/// the strict / extraneous-bytes side and doesn't care to consume
+/// the findings.
+export fn jpegz_decode_with_findings(
+    data: [*c]const u8,
+    len: usize,
+    options: ?*const CDecodeOptions,
+    sink: ?*CFindingsSink,
+    out_image: ?*CImage,
+) c_int {
+    return doDecodeWithOptions(jpegz.decodeWithOptions, data, len, options, sink, out_image);
 }
 
 // ─────────────────────────────────────────────────────────────────────

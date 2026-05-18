@@ -123,10 +123,23 @@ jpegz_status_t jpegz_decode(
  * libjpeg-turbo's traditional API has no thread param). */
 typedef struct {
     uint8_t threads;
+    /* 0 = strict decode (default). Truncated entropy or any other
+     *     bitstream deviation that libjpeg-turbo would WARNMS about
+     *     returns a JPEGZ_ERR_* status.
+     * non-0 = lenient decode. The cleanroom mirrors libjpeg-turbo's
+     *     truncation-recovery behavior: partial pixels are returned
+     *     (rest filled with the IDCT of zero coefficients, i.e. solid
+     *     gray). When called via jpegz_decode_with_findings and a
+     *     sink is attached, each recovered deviation is reported as
+     *     a Finding(.warn, ...). Pick lenient=1 for thumbnail
+     *     generators, image viewers, and best-effort format
+     *     converters; stay 0 for pipelines where deviation should
+     *     halt processing. */
+    uint8_t lenient;
     /* Reserved for forward compatibility — must be zero. Future fields
      * will be added here only by appending; existing layout never
      * shifts. */
-    uint8_t reserved[7];
+    uint8_t reserved[6];
 } jpegz_decode_options_t;
 
 /* Decode with caller-controlled options. Pass NULL for `options` to
@@ -296,6 +309,98 @@ jpegz_status_t jpegz_jp2_validate(
     const uint8_t              *data,
     size_t                      len,
     jpegz_validation_report_t  *out_report
+);
+
+/* ── FindingsSink: tolerant-decode warning collector ───────────────
+ *
+ * A `jpegz_findings_sink_t` is the C-side handle for the cleanroom
+ * decoder's side-channel collector. Pair it with `lenient = 1` in
+ * `jpegz_decode_options_t` (or pass `NULL` options) and call
+ * `jpegz_decode_with_findings` to capture every warning the cleanroom
+ * emits while tolerating spec deviations — the cleanroom equivalent
+ * of libjpeg-turbo's WARNMS callback (JWRN_HIT_MARKER,
+ * JWRN_EXTRANEOUS_DATA, etc.).
+ *
+ * What gets emitted is independent of `lenient`:
+ *   - `JPEGZ_FINDING_EXTRANEOUS_BYTES_BEFORE_MARKER` fires whenever
+ *     the marker walker silently skips non-0xFF bytes.
+ *   - `JPEGZ_FINDING_INSUFFICIENT_DATA` fires only in lenient mode
+ *     when a truncated entropy stream was recovered.
+ *
+ * Canonical C usage:
+ *
+ *     jpegz_findings_sink_t *sink = jpegz_findings_sink_create();
+ *     jpegz_decode_options_t opts = {0};
+ *     opts.lenient = 1;
+ *
+ *     jpegz_image_t img = {0};
+ *     int rc = jpegz_decode_with_findings(data, len, &opts, sink, &img);
+ *     if (rc != JPEGZ_OK) { ...handle error... }
+ *
+ *     for (size_t i = 0; i < jpegz_findings_sink_count(sink); i++) {
+ *         jpegz_sink_finding_t f = {0};
+ *         jpegz_findings_sink_get(sink, i, &f);
+ *         fprintf(stderr, "decode warning: code=%d offset=%lld %.*s\n",
+ *             f.code, (long long)f.offset,
+ *             (int)f.detail_len, f.detail ? (const char *)f.detail : "");
+ *     }
+ *
+ *     jpegz_image_free(&img);
+ *     jpegz_findings_sink_free(sink);
+ *
+ * Pass `sink = NULL` to `jpegz_decode_with_findings` if you want the
+ * lenient semantics but don't care to read the warnings — the call is
+ * then equivalent to `jpegz_decode_ex` with `lenient = 1`. */
+typedef struct jpegz_findings_sink jpegz_findings_sink_t;
+
+/* Allocate a fresh sink on the C heap. Returns NULL on OOM — check
+ * `jpegz_last_error_message` for the reason. */
+jpegz_findings_sink_t *jpegz_findings_sink_create(void);
+
+/* Free a sink (no-op on NULL). Also frees all owned detail strings
+ * the sink collected. After this call any borrowed `detail` pointers
+ * from `_get` are dangling. */
+void jpegz_findings_sink_free(jpegz_findings_sink_t *sink);
+
+/* Number of findings collected so far. Returns 0 if `sink` is NULL. */
+size_t jpegz_findings_sink_count(const jpegz_findings_sink_t *sink);
+
+/* C-side mirror of one collected finding. Distinct from
+ * `jpegz_finding_t` (the validation-report shape): the sink form adds
+ * an explicit `detail_len` for safer slice handling, and `detail` is
+ * a borrow rather than an owned string. */
+typedef struct {
+    jpegz_severity_t severity;
+    jpegz_finding_code_t code;
+    /* INT64_MIN means "no offset"; any other value is a byte offset
+     * into the input data (matches `jpegz_finding_t.offset`). */
+    int64_t offset;
+    /* Borrowed: valid until the sink is freed. May be NULL. NOT
+     * NUL-terminated by contract; use `detail_len` to bound reads. */
+    const uint8_t *detail;
+    size_t detail_len;
+} jpegz_sink_finding_t;
+
+/* Fill `*out_finding` with the finding at `idx`. Returns
+ * JPEGZ_OK on success, JPEGZ_ERR_NOT_IMPLEMENTED (-1) when `idx` is
+ * out of range, -3 when `sink` or `out_finding` is NULL. */
+jpegz_status_t jpegz_findings_sink_get(
+    const jpegz_findings_sink_t  *sink,
+    size_t                        idx,
+    jpegz_sink_finding_t         *out_finding
+);
+
+/* Decode with caller-controlled options AND a findings sink in one
+ * call. The canonical entry point for "tolerant decode that captures
+ * warnings." `options` may be NULL (defaults — equivalent to
+ * jpegz_decode, no sink interaction). `sink` may be NULL (decode
+ * runs with the supplied options but findings are discarded). */
+jpegz_status_t jpegz_decode_with_findings(
+    const uint8_t                       *data,
+    size_t                               len,
+    const jpegz_decode_options_t        *options,
+    jpegz_findings_sink_t               *sink,
+    jpegz_image_t                       *out_image
 );
 
 #ifdef __cplusplus

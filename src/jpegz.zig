@@ -28,6 +28,23 @@ pub const PixelLayout = core_types.PixelLayout;
 pub const Image = core_types.Image;
 pub const ImageMetadata = core_types.ImageMetadata;
 
+/// Side-channel collector for spec-deviation findings emitted by the
+/// cleanroom decoder during a lenient (tolerant) decode. Same `Finding`
+/// shape used by `ValidationReport` — `severity` / `code` / `offset`
+/// / `detail` — so consumers can uniformly walk the items in either
+/// container.
+///
+/// Lifecycle: `FindingsSink.init(allocator)` → pass `&sink` to
+/// `decodeWithOptions(.., .{ .findings_sink = &sink, .lenient = true })`
+/// → walk `sink.items()` → `sink.deinit()`.
+///
+/// `lenient = true` + `findings_sink` attached is how callers opt into
+/// libjpeg-turbo-style truncation recovery (`JWRN_HIT_MARKER` /
+/// `JWRN_JPEG_EOF` parity). With `lenient = false` (default), the sink
+/// still receives non-fatal markers like `extraneous_bytes_before_marker`,
+/// but truncated entropy is a hard error.
+pub const FindingsSink = @import("decode/findings.zig").FindingsSink;
+
 pub const version: [:0]const u8 = "0.1.0";
 
 /// Direct entry into the JPEG-LS cleanroom decoder. The main `decode`
@@ -154,6 +171,38 @@ pub const DecodeOptions = struct {
     /// (openjpeg → `opj_codec_set_threads`); libjpeg-turbo's
     /// traditional API has no thread param.
     threads: u8 = 1,
+
+    /// `false` (default) — strict decode. Truncated entropy data,
+    /// missing markers, or any other bitstream deviation that
+    /// libjpeg-turbo silently warns about returns a `DecodeError`.
+    ///
+    /// `true` — tolerant decode. The cleanroom mirrors libjpeg-turbo's
+    /// recovery behavior: truncated baseline scans yield partial
+    /// pixels (the rest filled with solid gray from zero-coef IDCT
+    /// blocks). When a `findings_sink` is also attached, the
+    /// deviation is reported there as a `Finding(.warn, ...)`.
+    ///
+    /// Pick `true` for thumbnail generators, image viewers, and
+    /// best-effort format converters. Stay `false` (or omit) for
+    /// pipelines where any deviation should halt processing.
+    lenient: bool = false,
+
+    /// Optional collector for `Finding(.warn, ...)` and
+    /// `Finding(.info, ...)` notes the cleanroom emits while
+    /// decoding. Caller owns the sink and frees it via
+    /// `FindingsSink.deinit()`.
+    ///
+    /// What gets emitted is independent of `lenient`:
+    ///   - `.extraneous_bytes_before_marker` fires whenever the
+    ///     marker walker silently skips non-0xFF bytes (libjpeg's
+    ///     `JWRN_EXTRANEOUS_DATA` equivalent).
+    ///   - `.insufficient_data` fires only in lenient mode when a
+    ///     truncated scan was recovered.
+    ///
+    /// `null` (default) suppresses all emission — the decoder still
+    /// tolerates whatever it's been told to tolerate, but no
+    /// findings are recorded.
+    findings_sink: ?*FindingsSink = null,
 };
 
 /// Decode any T.81 / T.87 JPEG (sequential / progressive / lossless /
@@ -214,7 +263,11 @@ pub fn decodeWithOptions(
     // Try baseline cleanroom first (SOF0). Convert public DecodeOptions
     // → baseline's structurally-identical DecodeOptions (separate types
     // to keep baseline.zig free of a dependency on the parent module).
-    const baseline_opts: baseline.DecodeOptions = .{ .threads = options.threads };
+    const baseline_opts: baseline.DecodeOptions = .{
+        .threads = options.threads,
+        .lenient = options.lenient,
+        .findings_sink = options.findings_sink,
+    };
     if (baseline.decodeWithOptions(allocator, data, baseline_opts)) |img| {
         return img;
     } else |err| switch (err) {
@@ -456,12 +509,6 @@ comptime {
 /// call cleanroom and wrapper paths directly without going through
 /// the dispatcher in `decode`.
 pub const internal = struct {
-    /// Re-export of the cleanroom decoder's `FindingsSink` so that
-    /// tests can pass one through `cleanroomDecodeWithFindings` without
-    /// reaching into `src/decode/findings.zig` directly. NOT part of
-    /// the stable ABI.
-    pub const FindingsSink = @import("decode/findings.zig").FindingsSink;
-
     /// Decode via the cleanroom baseline path, attaching a
     /// `FindingsSink` so spec-deviation findings (extraneous bytes,
     /// premature EOI with recovered data, etc.) are surfaced as warns.

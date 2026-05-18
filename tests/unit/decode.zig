@@ -1209,7 +1209,7 @@ test "cleanroom emits Finding(.warn, .extraneous_bytes_before_marker) when toler
     corrupted[5] = 0xAA;
     @memcpy(corrupted[6..], fixture_baseline_2x2_rgb[2..]);
 
-    var sink = jpegz.internal.FindingsSink.init(allocator);
+    var sink = jpegz.FindingsSink.init(allocator);
     defer sink.deinit();
 
     var image = try jpegz.internal.cleanroomDecodeWithFindings(allocator, corrupted, &sink);
@@ -1236,7 +1236,7 @@ test "cleanroom emits Finding(.warn, .extraneous_bytes_before_marker) when toler
 test "cleanroom emits no findings for clean baseline JPEG" {
     const allocator = std.testing.allocator;
 
-    var sink = jpegz.internal.FindingsSink.init(allocator);
+    var sink = jpegz.FindingsSink.init(allocator);
     defer sink.deinit();
 
     var image = try jpegz.internal.cleanroomDecodeWithFindings(
@@ -1269,7 +1269,7 @@ test "cleanroom progressive emits Finding(.warn, .insufficient_data) on truncate
     corrupted[full.len - cut - 2] = 0xFF;
     corrupted[full.len - cut - 1] = 0xD9;
 
-    var sink = jpegz.internal.FindingsSink.init(allocator);
+    var sink = jpegz.FindingsSink.init(allocator);
     defer sink.deinit();
 
     var image = try jpegz.internal.progressiveDecodeWithFindings(allocator, corrupted, &sink);
@@ -1290,7 +1290,7 @@ test "cleanroom progressive emits Finding(.warn, .insufficient_data) on truncate
 test "cleanroom progressive emits no findings for clean fixture" {
     const allocator = std.testing.allocator;
 
-    var sink = jpegz.internal.FindingsSink.init(allocator);
+    var sink = jpegz.FindingsSink.init(allocator);
     defer sink.deinit();
 
     var image = try jpegz.internal.progressiveDecodeWithFindings(
@@ -1315,7 +1315,7 @@ test "cleanroom arith SOF9 emits Finding(.warn, .extraneous_bytes_before_marker)
     corrupted[5] = 0xAA;
     @memcpy(corrupted[6..], fixture_arith_baseline_8x8_gray[2..]);
 
-    var sink = jpegz.internal.FindingsSink.init(allocator);
+    var sink = jpegz.FindingsSink.init(allocator);
     defer sink.deinit();
 
     var image = try jpegz.internal.arithDecodeWithFindings(allocator, corrupted, &sink);
@@ -1350,7 +1350,7 @@ test "cleanroom JPEG-LS emits Finding(.warn, .extraneous_bytes_before_marker)" {
     corrupted[5] = 0xAA;
     @memcpy(corrupted[6..], fixture_jpegls_4x4_gray8[2..]);
 
-    var sink = jpegz.internal.FindingsSink.init(allocator);
+    var sink = jpegz.FindingsSink.init(allocator);
     defer sink.deinit();
 
     var image = try jpegz.internal.jpeglsDecodeWithFindings(allocator, corrupted, &sink);
@@ -1419,7 +1419,7 @@ test "lenient baseline cleanroom recovers truncation, emits insufficient_data wa
     corrupted[full.len - cut - 2] = 0xFF;
     corrupted[full.len - cut - 1] = 0xD9;
 
-    var sink = jpegz.internal.FindingsSink.init(allocator);
+    var sink = jpegz.FindingsSink.init(allocator);
     defer sink.deinit();
 
     var image = try jpegz.internal.cleanroomDecodeLenientWithFindings(
@@ -1434,4 +1434,60 @@ test "lenient baseline cleanroom recovers truncation, emits insufficient_data wa
         if (f.severity == .warn and f.code == .insufficient_data) found = true;
     }
     try std.testing.expect(found);
+}
+
+// ── Public-API lenient + sink (jpegz.DecodeOptions promotion) ──────
+//
+// Same lenient semantics as `internal.cleanroomDecodeLenientWithFindings`
+// but routed through the PUBLIC dispatcher entry point
+// `jpegz.decodeWithOptions(allocator, data, .{ .lenient = true,
+// .findings_sink = &sink })`. This is the surface LLMs / external
+// consumers should target.
+
+test "public decodeWithOptions: lenient + sink recovers truncated baseline" {
+    const allocator = std.testing.allocator;
+
+    const full = fixture_baseline_2x2_rgb;
+    const cut: usize = 24;
+    var corrupted = try allocator.alloc(u8, full.len - cut);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0 .. full.len - cut - 2], full[0 .. full.len - cut - 2]);
+    corrupted[full.len - cut - 2] = 0xFF;
+    corrupted[full.len - cut - 1] = 0xD9;
+
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.decodeWithOptions(allocator, corrupted, .{
+        .lenient = true,
+        .findings_sink = &sink,
+    });
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 2), image.width);
+    var found = false;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .insufficient_data) found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "public decodeWithOptions: default options stay strict" {
+    const allocator = std.testing.allocator;
+    const full = fixture_baseline_2x2_rgb;
+    const cut: usize = 24;
+    var corrupted = try allocator.alloc(u8, full.len - cut);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0 .. full.len - cut - 2], full[0 .. full.len - cut - 2]);
+    corrupted[full.len - cut - 2] = 0xFF;
+    corrupted[full.len - cut - 1] = 0xD9;
+
+    const result = jpegz.decodeWithOptions(allocator, corrupted, .{});
+    if (result) |img| {
+        var i = img;
+        i.deinit(allocator);
+        try std.testing.expect(false);
+    } else |err| {
+        try std.testing.expect(err == error.TruncatedStream or err == error.BackendError);
+    }
 }
