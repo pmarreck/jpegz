@@ -472,6 +472,16 @@ pub const jpeg2000 = struct {
     /// wrapper does not yet plumb `options.threads` through to
     /// `opj_codec_set_threads` — that lands with the cleanroom JP2
     /// path (M2.7) or as a wrapper-side enhancement when needed.
+    ///
+    /// **Architecture exception (documented):** this is the ONE
+    /// runtime non-cleanroom dependency in the public dispatch
+    /// surface. JPEG 2000 (T.800) needs the full wavelet + EBCOT
+    /// tier-1/2 pipeline (multi-month build); until milestone M2.7
+    /// ships, the public API delegates to openjpeg here. Every
+    /// other public entry point is cleanroom-only at runtime;
+    /// libjpeg-turbo / charls remain available exclusively as
+    /// build-time oracles via `jpegz.internal.*` for byte-perfect
+    /// regression testing.
     pub fn decodeWithOptions(
         allocator: Allocator,
         data: []const u8,

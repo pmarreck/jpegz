@@ -274,50 +274,95 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             "stream lacks EOI marker (0xFF 0xD9)");
     }
 
-    // ── Step 4: Codec-level integrity (M1.5b) ──────────────────
-    // Run libjpeg-turbo's full decode through the file. The marker
-    // walker catches structural problems (missing markers, bad
-    // segment lengths, truncation) but is blind to coefficient-level
-    // corruption — corrupt Huffman tables, bad DCT coefficients,
-    // mismatched quantization tables. Decoding-through is the
-    // ground truth.
+    // ── Step 4: Codec-level integrity ──────────────────────────
+    // Run the cleanroom decoder end-to-end against the file with
+    // `lenient = true` + `FindingsSink`. The marker walker catches
+    // structural problems (missing markers, bad segment lengths,
+    // truncation); decoding-through is the ground truth for
+    // coefficient-level corruption — corrupt Huffman tables, bad
+    // DCT coefficients, mismatched quantization tables.
+    //
+    // Cleanroom-only at runtime (per project architecture: libjpeg /
+    // charls / openjpeg are build-time oracles only, used by tests
+    // via `jpegz.internal.*`). Variants the cleanroom doesn't
+    // recognize yield an INFO finding rather than FAIL — validator
+    // doesn't have ground truth for those, so it stays silent on
+    // codec correctness rather than slandering files libjpeg-turbo
+    // would have accepted. CMYK and other un-cleanroomed variants
+    // surface this way until their cleanroom paths land.
     //
     // We skip when:
     //   - The walker already found a fail-rated structural problem
-    //     (libjpeg would just rediscover it; saves cycles).
-    //   - The variant isn't supported by libjpeg-turbo (jpegls,
-    //     differential-lossless variants, JPEG 2000 — those are
-    //     handled elsewhere or not yet routed).
+    //     (the cleanroom would just rediscover it; saves cycles).
+    //   - The variant is JPEG 2000 (separate `jpegz.jpeg2000`
+    //     entry point with its own validation path).
     if (report.overall != .fail and shouldRunCodecCheck(report.variant)) {
-        const wrapper = @import("../ffi/libjpeg_wrapper.zig");
-        // Caller-owned bridge keeps message slices valid until we
-        // finish copying them into Finding allocations.
-        var bridge: wrapper.ValidationBridge = undefined;
-        const codec_result = wrapper.validateCodecIntegrity(data, &bridge);
+        var sink = types.FindingsSink.init(allocator);
+        defer sink.deinit();
 
-        // Every captured WARNMS becomes a Finding(.warn) — this is the
-        // "validate-warns" surface. Architecture decision documented
-        // in NEXT_STEPS.md §"Validation-strictness". The decoder still
-        // returns pixels (libjpeg-style tolerance); validate just flags
-        // the deviation so format-integrity consumers see it.
-        for (codec_result.warnings) |warn| {
-            const msg_len = std.mem.indexOfScalar(u8, &warn.message, 0) orelse warn.message.len;
-            try addFinding(
-                &report,
-                allocator,
-                .warn,
-                wrapper.libjpegWarnToFindingCode(warn.msg_code),
-                null,
-                warn.message[0..msg_len],
-            );
+        const result = types.decodeWithOptions(allocator, data, .{
+            .lenient = true,
+            .findings_sink = &sink,
+        });
+
+        // Drain sink → report findings (extraneous_bytes,
+        // insufficient_data, etc.). Same severity/code/offset/detail
+        // shape used by the marker walker, so the report is uniform.
+        for (sink.items()) |f| {
+            try addFinding(&report, allocator, f.severity, f.code, f.offset, f.detail);
         }
 
-        if (codec_result.failure) |failure| {
-            try addFinding(&report, allocator, .fail, failure.code, null, failure.message);
+        if (result) |img| {
+            // Successful decode — codec is structurally sound.
+            // Discard pixels (we only care about the integrity signal).
+            var img_mut = img;
+            img_mut.deinit(allocator);
+        } else |err| switch (err) {
+            error.NotImplemented => {
+                // Cleanroom doesn't own this variant yet — don't slander
+                // the file with FAIL. Surface as INFO so strict
+                // consumers know we didn't run codec check.
+                try addFinding(&report, allocator, .info, .unknown_marker, null,
+                    "codec variant beyond cleanroom v1 scope — codec integrity not checked");
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                try addFinding(&report, allocator, .fail,
+                    mapDecodeErrorToFindingCode(err), null, @errorName(err));
+            },
         }
     }
 
     return report;
+}
+
+/// Map a public `DecodeError` from the codec-integrity decode-through
+/// to the closest `FindingCode` for validator output.
+///
+/// Bucketing rationale: the marker walker (validator step 1-3)
+/// already catches genuine `bad_marker_length` / `missing_soi` /
+/// real `truncated_stream` (data ends mid-segment) BEFORE the codec
+/// check runs. Any decoder error that surfaces here means structural
+/// scaffolding was sound but coefficient-level / table-level decode
+/// failed — bucket everything as `huffman_table_corrupt` (the most
+/// common cause) unless we have a more specific signal.
+fn mapDecodeErrorToFindingCode(err: errors.DecodeError) FindingCode {
+    return switch (err) {
+        // DHT/DQT/DAC malformed internal data, bitstream desync from
+        // corrupt tables, etc. — all bucket as huffman_table_corrupt.
+        error.InvalidMarker          => .huffman_table_corrupt,
+        error.BackendError           => .huffman_table_corrupt,
+        error.TruncatedStream        => .huffman_table_corrupt,
+
+        error.UnsupportedPrecision   => .invalid_sof_precision,
+        error.InvalidJp2Codestream   => .jp2_invalid_codestream,
+
+        // NotRowStreamable / CallbackAborted shouldn't surface in
+        // validate's path (we don't stream rows); bucket them as
+        // unknown_marker if they ever do.
+        error.NotRowStreamable, error.CallbackAborted => .unknown_marker,
+        error.NotImplemented, error.OutOfMemory => unreachable,
+    };
 }
 
 /// libjpeg-turbo handles SOF0/1/2/3/9/10/11. JPEG-LS, differential
