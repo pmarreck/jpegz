@@ -1525,3 +1525,38 @@ test "B2.x: JPEG-LS 4x4 RGB 8-bit line-interleaved (ILV=1) cleanroom" {
         }
     }
 }
+
+// ── CMYK cleanroom (M2.4-ish — 4-component baseline) ────────────────
+//
+// libjpeg-turbo handles two flavors of 4-comp baseline JPEG:
+//   - APP14 ColorTransform=0 → raw CMYK; output is C, M, Y, K bytes
+//     per pixel (no color conversion)
+//   - APP14 ColorTransform=2 → YCCK (Y/Cb/Cr/K source); libjpeg
+//     converts internally to CMYK by running YCbCr→RGB on the first
+//     three channels then inverting (C=255-R, M=255-G, Y=255-B) and
+//     passing K through.
+// (ColorTransform=1 only applies to 3-comp; not relevant here.)
+//
+// The committed fixture is YCCK (APP14 byte 11 = 0x02). Byte-perfect
+// parity with the wrapper requires both the 4-channel scan path AND
+// the YCCK→CMYK conversion using the same fixed-point YCbCr→RGB
+// constants as the existing 3-comp path.
+
+test "cleanroom CMYK 4x4 byte-perfect vs wrapper (YCCK ColorTransform=2)" {
+    const allocator = std.testing.allocator;
+
+    var cleanroom = try jpegz.internal.cleanroomDecode(allocator, fixture_baseline_4x4_cmyk);
+    defer cleanroom.deinit(allocator);
+
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_baseline_4x4_cmyk);
+    defer wrapper.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), cleanroom.width);
+    try std.testing.expectEqual(@as(u32, 4), cleanroom.height);
+    try std.testing.expectEqual(@as(u8, 4), cleanroom.channels);
+    try std.testing.expectEqual(jpegz.PixelLayout.cmyk, cleanroom.layout);
+    try std.testing.expectEqual(@as(usize, 4 * 4 * 4), cleanroom.pixels.len);
+
+    // Byte-perfect against the libjpeg-turbo wrapper.
+    try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+}

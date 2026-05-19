@@ -231,29 +231,25 @@ pub fn decodeWithOptions(
     data: []const u8,
     options: DecodeOptions,
 ) DecodeError!Image {
-    // Phase 2 dispatch: try cleanroom paths in order; each returns
-    // `error.NotImplemented` if it doesn't handle the variant. Final
-    // fallback is the libjpeg-turbo wrapper. Each retired libjpeg
-    // path shrinks the wrapper's role until Phase 2 completes.
+    // Cleanroom-only at runtime. Each cleanroom path returns
+    // `error.NotImplemented` for variants it doesn't own; the
+    // dispatcher tries them in order and surfaces NotImplemented
+    // to the caller if none match — NEVER falls back to a
+    // libjpeg/charls runtime dependency. The C wrappers live
+    // exclusively under `jpegz.internal.*` as build-time oracles
+    // for byte-perfect regression testing.
+    //
+    // (The lone documented exception is `jpegz.jpeg2000.decode`,
+    // which delegates to openjpeg until M2.7 cleanroom JP2 ships —
+    // separate entry point, not reached through this dispatcher.)
     const baseline = @import("decode/baseline.zig");
-    const wrapper = @import("ffi/libjpeg_wrapper.zig");
 
     // JPEG-LS comes first: T.87 uses a different SOF marker (SOF55 =
     // 0xF7) that the other cleanroom paths' marker walkers don't
     // recognize — they'd misclassify and surface InvalidMarker
-    // instead of NotImplemented. Try the cleanroom first (B2.2),
-    // fall through to charls (B2.1) for variants the cleanroom
-    // doesn't yet handle.
+    // instead of NotImplemented.
     const jpegls_cleanroom = @import("decode/jpegls.zig");
     if (jpegls_cleanroom.decode(allocator, data)) |img| {
-        return img;
-    } else |err| switch (err) {
-        error.NotImplemented => {},
-        else => return err,
-    }
-
-    const charls_wrapper = @import("ffi/charls_wrapper.zig");
-    if (charls_wrapper.decode(allocator, data)) |img| {
         return img;
     } else |err| switch (err) {
         error.NotImplemented => {},
@@ -319,12 +315,14 @@ pub fn decodeWithOptions(
         else => return err,
     }
 
-    // Final: libjpeg-turbo wrapper handles everything jpegz hasn't
-    // cleanroomed yet (SOF1 12-bit, SOF3 12/16-bit, SOF11). JPEG-LS
-    // was already handled at the top of dispatch via charls_wrapper.
-    // Wrapper currently ignores `options.threads` — libjpeg-turbo's
-    // traditional API has no thread parameter.
-    return wrapper.decode(allocator, data);
+    // No cleanroom path matched. Cleanroom-only at runtime: surface
+    // `NotImplemented` to the caller rather than silently falling
+    // back to a runtime libjpeg/charls dependency. The two C-FFI
+    // wrappers remain available exclusively as build-time oracles
+    // via `jpegz.internal.{wrapperDecode, charlsDecode,
+    // wrapperDumpCoefs}` for byte-perfect regression testing — they
+    // are never reached through this public dispatcher.
+    return error.NotImplemented;
 }
 
 /// Decode JPEG row-by-row, invoking `cb` once per emitted row in

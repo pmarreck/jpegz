@@ -26,6 +26,7 @@ const bitstream = @import("bitstream.zig");
 const huffman = @import("huffman.zig");
 const idct = @import("idct.zig");
 const color = @import("color.zig");
+const cmyk_mod = @import("cmyk.zig");
 const findings_mod = @import("findings.zig");
 const thread_pool = @import("thread_pool.zig");
 
@@ -139,6 +140,11 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
     // Restart interval (DRI marker) — number of MCUs between RSTm
     // resync markers. 0 disables restart handling.
     var restart_interval: u32 = 0;
+    // APP14 (Adobe) ColorTransform byte. Only consulted for
+    // 4-component frames to pick CMYK vs YCCK assembly. `.none`
+    // (no APP14 seen) → treat 4-comp as raw CMYK per libjpeg-turbo
+    // default.
+    var app14_color_transform: cmyk_mod.ColorTransform = .none;
 
     // ── Marker walk until we reach SOS ─────────────────────────
     while (pos + 1 < data.len) {
@@ -187,11 +193,15 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                 // YCbCr→RGB (A1 Part B). Other component counts at
                 // P=12 still fall through to the wrapper.
                 frame = try parseSof(data, pos);
+                // 8-bit: 1/3/4 components (gray, RGB/YCbCr, CMYK/YCCK).
+                // 12-bit: 1/3 only (CMYK 12-bit isn't in v1 scope).
                 const p_ok = frame.?.precision == 8 or
                     (frame.?.precision == 12 and
                         (frame.?.num_components == 1 or frame.?.num_components == 3));
                 if (!p_ok) return fail("sof_precision_not_supported", error.NotImplemented);
-                if (frame.?.num_components != 1 and frame.?.num_components != 3)
+                if (frame.?.num_components == 0 or frame.?.num_components > 4)
+                    return fail("sof_unsupported_ncomp", error.NotImplemented);
+                if (frame.?.num_components == 2)
                     return fail("sof_unsupported_ncomp", error.NotImplemented);
                 var i: usize = 0;
                 while (i < frame.?.num_components) : (i += 1) {
@@ -257,11 +267,24 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                     &ac_tables,
                     restart_interval,
                     options,
+                    app14_color_transform,
                 );
             },
             // Standalone markers we can skip safely:
             0x01, 0xD0...0xD7 => continue, // TEM, RST0..RST7
-            // Length-prefixed markers we can skip (APPn, COM, etc.):
+            // APP14 (Adobe) — parse out ColorTransform for 4-component
+            // CMYK/YCCK disambiguation. Other APP segments are skipped.
+            0xEE => {
+                const seg_len = parseSegmentLength(data, pos);
+                if (seg_len >= 2 and pos + seg_len <= data.len and pos + seg_len > pos + 2) {
+                    const body = data[pos + 2 .. pos + seg_len];
+                    if (cmyk_mod.parseApp14ColorTransform(body)) |ct| {
+                        app14_color_transform = ct;
+                    }
+                }
+                pos += parseSegmentLength(data, pos);
+            },
+            // Length-prefixed markers we can skip (other APPn, COM, etc.):
             else => pos += parseSegmentLength(data, pos),
         }
     }
@@ -399,6 +422,7 @@ fn decodeScan(
     ac_tables: *const [4]?huffman.HuffmanTable,
     restart_interval: u32,
     options: DecodeOptions,
+    app14_color_transform: cmyk_mod.ColorTransform,
 ) Error!types.Image {
     const channels: u8 = frame.num_components;
     const width: u32 = frame.width;
@@ -432,8 +456,8 @@ fn decodeScan(
     // Per-component plane dimensions (at component's natural resolution).
     // For non-interleaved scans (channels==1) the H/V factors are ignored
     // and the plane is just one block per MCU — matches the MCU loop.
-    var plane_w: [3]u32 = .{ 0, 0, 0 };
-    var plane_h: [3]u32 = .{ 0, 0, 0 };
+    var plane_w: [4]u32 = .{ 0, 0, 0, 0 };
+    var plane_h: [4]u32 = .{ 0, 0, 0, 0 };
     {
         var i: usize = 0;
         while (i < channels) : (i += 1) {
@@ -444,7 +468,7 @@ fn decodeScan(
         }
     }
 
-    var planes: [3][]u8 = .{ &.{}, &.{}, &.{} };
+    var planes: [4][]u8 = .{ &.{}, &.{}, &.{}, &.{} };
     {
         var i: usize = 0;
         while (i < channels) : (i += 1) {
@@ -466,8 +490,8 @@ fn decodeScan(
     // natural row-major order. Memory cost is modest: a 1500×1026 4:4:4
     // image is 188×129×3×64×4 = ~18.6 MB; a typical 216×216 photo is
     // 27×27×3×64×4 = ~559 KB.
-    var blocks_w: [3]u32 = .{ 0, 0, 0 };
-    var blocks_h: [3]u32 = .{ 0, 0, 0 };
+    var blocks_w: [4]u32 = .{ 0, 0, 0, 0 };
+    var blocks_h: [4]u32 = .{ 0, 0, 0, 0 };
     {
         var i: usize = 0;
         while (i < channels) : (i += 1) {
@@ -477,7 +501,7 @@ fn decodeScan(
             blocks_h[i] = mcu_rows * eff_v;
         }
     }
-    var coef_buf: [3][]i32 = .{ &.{}, &.{}, &.{} };
+    var coef_buf: [4][]i32 = .{ &.{}, &.{}, &.{}, &.{} };
     {
         var i: usize = 0;
         while (i < channels) : (i += 1) {
@@ -497,7 +521,9 @@ fn decodeScan(
     // to 0 and reset whenever a restart marker is encountered." The
     // running value walks through coefficient differentials; use i32
     // so multi-block accumulation can't overflow i16's ±32767 range.
-    var prev_dc: [3]i32 = .{ 0, 0, 0 };
+    // Sized [4] for 4-component (CMYK / YCCK) frames; 1- and 3-comp
+    // scans only touch [0..channels).
+    var prev_dc: [4]i32 = .{ 0, 0, 0, 0 };
     // Counts MCUs since the last RST. Reset to zero on every RST
     // (and at scan start). Used only when restart_interval > 0.
     var mcus_since_rst: u32 = 0;
@@ -528,7 +554,7 @@ fn decodeScan(
                 br.seekToMarker();
                 if (!br.marker_seen) return fail("rst_no_marker_seen", error.InvalidMarker);
                 if (br.marker_byte != expected_rst) return fail("rst_wrong_marker", error.InvalidMarker);
-                prev_dc = .{ 0, 0, 0 };
+                prev_dc = .{ 0, 0, 0, 0 };
                 mcus_since_rst = 0;
                 expected_rst = 0xD0 + ((expected_rst - 0xD0 + 1) & 0x07);
                 br.skipPastMarker();
@@ -668,7 +694,31 @@ fn decodeScan(
         }
     }
 
-    return assembleOutput(allocator, frame, channels, width, height, max_h, max_v, plane_w, plane_h, &planes, pool_ptr);
+    if (channels == 4) {
+        // 4-component (CMYK / YCCK) assembly. Delegates to `cmyk.zig`
+        // which handles both the raw-CMYK pass-through and the
+        // YCCK→CMYK conversion (per APP14 `ColorTransform`). We free
+        // the per-component planes after assembly succeeds (mirrors
+        // `assembleOutput`'s built-in cleanup at line 1367 in the
+        // 1/3-comp path).
+        const img = try cmyk_mod.assemble(
+            allocator,
+            width,
+            height,
+            plane_w,
+            plane_h,
+            .{ planes[0], planes[1], planes[2], planes[3] },
+            app14_color_transform,
+        );
+        var p: usize = 0;
+        while (p < channels) : (p += 1) allocator.free(planes[p]);
+        return img;
+    }
+    // 1- and 3-component (grayscale / RGB / YCbCr) — existing path.
+    const plane_w_3: [3]u32 = .{ plane_w[0], plane_w[1], plane_w[2] };
+    const plane_h_3: [3]u32 = .{ plane_h[0], plane_h[1], plane_h[2] };
+    const planes_3: [3][]u8 = .{ planes[0], planes[1], planes[2] };
+    return assembleOutput(allocator, frame, channels, width, height, max_h, max_v, plane_w_3, plane_h_3, &planes_3, pool_ptr);
 }
 
 /// SOF1 12-bit extended sequential, 1-component grayscale (A1 milestone).
@@ -708,7 +758,7 @@ fn decodeScan12Gray(
     defer allocator.free(plane);
 
     var br = bitstream.BitReader.init(data);
-    var prev_dc: [3]i32 = .{ 0, 0, 0 };
+    var prev_dc: [4]i32 = .{ 0, 0, 0, 0 };
     var mcus_since_rst: u32 = 0;
     var expected_rst: u8 = 0xD0;
     var lenient_state: LenientState = .{
@@ -725,7 +775,7 @@ fn decodeScan12Gray(
                 br.seekToMarker();
                 if (!br.marker_seen) return fail("rst_no_marker_seen", error.InvalidMarker);
                 if (br.marker_byte != expected_rst) return fail("rst_wrong_marker", error.InvalidMarker);
-                prev_dc = .{ 0, 0, 0 };
+                prev_dc = .{ 0, 0, 0, 0 };
                 mcus_since_rst = 0;
                 expected_rst = 0xD0 + ((expected_rst - 0xD0 + 1) & 0x07);
                 br.skipPastMarker();
@@ -869,7 +919,7 @@ fn decodeScan12Rgb(
 
     // ── Phase 1: serial entropy decode → coef_buf ─────────────────
     var br = bitstream.BitReader.init(data);
-    var prev_dc: [3]i32 = .{ 0, 0, 0 };
+    var prev_dc: [4]i32 = .{ 0, 0, 0, 0 };
     var mcus_since_rst: u32 = 0;
     var expected_rst: u8 = 0xD0;
     var lenient_state: LenientState = .{
@@ -884,7 +934,7 @@ fn decodeScan12Rgb(
                 br.seekToMarker();
                 if (!br.marker_seen) return fail("rst_no_marker_seen", error.InvalidMarker);
                 if (br.marker_byte != expected_rst) return fail("rst_wrong_marker", error.InvalidMarker);
-                prev_dc = .{ 0, 0, 0 };
+                prev_dc = .{ 0, 0, 0, 0 };
                 mcus_since_rst = 0;
                 expected_rst = 0xD0 + ((expected_rst - 0xD0 + 1) & 0x07);
                 br.skipPastMarker();
@@ -1067,7 +1117,7 @@ fn decodeBlockCoefficients(
     dc_tables: *const [4]?huffman.HuffmanTable,
     ac_tables: *const [4]?huffman.HuffmanTable,
     quant_tables: *const [4]?[64]u16,
-    prev_dc: *[3]i32,
+    prev_dc: *[4]i32,
     out: *[64]i32,
     precision: u8,
     lenient: *LenientState,
