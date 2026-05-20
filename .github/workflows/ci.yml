@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [yolo]
+  pull_request:
+    branches: [yolo]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            name: macOS ARM
+          - os: ubuntu-latest
+            name: Linux Intel
+          - os: ubuntu-24.04-arm
+            name: Linux ARM
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libjpeg-dev libopenjp2-7-dev
+
+      - name: Install system deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install jpeg-turbo openjpeg
+
+      - name: Build (without charls JPEG-LS support)
+        # Vendored charls source is provided by the Nix flake (CHARLS_SRC).
+        # Outside Nix we disable JPEG-LS to keep CI self-contained; system
+        # libjpeg-turbo + openjpeg still exercise baseline / progressive /
+        # JPEG 2000 paths through the FFI wrappers.
+        run: zig build -Dwith-charls=false
+
+      - name: Test (without charls JPEG-LS support)
+        run: zig build test -Dwith-charls=false
