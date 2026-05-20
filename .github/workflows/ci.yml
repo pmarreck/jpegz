@@ -5,47 +5,48 @@ on:
     branches: [yolo]
   pull_request:
     branches: [yolo]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  build-and-test:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15
-            name: macOS ARM
-          - os: ubuntu-latest
-            name: Linux Intel
-          - os: ubuntu-24.04-arm
-            name: Linux ARM
+          - runner: ubuntu-latest
+            system: x86_64-linux
+            name: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+            name: linux-aarch64
+          - runner: macos-latest
+            system: aarch64-darwin
+            name: macos-aarch64
 
+    runs-on: ${{ matrix.runner }}
     name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
+      - uses: DeterminateSystems/nix-installer-action@main
 
-      - name: Install system deps (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libjpeg-dev libopenjp2-7-dev
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+        timeout-minutes: 5
+        continue-on-error: true
 
-      - name: Install system deps (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install jpeg-turbo openjpeg
+      - name: Build
+        # Use the Nix flake (matches Garnix). The apt-based path can't
+        # reproduce the libjpeg-turbo + openjpeg + vendored charls
+        # plumbing (pkgsStatic + -Dlibjpeg-include / -Dopenjpeg-include /
+        # -Dcharls-src) that the flake bakes in. Reshaped to dogfood the
+        # flake instead of maintaining a parallel apt build.
+        run: nix build .#packages.${{ matrix.system }}.default -L
 
-      - name: Build (without charls JPEG-LS support)
-        # Vendored charls source is provided by the Nix flake (CHARLS_SRC).
-        # Outside Nix we disable JPEG-LS to keep CI self-contained; system
-        # libjpeg-turbo + openjpeg still exercise baseline / progressive /
-        # JPEG 2000 paths through the FFI wrappers.
-        run: zig build -Dwith-charls=false
-
-      - name: Test (without charls JPEG-LS support)
-        run: zig build test -Dwith-charls=false
+      - name: Test
+        run: nix build .#checks.${{ matrix.system }}.test -L
