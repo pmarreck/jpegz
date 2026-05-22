@@ -45,6 +45,72 @@ inline fn fail(comptime tag: []const u8, err: errors.DecodeError) errors.DecodeE
     return err;
 }
 
+/// Resync the entropy stream at a restart-interval boundary
+/// (T.81 §F.2.1.3). Strict mode hard-fails on a missing or
+/// wrong-cycle RSTm marker. Lenient mode + sink emits a warn finding
+/// (`restart_marker_missing` or `restart_marker_unexpected`), resets
+/// the DC predictors, advances `expected_rst` to the next position
+/// in the 0xD0..0xD7 cycle, and continues. Any non-RST marker (EOI,
+/// DNL, premature SOF) still hard-fails so callers see real
+/// end-of-scan signals instead of pixel garbage.
+fn handleRstResync(
+    br: *bitstream.BitReader,
+    expected_rst: *u8,
+    prev_dc: *[4]i32,
+    mcus_since_rst: *u32,
+    options: DecodeOptions,
+) errors.DecodeError!void {
+    // Force the reader to look ahead for the marker — the bit
+    // buffer may still hold padding bits that haven't triggered a
+    // refill yet.
+    br.seekToMarker();
+
+    if (!br.marker_seen) {
+        if (options.lenient) {
+            if (options.findings_sink) |sink| {
+                sink.emit(.warn, .restart_marker_missing,
+                    @intCast(br.byte_pos),
+                    "expected RSTm marker not found at restart-interval boundary; continuing with reset DC predictors")
+                    catch return error.OutOfMemory;
+            }
+            prev_dc.* = .{ 0, 0, 0, 0 };
+            mcus_since_rst.* = 0;
+            expected_rst.* = 0xD0 + ((expected_rst.* - 0xD0 + 1) & 0x07);
+            return;
+        }
+        return fail("rst_no_marker_seen", error.InvalidMarker);
+    }
+
+    if (br.marker_byte != expected_rst.*) {
+        const got_rst = br.marker_byte >= 0xD0 and br.marker_byte <= 0xD7;
+        if (options.lenient and got_rst) {
+            if (options.findings_sink) |sink| {
+                var buf: [96]u8 = undefined;
+                const detail = std.fmt.bufPrint(&buf,
+                    "expected RST{d} (0x{x:0>2}) but got RST{d} (0x{x:0>2})",
+                    .{ expected_rst.* - 0xD0, expected_rst.*,
+                       br.marker_byte - 0xD0, br.marker_byte })
+                    catch buf[0..0];
+                sink.emit(.warn, .restart_marker_unexpected,
+                    @intCast(br.byte_pos), detail) catch return error.OutOfMemory;
+            }
+            prev_dc.* = .{ 0, 0, 0, 0 };
+            mcus_since_rst.* = 0;
+            // Resync expected_rst to the cycle after what we just saw.
+            expected_rst.* = 0xD0 + ((br.marker_byte - 0xD0 + 1) & 0x07);
+            br.skipPastMarker();
+            return;
+        }
+        return fail("rst_wrong_marker", error.InvalidMarker);
+    }
+
+    // Happy path: marker matches.
+    prev_dc.* = .{ 0, 0, 0, 0 };
+    mcus_since_rst.* = 0;
+    expected_rst.* = 0xD0 + ((expected_rst.* - 0xD0 + 1) & 0x07);
+    br.skipPastMarker();
+}
+
 /// JPEG zig-zag scan order (T.81 Figure A.6). Maps zig-zag index
 /// (the order in which AC coefficients arrive in the entropy stream)
 /// to natural (row-major) order in the 8×8 block.
@@ -615,16 +681,7 @@ fn decodeScan(
             // an RSTm marker (FF D0..D7) consumed, prev_dc reset
             // to zero. Markers cycle through 0..7 across the scan.
             if (restart_interval > 0 and mcus_since_rst == restart_interval) {
-                // Force the reader to look ahead for the marker — the
-                // bit buffer may still hold padding bits that haven't
-                // triggered a refill yet.
-                br.seekToMarker();
-                if (!br.marker_seen) return fail("rst_no_marker_seen", error.InvalidMarker);
-                if (br.marker_byte != expected_rst) return fail("rst_wrong_marker", error.InvalidMarker);
-                prev_dc = .{ 0, 0, 0, 0 };
-                mcus_since_rst = 0;
-                expected_rst = 0xD0 + ((expected_rst - 0xD0 + 1) & 0x07);
-                br.skipPastMarker();
+                try handleRstResync(&br, &expected_rst, &prev_dc, &mcus_since_rst, options);
             }
             // Per T.81 §A.2.3 / F.1.5: when the scan has multiple
             // components, the MCU contains, for each component in

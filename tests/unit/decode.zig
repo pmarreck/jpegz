@@ -1370,6 +1370,90 @@ test "cleanroom JPEG-LS emits Finding(.warn, .extraneous_bytes_before_marker)" {
     try std.testing.expectEqual(@as(?u64, 2), offset_seen);
 }
 
+test "cleanroom lenient: RST cycle mismatch emits Finding(.warn, .restart_marker_unexpected) + recovers" {
+    const allocator = std.testing.allocator;
+
+    // baseline_128x128_dri4 has DRI=4 and natural RSTm cycle starting at
+    // RST0 (0xD0). First FFD0 is at byte offset 652. Mutate it to FFD5
+    // (RST5) so the decoder sees the wrong cycle byte. In strict mode
+    // this returns error.InvalidMarker; in lenient mode + sink it must
+    // emit a warn, resync, and decode the rest.
+    const src = fixture_baseline_128x128_dri4;
+    var corrupted = try allocator.alloc(u8, src.len);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted, src);
+    try std.testing.expectEqual(@as(u8, 0xFF), corrupted[652]);
+    try std.testing.expectEqual(@as(u8, 0xD0), corrupted[653]);
+    corrupted[653] = 0xD5; // RST5 — wrong cycle
+
+    // Strict path: returns InvalidMarker.
+    try std.testing.expectError(error.InvalidMarker,
+        jpegz.internal.cleanroomDecode(allocator, corrupted));
+
+    // Lenient + sink path: warn + recover.
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+    var image = try jpegz.internal.cleanroomDecodeLenientWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 128), image.width);
+
+    var found = false;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .restart_marker_unexpected) {
+            found = true;
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "cleanroom lenient: RST missing emits Finding(.warn, .restart_marker_missing) + recovers" {
+    const allocator = std.testing.allocator;
+
+    // Same fixture; replace FFD0 (first RST) with AA BB so seekToMarker
+    // can't see a marker. Strict mode → InvalidMarker; lenient + sink →
+    // warn + reset DC predictors + continue from current byte.
+    //
+    // NB: the AA BB bytes will be consumed as garbage entropy data by
+    // the in-flight scan, producing nonsense pixels in that MCU's
+    // neighborhood — but the decoder MUST NOT crash, and a single warn
+    // MUST surface.
+    const src = fixture_baseline_128x128_dri4;
+    var corrupted = try allocator.alloc(u8, src.len);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted, src);
+    corrupted[652] = 0xAA;
+    corrupted[653] = 0xBB;
+
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    // Lenient path. May complete OR may surface a different error
+    // (e.g. TruncatedStream if entropy desyncs too badly). What's
+    // required is: IF it completes successfully, the warn is present.
+    if (jpegz.internal.cleanroomDecodeLenientWithFindings(allocator, corrupted, &sink)) |img| {
+        var img_mut = img;
+        defer img_mut.deinit(allocator);
+        var found = false;
+        for (sink.items()) |f| {
+            if (f.severity == .warn and f.code == .restart_marker_missing) {
+                found = true;
+            }
+        }
+        try std.testing.expect(found);
+    } else |_| {
+        // Some lenient runs error downstream — still acceptable as
+        // long as the warn was emitted before the error.
+        var found = false;
+        for (sink.items()) |f| {
+            if (f.severity == .warn and f.code == .restart_marker_missing) {
+                found = true;
+            }
+        }
+        try std.testing.expect(found);
+    }
+}
+
 test "cleanroom emits Finding(.warn, .entropy_fill_bytes) for extra 0xFF in marker prefix" {
     const allocator = std.testing.allocator;
 
