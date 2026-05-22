@@ -1370,6 +1370,80 @@ test "cleanroom JPEG-LS emits Finding(.warn, .extraneous_bytes_before_marker)" {
     try std.testing.expectEqual(@as(?u64, 2), offset_seen);
 }
 
+test "cleanroom emits Finding(.warn, .adobe_app14_conflicts_jfif) when both present and APP14 disagrees" {
+    const allocator = std.testing.allocator;
+
+    // baseline_2x2_rgb.jpg starts with SOI(2) + JFIF APP0(18 bytes). Inject
+    // a 16-byte APP14 (Adobe, ColorTransform=0 / unknown/raw RGB) right
+    // after the JFIF segment but before DQT. JFIF implies YCbCr for
+    // 3-component; APP14 ColorTransform=0 disagrees → conflict warn.
+    const app14: [16]u8 = .{
+        0xFF, 0xEE,             // APP14 marker
+        0x00, 0x0E,             // segment length = 14 (2 + 12)
+        'A', 'd', 'o', 'b', 'e', 0x00, // "Adobe\0"
+        0x64,                   // DCTEncodeVersion = 100
+        0x00, 0x00,             // APP14Flags0
+        0x00, 0x00,             // APP14Flags1
+        0x00,                   // ColorTransform = 0 (CMYK / raw RGB)
+    };
+
+    const src = fixture_baseline_2x2_rgb;
+    var corrupted = try allocator.alloc(u8, src.len + app14.len);
+    defer allocator.free(corrupted);
+    // SOI + JFIF APP0 occupy bytes 0..19 (SOI=2 + APP0 length 0x10+2=18).
+    @memcpy(corrupted[0..20], src[0..20]);
+    @memcpy(corrupted[20..36], &app14);
+    @memcpy(corrupted[36..], src[20..]);
+
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.cleanroomDecodeWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    // Decode must still succeed (libjpeg honors APP14 over JFIF here).
+    try std.testing.expectEqual(@as(u32, 2), image.width);
+    try std.testing.expectEqual(@as(u32, 2), image.height);
+
+    var found = false;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .adobe_app14_conflicts_jfif) {
+            found = true;
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "cleanroom emits NO Finding(.adobe_app14_conflicts_jfif) when APP14 says YCbCr (agreement)" {
+    const allocator = std.testing.allocator;
+
+    // Same setup but APP14 ColorTransform=1 (YCbCr) — agrees with JFIF.
+    // No conflict, no finding.
+    const app14: [16]u8 = .{
+        0xFF, 0xEE, 0x00, 0x0E,
+        'A', 'd', 'o', 'b', 'e', 0x00,
+        0x64, 0x00, 0x00, 0x00, 0x00,
+        0x01, // ColorTransform = 1 (YCbCr)
+    };
+
+    const src = fixture_baseline_2x2_rgb;
+    var corrupted = try allocator.alloc(u8, src.len + app14.len);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0..20], src[0..20]);
+    @memcpy(corrupted[20..36], &app14);
+    @memcpy(corrupted[36..], src[20..]);
+
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.cleanroomDecodeWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    for (sink.items()) |f| {
+        try std.testing.expect(!(f.code == .adobe_app14_conflicts_jfif));
+    }
+}
+
 test "cleanroom progressive emits Finding(.warn, .extraneous_bytes_before_marker)" {
     const allocator = std.testing.allocator;
 

@@ -145,6 +145,15 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
     // (no APP14 seen) → treat 4-comp as raw CMYK per libjpeg-turbo
     // default.
     var app14_color_transform: cmyk_mod.ColorTransform = .none;
+    // Track whether the file declared JFIF (APP0 "JFIF\0") so that
+    // we can flag colorspace conflicts when APP14 (Adobe) also shows
+    // up with a non-YCbCr ColorTransform — JFIF implies YCbCr for
+    // 3-component frames.
+    var saw_jfif: bool = false;
+    // Offset of the conflicting APP14 segment (set during walk; emit
+    // happens after SOF arrives so the warning carries the SOF
+    // component count if needed).
+    var app14_conflict_offset: ?u64 = null;
 
     // ── Marker walk until we reach SOS ─────────────────────────
     while (pos + 1 < data.len) {
@@ -203,6 +212,28 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                     return fail("sof_unsupported_ncomp", error.NotImplemented);
                 if (frame.?.num_components == 2)
                     return fail("sof_unsupported_ncomp", error.NotImplemented);
+                // APP14/JFIF colorspace-conflict warn fires here, now
+                // that we know the component count. JFIF strictly
+                // applies to 3-component frames (1-component is
+                // grayscale; 4-component is outside JFIF's contract,
+                // so APP14 always wins without conflict there).
+                if (app14_conflict_offset != null and frame.?.num_components == 3) {
+                    if (options.findings_sink) |sink| {
+                        var buf: [128]u8 = undefined;
+                        const ct_byte: u8 = switch (app14_color_transform) {
+                            .cmyk => 0,
+                            .ycbcr => 1,
+                            .ycck => 2,
+                            .none => 0xFF,
+                        };
+                        const detail = std.fmt.bufPrint(&buf,
+                            "JFIF APP0 implies YCbCr but Adobe APP14 ColorTransform={d} disagrees",
+                            .{ct_byte}) catch buf[0..0];
+                        sink.emit(.warn, .adobe_app14_conflicts_jfif,
+                            app14_conflict_offset, detail) catch return error.OutOfMemory;
+                    }
+                    app14_conflict_offset = null;
+                }
                 var i: usize = 0;
                 while (i < frame.?.num_components) : (i += 1) {
                     const c = &frame.?.components[i];
@@ -272,14 +303,36 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
             },
             // Standalone markers we can skip safely:
             0x01, 0xD0...0xD7 => continue, // TEM, RST0..RST7
+            // APP0 — detect JFIF signature so we can flag colorspace
+            // conflicts when APP14 also disagrees. Body is skipped
+            // beyond the signature check.
+            0xE0 => {
+                const seg_len = parseSegmentLength(data, pos);
+                if (seg_len >= 7 and pos + seg_len <= data.len) {
+                    const body = data[pos + 2 .. pos + seg_len];
+                    if (body.len >= 5 and std.mem.eql(u8, body[0..5], "JFIF\x00")) {
+                        saw_jfif = true;
+                    }
+                }
+                pos += seg_len;
+            },
             // APP14 (Adobe) — parse out ColorTransform for 4-component
             // CMYK/YCCK disambiguation. Other APP segments are skipped.
             0xEE => {
+                const app14_marker_offset = pos - 2; // FF EE byte position
                 const seg_len = parseSegmentLength(data, pos);
                 if (seg_len >= 2 and pos + seg_len <= data.len and pos + seg_len > pos + 2) {
                     const body = data[pos + 2 .. pos + seg_len];
                     if (cmyk_mod.parseApp14ColorTransform(body)) |ct| {
                         app14_color_transform = ct;
+                        // JFIF implies YCbCr (3-component); APP14
+                        // ColorTransform != ycbcr disagrees. Stash the
+                        // marker offset; emit after we see SOF (we want
+                        // the component count to confirm 3-comp scope,
+                        // but the warning surfaces the moment we know).
+                        if (saw_jfif and ct != .ycbcr) {
+                            app14_conflict_offset = @intCast(app14_marker_offset);
+                        }
                     }
                 }
                 pos += parseSegmentLength(data, pos);

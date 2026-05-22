@@ -73,6 +73,11 @@ pub const FindingCode = enum(u32) {
     // bytes before marker 0xXX". The decoder skips them and resumes,
     // but the bytes are spec violations worth flagging.
     extraneous_bytes_before_marker = 8,
+    // Extra 0xFF bytes in a marker prefix (T.81 §B.1.1.2: any number
+    // of 0xFF bytes preceding a marker byte is legal "fill"). libjpeg
+    // silently absorbs; jpegz emits warn so deviations from canonical
+    // encoding are visible to strict validators.
+    entropy_fill_bytes             = 9,
 
     // ── T.81 codec-specific (50..99) ─────────────────────────────
     invalid_sof_precision       = 50,
@@ -85,6 +90,11 @@ pub const FindingCode = enum(u32) {
     restart_marker_unexpected   = 57,
     dct_coefficient_overflow    = 58,
     progressive_scan_invalid    = 59,
+    // Both APP0 JFIF and APP14 Adobe present with conflicting color-
+    // space implications (JFIF implies YCbCr for 3-component; APP14
+    // ColorTransform != 1 disagrees). Decoder honors APP14 (libjpeg
+    // parity) but surfaces the conflict for strict validators.
+    adobe_app14_conflicts_jfif  = 60,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────
     lossless_predictor_invalid       = 100,
