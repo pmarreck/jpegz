@@ -1563,6 +1563,56 @@ test "cleanroom emits NO Finding(.adobe_app14_conflicts_jfif) when APP14 says YC
     }
 }
 
+test "cleanroom progressive emits Finding(.warn, .entropy_fill_bytes) for extra 0xFF" {
+    const allocator = std.testing.allocator;
+
+    const src = fixture_progressive_8x8;
+    var corrupted = try allocator.alloc(u8, src.len + 2);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0..2], src[0..2]); // SOI
+    corrupted[2] = 0xFF;
+    corrupted[3] = 0xFF;
+    @memcpy(corrupted[4..], src[2..]);
+
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.progressiveDecodeWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 8), image.width);
+    var found = false;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .entropy_fill_bytes) found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "cleanroom lossless emits Finding(.warn, .entropy_fill_bytes) for extra 0xFF" {
+    const allocator = std.testing.allocator;
+
+    const src = fixture_lossless_4x4_gray8;
+    var corrupted = try allocator.alloc(u8, src.len + 2);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0..2], src[0..2]);
+    corrupted[2] = 0xFF;
+    corrupted[3] = 0xFF;
+    @memcpy(corrupted[4..], src[2..]);
+
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.losslessDecodeWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    var found = false;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .entropy_fill_bytes) found = true;
+    }
+    try std.testing.expect(found);
+}
+
 test "cleanroom progressive emits Finding(.warn, .extraneous_bytes_before_marker)" {
     const allocator = std.testing.allocator;
 
