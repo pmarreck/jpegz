@@ -19,7 +19,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const errors = @import("../core/errors.zig");
 const types = @import("../jpegz.zig");
-const build_options = @import("build_options");
+const build_options = @import("jpegz_build_options");
 
 // `c` is namespaced behind the with_charls build option. When false
 // (consumers that don't link charls, e.g. tiffz), the @cImport never

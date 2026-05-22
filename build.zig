@@ -30,13 +30,22 @@ pub fn build(b: *std.Build) void {
         "Compile + link vendored charls (JPEG-LS support). Default true.",
     ) orelse true;
 
-    // Expose `with_charls` to Zig source via @import("build_options").
+    // Expose `with_charls` to Zig source via @import("jpegz_build_options").
     // src/ffi/charls_wrapper.zig branches its @cImport on this so the
     // charls header doesn't need to be resolvable when the gate is off.
+    //
+    // Name is intentionally namespaced (NOT the conventional
+    // `build_options`) to avoid Zig 0.16's package-graph dedup
+    // collision when a downstream consumer pulls in two jpegz versions
+    // transitively (e.g. validate pins jpegz directly AND through
+    // tiffz). Both copies would otherwise register a module called
+    // `build_options` and Zig surfaces "file exists in modules
+    // build_options1 and build_options3" errors. The jpegz-prefixed
+    // name keeps each copy's options module distinct.
     const build_options = b.addOptions();
     build_options.addOption(bool, "with_charls", with_charls);
     const build_options_mod = build_options.createModule();
-    jpegz_mod.addImport("build_options", build_options_mod);
+    jpegz_mod.addImport("jpegz_build_options", build_options_mod);
 
     // Link C deps (system; provided by Nix flake's buildInputs):
     //   - libjpeg-turbo (jpeglib.h, used by src/ffi/libjpeg_wrapper.zig)
