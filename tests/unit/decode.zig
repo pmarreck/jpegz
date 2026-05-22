@@ -1370,6 +1370,41 @@ test "cleanroom JPEG-LS emits Finding(.warn, .extraneous_bytes_before_marker)" {
     try std.testing.expectEqual(@as(?u64, 2), offset_seen);
 }
 
+test "cleanroom emits Finding(.warn, .entropy_fill_bytes) for extra 0xFF in marker prefix" {
+    const allocator = std.testing.allocator;
+
+    // T.81 §B.1.1.2: any number of 0xFF bytes preceding a marker NN
+    // is legal "fill". The canonical encoding emits exactly one. We
+    // inject 2 extra 0xFFs in front of APP0 (FF E0); the cleanroom
+    // marker walker scans past them silently today — this test forces
+    // a warn emission with the fill count.
+    //
+    // Layout: SOI(2) | inject 2x 0xFF | APP0 marker (FF E0 ...) | rest
+    const src = fixture_baseline_2x2_rgb;
+    var corrupted = try allocator.alloc(u8, src.len + 2);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0..2], src[0..2]); // SOI
+    corrupted[2] = 0xFF;
+    corrupted[3] = 0xFF;
+    @memcpy(corrupted[4..], src[2..]); // FF E0 ... — APP0 onward
+
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.cleanroomDecodeWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 2), image.width);
+
+    var found = false;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .entropy_fill_bytes) {
+            found = true;
+        }
+    }
+    try std.testing.expect(found);
+}
+
 test "cleanroom emits Finding(.warn, .adobe_app14_conflicts_jfif) when both present and APP14 disagrees" {
     const allocator = std.testing.allocator;
 

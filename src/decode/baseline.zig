@@ -177,8 +177,22 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
             }
         }
         if (pos + 1 >= data.len) return fail("walker_eof_after_ff", error.TruncatedStream);
-        // Skip 0xFF padding bytes.
+        // Skip 0xFF padding bytes (T.81 §B.1.1.2: legal "fill" but
+        // non-canonical). Emit a warn finding so strict validators
+        // see the spec deviation.
+        const fill_start = pos;
         while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
+        if (pos > fill_start) {
+            if (options.findings_sink) |sink| {
+                var buf: [80]u8 = undefined;
+                const next_marker: u8 = if (pos + 1 < data.len) data[pos + 1] else 0;
+                const detail = std.fmt.bufPrint(&buf,
+                    "{d} extra 0xFF fill byte(s) before marker 0x{x:0>2}",
+                    .{ pos - fill_start, next_marker }) catch buf[0..0];
+                sink.emit(.warn, .entropy_fill_bytes,
+                    @intCast(fill_start), detail) catch return error.OutOfMemory;
+            }
+        }
         if (pos + 1 >= data.len) return fail("walker_eof_after_ff", error.TruncatedStream);
         const marker = data[pos + 1];
         // 0xFF 0x00 here would be byte-stuffing inside an entropy stream —
