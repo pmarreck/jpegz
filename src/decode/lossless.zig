@@ -37,12 +37,18 @@ const findings_mod = @import("findings.zig");
 pub const Error = errors.DecodeError;
 
 /// Optional findings sink + future knobs. Mirrors the pattern in
-/// `baseline.zig`. The only emit site in lossless is the pre-SOS
-/// marker walker (`extraneous_bytes_before_marker`); sample-stream
-/// tolerance is intentionally NOT added — a single missing sample
-/// would cascade through the predictor chain.
+/// `baseline.zig`. Emit sites in lossless are the pre-SOS marker
+/// walker (`extraneous_bytes_before_marker`, `entropy_fill_bytes`)
+/// and the in-scan RST handler when `lenient = true` is set
+/// (`restart_marker_missing` / `restart_marker_unexpected`).
+/// Sample-stream tolerance is intentionally NOT added — a single
+/// missing sample would cascade through the predictor chain.
 pub const DecodeOptions = struct {
     findings_sink: ?*findings_mod.FindingsSink = null,
+    /// When true + `findings_sink` attached, the decoder recovers
+    /// from RST cycle mismatches and missing RST markers. Strict
+    /// mode (default) returns `error.InvalidMarker`.
+    lenient: bool = false,
 };
 
 /// State threaded into decodeScan for restart-marker handling.
@@ -192,7 +198,7 @@ pub fn decodeWithOptions(allocator: Allocator, data: []const u8, options: Decode
                 if (scan.num_components != frame.?.num_components) return error.NotImplemented;
                 if (scan.predictor < 1 or scan.predictor > 7) return error.NotImplemented;
                 pos += parseSegmentLength(data, pos);
-                pixels = try decodeScan(allocator, data, pos, &frame.?, &dc_tables, &scan, restart_interval);
+                pixels = try decodeScan(allocator, data, pos, &frame.?, &dc_tables, &scan, restart_interval, options);
                 // Lossless decode is single-pass; assume EOI follows.
                 break;
             },
@@ -325,6 +331,7 @@ fn decodeScan(
     dc_tables: *const [4]?huffman.HuffmanTable,
     scan: *const ScanInfo,
     restart_interval: u16,
+    options: DecodeOptions,
 ) Error![]u8 {
     const width: usize = frame.width;
     const height: usize = frame.height;
@@ -378,12 +385,46 @@ fn decodeScan(
             // sample uses the initial predictor (per §H.1.2.2).
             if (rst.interval > 0 and rst.samples_since == rst.interval) {
                 br.seekToMarker();
-                if (!br.marker_seen) return error.InvalidMarker;
-                if (br.marker_byte != rst.expected_rst) return error.InvalidMarker;
-                rst.expected_rst = 0xD0 + ((rst.expected_rst - 0xD0 + 1) & 0x07);
-                br.skipPastMarker();
-                rst.samples_since = 0;
-                rst.force_initial = true;
+                if (!br.marker_seen) {
+                    if (options.lenient) {
+                        if (options.findings_sink) |sink| {
+                            sink.emit(.warn, .restart_marker_missing,
+                                @intCast(br.byte_pos),
+                                "expected RSTm marker not found at restart-interval boundary; continuing with reset predictors")
+                                catch return error.OutOfMemory;
+                        }
+                        rst.expected_rst = 0xD0 + ((rst.expected_rst - 0xD0 + 1) & 0x07);
+                        rst.samples_since = 0;
+                        rst.force_initial = true;
+                    } else {
+                        return error.InvalidMarker;
+                    }
+                } else if (br.marker_byte != rst.expected_rst) {
+                    const got_rst = br.marker_byte >= 0xD0 and br.marker_byte <= 0xD7;
+                    if (options.lenient and got_rst) {
+                        if (options.findings_sink) |sink| {
+                            var buf: [96]u8 = undefined;
+                            const detail = std.fmt.bufPrint(&buf,
+                                "expected RST{d} (0x{x:0>2}) but got RST{d} (0x{x:0>2})",
+                                .{ rst.expected_rst - 0xD0, rst.expected_rst,
+                                   br.marker_byte - 0xD0, br.marker_byte })
+                                catch buf[0..0];
+                            sink.emit(.warn, .restart_marker_unexpected,
+                                @intCast(br.byte_pos), detail) catch return error.OutOfMemory;
+                        }
+                        rst.expected_rst = 0xD0 + ((br.marker_byte - 0xD0 + 1) & 0x07);
+                        br.skipPastMarker();
+                        rst.samples_since = 0;
+                        rst.force_initial = true;
+                    } else {
+                        return error.InvalidMarker;
+                    }
+                } else {
+                    rst.expected_rst = 0xD0 + ((rst.expected_rst - 0xD0 + 1) & 0x07);
+                    br.skipPastMarker();
+                    rst.samples_since = 0;
+                    rst.force_initial = true;
+                }
             }
             var ci_scan: usize = 0;
             while (ci_scan < nc) : (ci_scan += 1) {

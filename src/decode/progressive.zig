@@ -192,7 +192,7 @@ pub fn decodeAndDumpCoefs(allocator: Allocator, data: []const u8) Error!CoefDump
                 if (!seen_sof) return error.InvalidMarker;
                 const scan = try parseSos(data, pos, &frame.?);
                 pos += parseSegmentLength(data, pos);
-                pos = try decodeOneScan(data, pos, &frame.?, &dc_tables, &ac_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, &scan, restart_interval);
+                pos = try decodeOneScan(data, pos, &frame.?, &dc_tables, &ac_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, &scan, restart_interval, .{});
             },
             0x01, 0xD0...0xD7 => continue,
             else => pos += parseSegmentLength(data, pos),
@@ -231,6 +231,12 @@ pub fn decodeAndDumpCoefs(allocator: Allocator, data: []const u8) Error!CoefDump
 /// `null` sink = libjpeg-style silent tolerance (default).
 pub const DecodeOptions = struct {
     findings_sink: ?*findings_mod.FindingsSink = null,
+    /// When true + `findings_sink` attached, the decoder recovers from
+    /// RST cycle mismatches and missing RST markers (T.81 §F.2.1.3)
+    /// instead of returning `error.InvalidMarker`. Warn findings
+    /// (`restart_marker_unexpected` / `restart_marker_missing`)
+    /// surface the deviations. Strict mode is unchanged.
+    lenient: bool = false,
 };
 
 /// Decode an 8-bit progressive JPEG (T.81 SOF2). Default-options entry
@@ -393,7 +399,7 @@ pub fn decodeWithOptions(
                     max_v,
                     &scan,
                     restart_interval,
-                    options.findings_sink,
+                    options,
                 );
             },
             // Standalone markers we can skip safely.
@@ -555,10 +561,48 @@ fn handleRestart(
     prev_dc: *[3]i16,
     eob_run: *u32,
     expected_rst: *u8,
+    options: DecodeOptions,
 ) Error!void {
     br.seekToMarker();
-    if (!br.marker_seen) return error.InvalidMarker;
-    if (br.marker_byte != expected_rst.*) return error.InvalidMarker;
+
+    if (!br.marker_seen) {
+        if (options.lenient) {
+            if (options.findings_sink) |sink| {
+                sink.emit(.warn, .restart_marker_missing,
+                    @intCast(br.byte_pos),
+                    "expected RSTm marker not found at restart-interval boundary; continuing with reset DC predictors")
+                    catch return error.OutOfMemory;
+            }
+            prev_dc.* = .{ 0, 0, 0 };
+            eob_run.* = 0;
+            expected_rst.* = 0xD0 + ((expected_rst.* - 0xD0 + 1) & 0x07);
+            return;
+        }
+        return error.InvalidMarker;
+    }
+
+    if (br.marker_byte != expected_rst.*) {
+        const got_rst = br.marker_byte >= 0xD0 and br.marker_byte <= 0xD7;
+        if (options.lenient and got_rst) {
+            if (options.findings_sink) |sink| {
+                var buf: [96]u8 = undefined;
+                const detail = std.fmt.bufPrint(&buf,
+                    "expected RST{d} (0x{x:0>2}) but got RST{d} (0x{x:0>2})",
+                    .{ expected_rst.* - 0xD0, expected_rst.*,
+                       br.marker_byte - 0xD0, br.marker_byte })
+                    catch buf[0..0];
+                sink.emit(.warn, .restart_marker_unexpected,
+                    @intCast(br.byte_pos), detail) catch return error.OutOfMemory;
+            }
+            prev_dc.* = .{ 0, 0, 0 };
+            eob_run.* = 0;
+            expected_rst.* = 0xD0 + ((br.marker_byte - 0xD0 + 1) & 0x07);
+            br.skipPastMarker();
+            return;
+        }
+        return error.InvalidMarker;
+    }
+
     prev_dc.* = .{ 0, 0, 0 };
     eob_run.* = 0;
     expected_rst.* = 0xD0 + ((expected_rst.* - 0xD0 + 1) & 0x07);
@@ -594,8 +638,9 @@ fn decodeOneScan(
     max_v: u32,
     scan: *const ScanInfo,
     restart_interval: u16,
-    sink: ?*findings_mod.FindingsSink,
+    options: DecodeOptions,
 ) Error!usize {
+    const sink = options.findings_sink;
     var br = bitstream.BitReader.init(data[entropy_start..]);
     var prev_dc: [3]i16 = .{ 0, 0, 0 };
     var eob_run: u32 = 0;
@@ -623,7 +668,7 @@ fn decodeOneScan(
             var mx: u32 = 0;
             while (mx < mcu_cols) : (mx += 1) {
                 if (restart_interval > 0 and units_since_rst == restart_interval) {
-                    try handleRestart(&br, &prev_dc, &eob_run, &expected_rst);
+                    try handleRestart(&br, &prev_dc, &eob_run, &expected_rst, options);
                     units_since_rst = 0;
                 }
                 var ci: usize = 0;
@@ -679,7 +724,7 @@ fn decodeOneScan(
             var bx: u32 = 0;
             while (bx < bw) : (bx += 1) {
                 if (restart_interval > 0 and units_since_rst == restart_interval) {
-                    try handleRestart(&br, &prev_dc, &eob_run, &expected_rst);
+                    try handleRestart(&br, &prev_dc, &eob_run, &expected_rst, options);
                     units_since_rst = 0;
                 }
                 const off: usize = (@as(usize, by) * @as(usize, stride) +

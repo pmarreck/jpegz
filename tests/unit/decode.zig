@@ -449,6 +449,7 @@ test "fancy upsampling matches libjpeg-turbo on 4:2:0 (cleanroom == wrapper)" {
 
 /// 4×4 16-bit grayscale lossless. precision 16, all 0x8000.
 const fixture_lossless_4x4_gray16 = @embedFile("fixtures/lossless_4x4_gray16.jpg");
+const fixture_lossless_16x16_gray_dri = @embedFile("fixtures/lossless_16x16_gray_dri.jpg");
 
 test "decode 4x4 16-bit grayscale lossless (SOF3) JPEG" {
     const allocator = std.testing.allocator;
@@ -1561,6 +1562,68 @@ test "cleanroom emits NO Finding(.adobe_app14_conflicts_jfif) when APP14 says YC
     for (sink.items()) |f| {
         try std.testing.expect(!(f.code == .adobe_app14_conflicts_jfif));
     }
+}
+
+test "cleanroom progressive lenient: RST cycle mismatch → warn + recovers" {
+    const allocator = std.testing.allocator;
+
+    // progressive_32x32_gray_dri has DRI > 0 and the first FFD0 at
+    // offset 149. Mutate to FFD3 (wrong cycle); strict path errors,
+    // lenient path emits warn and recovers.
+    const src = fixture_progressive_32x32_dri;
+    var corrupted = try allocator.alloc(u8, src.len);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted, src);
+    try std.testing.expectEqual(@as(u8, 0xFF), corrupted[149]);
+    try std.testing.expectEqual(@as(u8, 0xD0), corrupted[150]);
+    corrupted[150] = 0xD3;
+
+    // Strict path: returns InvalidMarker.
+    try std.testing.expectError(error.InvalidMarker,
+        jpegz.internal.progressiveDecode(allocator, corrupted));
+
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+    var image = try jpegz.internal.progressiveDecodeLenientWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 32), image.width);
+
+    var found = false;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .restart_marker_unexpected) found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "cleanroom lossless lenient: RST cycle mismatch → warn + recovers" {
+    const allocator = std.testing.allocator;
+
+    // lossless_16x16_gray_dri first FFD0 at offset 115. Mutate to FFD2.
+    const src = fixture_lossless_16x16_gray_dri;
+    var corrupted = try allocator.alloc(u8, src.len);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted, src);
+    try std.testing.expectEqual(@as(u8, 0xFF), corrupted[115]);
+    try std.testing.expectEqual(@as(u8, 0xD0), corrupted[116]);
+    corrupted[116] = 0xD2;
+
+    // Strict path: returns InvalidMarker.
+    try std.testing.expectError(error.InvalidMarker,
+        jpegz.internal.losslessDecode(allocator, corrupted));
+
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+    var image = try jpegz.internal.losslessDecodeLenientWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 16), image.width);
+
+    var found = false;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .restart_marker_unexpected) found = true;
+    }
+    try std.testing.expect(found);
 }
 
 test "cleanroom progressive emits Finding(.warn, .entropy_fill_bytes) for extra 0xFF" {

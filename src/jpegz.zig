@@ -575,6 +575,22 @@ pub const internal = struct {
         const progressive = @import("decode/progressive.zig");
         return progressive.decodeWithOptions(allocator, data, .{ .findings_sink = sink });
     }
+    /// Progressive cleanroom decode with lenient RST recovery: emits
+    /// `restart_marker_unexpected` / `restart_marker_missing` warns
+    /// and resyncs the entropy stream instead of returning
+    /// `error.InvalidMarker` on RST cycle drift or missing markers.
+    /// Mirrors `cleanroomDecodeLenientWithFindings` for SOF2.
+    pub fn progressiveDecodeLenientWithFindings(
+        allocator: Allocator,
+        data: []const u8,
+        sink: *FindingsSink,
+    ) DecodeError!Image {
+        const progressive = @import("decode/progressive.zig");
+        return progressive.decodeWithOptions(allocator, data, .{
+            .findings_sink = sink,
+            .lenient = true,
+        });
+    }
     pub fn losslessDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/lossless.zig").decode(allocator, data);
     }
@@ -590,6 +606,19 @@ pub const internal = struct {
     ) DecodeError!Image {
         const lossless = @import("decode/lossless.zig");
         return lossless.decodeWithOptions(allocator, data, .{ .findings_sink = sink });
+    }
+    /// Lossless cleanroom decode with lenient RST recovery. Same
+    /// shape as `progressiveDecodeLenientWithFindings`.
+    pub fn losslessDecodeLenientWithFindings(
+        allocator: Allocator,
+        data: []const u8,
+        sink: *FindingsSink,
+    ) DecodeError!Image {
+        const lossless = @import("decode/lossless.zig");
+        return lossless.decodeWithOptions(allocator, data, .{
+            .findings_sink = sink,
+            .lenient = true,
+        });
     }
     /// Diagnostic-only: decode a progressive JPEG and return the post-
     /// entropy quantized coefficients in natural order (un-zig-zagged),
