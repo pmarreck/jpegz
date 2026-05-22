@@ -277,7 +277,23 @@ pub fn decodeWithOptions(
     }
 
     while (pos + 1 < data.len and !saw_eoi) {
-        if (data[pos] != 0xFF) return error.InvalidMarker;
+        // Tolerate "extraneous bytes before marker" per T.81 §B.1.1.2 —
+        // markers are self-synchronizing. Mirrors baseline.zig's
+        // pattern; emit a warn finding when a sink is attached.
+        const skip_start = pos;
+        while (pos < data.len and data[pos] != 0xFF) pos += 1;
+        if (pos > skip_start) {
+            if (options.findings_sink) |sink| {
+                var buf: [96]u8 = undefined;
+                const next_marker: u8 = if (pos + 1 < data.len) data[pos + 1] else 0;
+                const detail = std.fmt.bufPrint(&buf,
+                    "Corrupt JPEG data: {d} extraneous bytes before marker 0x{x:0>2}",
+                    .{ pos - skip_start, next_marker }) catch buf[0..0];
+                sink.emit(.warn, .extraneous_bytes_before_marker,
+                    @intCast(skip_start), detail) catch return error.OutOfMemory;
+            }
+        }
+        if (pos + 1 >= data.len) return error.TruncatedStream;
         while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
         if (pos + 1 >= data.len) return error.TruncatedStream;
         const marker = data[pos + 1];

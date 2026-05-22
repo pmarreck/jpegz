@@ -32,8 +32,18 @@ const errors = @import("../core/errors.zig");
 const types = @import("../core/types.zig");
 const bitstream = @import("bitstream.zig");
 const huffman = @import("huffman.zig");
+const findings_mod = @import("findings.zig");
 
 pub const Error = errors.DecodeError;
+
+/// Optional findings sink + future knobs. Mirrors the pattern in
+/// `baseline.zig`. The only emit site in lossless is the pre-SOS
+/// marker walker (`extraneous_bytes_before_marker`); sample-stream
+/// tolerance is intentionally NOT added — a single missing sample
+/// would cascade through the predictor chain.
+pub const DecodeOptions = struct {
+    findings_sink: ?*findings_mod.FindingsSink = null,
+};
 
 /// State threaded into decodeScan for restart-marker handling.
 const RestartCtx = struct {
@@ -69,20 +79,26 @@ const ScanInfo = struct {
     point_transform: u4, // Al
 };
 
-/// Decode a lossless JPEG (T.81 SOF3). Returns `error.NotImplemented`
+/// Decode a lossless JPEG (T.81 SOF3).
 ///
-/// FindingsSink note: lossless predictive coding has NO silent
-/// tolerance sites — the marker walker hard-fails on non-0xFF
-/// (no extraneous-bytes tolerance), and a missing sample would
-/// cascade through the predictor chain making `insufficient_data`
-/// recovery meaningless. No `decodeWithOptions` / sink threading
-/// is provided for this reason. If you're auditing for option-4
-/// parity: this file is intentionally empty of warn sites.
-/// for features not in the audited scope (non-1×1 sampling factors,
-/// point transform Al > 0) so the dispatcher in `src/jpegz.zig` falls
-/// back to the wrapper. Precision 2..16, 1- and 3-component, DRI > 0,
-/// and all 7 predictors are all byte-perfect against libjpeg-turbo.
+/// FindingsSink: the pre-SOS marker walker tolerates "extraneous bytes
+/// before marker" (T.81 §B.1.1.2 marker self-synchronization, mirroring
+/// baseline). The walker scans forward past garbage to the next 0xFF
+/// and emits `Finding(.warn, .extraneous_bytes_before_marker)` if a
+/// sink is attached. Sample-stream tolerance is NOT added — a missing
+/// sample would cascade through the predictor chain making recovery
+/// meaningless.
+///
+/// Out-of-scope variants return `error.NotImplemented` (non-1×1
+/// sampling factors, point transform Al > 0). The 13-fixture byte-
+/// perfect coverage vs libjpeg-turbo wrapper (2026-05-16 audit) is
+/// preserved: precision 2..16, 1- and 3-component, DRI > 0, all 7
+/// predictors.
 pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
+    return decodeWithOptions(allocator, data, .{});
+}
+
+pub fn decodeWithOptions(allocator: Allocator, data: []const u8, options: DecodeOptions) Error!types.Image {
     if (data.len < 4) return error.TruncatedStream;
     if (data[0] != 0xFF or data[1] != 0xD8) return error.InvalidMarker;
 
@@ -96,7 +112,24 @@ pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
     errdefer if (pixels) |p| allocator.free(p);
 
     while (pos + 1 < data.len and !saw_eoi) {
-        if (data[pos] != 0xFF) return error.InvalidMarker;
+        // Tolerate "extraneous bytes before marker" per T.81 §B.1.1.2 —
+        // markers are self-synchronizing. Scan forward to the next
+        // 0xFF; emit a warn finding (libjpeg JWRN_EXTRANEOUS_DATA
+        // parity) when a sink is attached.
+        const skip_start = pos;
+        while (pos < data.len and data[pos] != 0xFF) pos += 1;
+        if (pos > skip_start) {
+            if (options.findings_sink) |sink| {
+                var buf: [96]u8 = undefined;
+                const next_marker: u8 = if (pos + 1 < data.len) data[pos + 1] else 0;
+                const detail = std.fmt.bufPrint(&buf,
+                    "Corrupt JPEG data: {d} extraneous bytes before marker 0x{x:0>2}",
+                    .{ pos - skip_start, next_marker }) catch buf[0..0];
+                sink.emit(.warn, .extraneous_bytes_before_marker,
+                    @intCast(skip_start), detail) catch return error.OutOfMemory;
+            }
+        }
+        if (pos + 1 >= data.len) return error.TruncatedStream;
         while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
         if (pos + 1 >= data.len) return error.TruncatedStream;
         const marker = data[pos + 1];

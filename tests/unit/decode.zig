@@ -1370,6 +1370,81 @@ test "cleanroom JPEG-LS emits Finding(.warn, .extraneous_bytes_before_marker)" {
     try std.testing.expectEqual(@as(?u64, 2), offset_seen);
 }
 
+test "cleanroom progressive emits Finding(.warn, .extraneous_bytes_before_marker)" {
+    const allocator = std.testing.allocator;
+
+    // Inject 4 garbage bytes between SOI and the next marker. Progressive
+    // walker should scan forward past them (mirroring baseline's tolerance
+    // per T.81 §B.1.1.2 marker self-synchronization); decode succeeds; sink
+    // receives a warn for the skip.
+    var corrupted = try allocator.alloc(u8, fixture_progressive_8x8.len + 4);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0..2], fixture_progressive_8x8[0..2]);
+    corrupted[2] = 0xAA;
+    corrupted[3] = 0xAA;
+    corrupted[4] = 0xAA;
+    corrupted[5] = 0xAA;
+    @memcpy(corrupted[6..], fixture_progressive_8x8[2..]);
+
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.progressiveDecodeWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 8), image.width);
+    try std.testing.expectEqual(@as(u32, 8), image.height);
+
+    var found = false;
+    var offset_seen: ?u64 = null;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .extraneous_bytes_before_marker) {
+            found = true;
+            offset_seen = f.offset;
+        }
+    }
+    try std.testing.expect(found);
+    try std.testing.expectEqual(@as(?u64, 2), offset_seen);
+}
+
+test "cleanroom lossless emits Finding(.warn, .extraneous_bytes_before_marker)" {
+    const allocator = std.testing.allocator;
+
+    // Inject 4 garbage bytes between SOI and the next marker. Lossless
+    // walker should scan forward past them (mirroring baseline's pre-SOS
+    // tolerance — note this only applies to the marker walker; sample-
+    // stream tolerance would cascade through the predictor and is
+    // intentionally NOT added). Decode succeeds; sink receives a warn.
+    var corrupted = try allocator.alloc(u8, fixture_lossless_4x4_gray8.len + 4);
+    defer allocator.free(corrupted);
+    @memcpy(corrupted[0..2], fixture_lossless_4x4_gray8[0..2]);
+    corrupted[2] = 0xAA;
+    corrupted[3] = 0xAA;
+    corrupted[4] = 0xAA;
+    corrupted[5] = 0xAA;
+    @memcpy(corrupted[6..], fixture_lossless_4x4_gray8[2..]);
+
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+
+    var image = try jpegz.internal.losslessDecodeWithFindings(allocator, corrupted, &sink);
+    defer image.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 4), image.width);
+    try std.testing.expectEqual(@as(u32, 4), image.height);
+
+    var found = false;
+    var offset_seen: ?u64 = null;
+    for (sink.items()) |f| {
+        if (f.severity == .warn and f.code == .extraneous_bytes_before_marker) {
+            found = true;
+            offset_seen = f.offset;
+        }
+    }
+    try std.testing.expect(found);
+    try std.testing.expectEqual(@as(?u64, 2), offset_seen);
+}
+
 // ── Lenient mode (loose-coupled cleanroom truncation recovery) ─────
 //
 // `DecodeOptions.lenient = true` switches the cleanroom from strict

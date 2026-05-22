@@ -578,6 +578,19 @@ pub const internal = struct {
     pub fn losslessDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/lossless.zig").decode(allocator, data);
     }
+    /// Lossless cleanroom decode that emits a `Finding(.warn,
+    /// .extraneous_bytes_before_marker)` when the pre-SOS marker
+    /// walker scans past garbage bytes. Sample-stream tolerance is
+    /// NOT added (a missing sample would cascade through the
+    /// predictor chain). All other tolerance sites are silent in v1.
+    pub fn losslessDecodeWithFindings(
+        allocator: Allocator,
+        data: []const u8,
+        sink: *FindingsSink,
+    ) DecodeError!Image {
+        const lossless = @import("decode/lossless.zig");
+        return lossless.decodeWithOptions(allocator, data, .{ .findings_sink = sink });
+    }
     /// Diagnostic-only: decode a progressive JPEG and return the post-
     /// entropy quantized coefficients in natural order (un-zig-zagged),
     /// matching the layout of libjpeg-turbo's `jpeg_read_coefficients()`.
