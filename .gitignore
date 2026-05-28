@@ -23,3 +23,4 @@ scratch/
 
 # Claude Code per-session state (lock files, scheduled task records).
 .claude/
+zig-pkg
