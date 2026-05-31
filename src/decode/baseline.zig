@@ -425,10 +425,10 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
     return error.TruncatedStream;
 }
 
-pub fn parseSegmentLength(data: []const u8, pos: usize) usize {
-    if (pos + 1 >= data.len) return 0;
-    return (@as(usize, data[pos]) << 8) | data[pos + 1];
-}
+// Shared spec primitive (also re-exported for arith_decode, which
+// imports `baseline.parseSegmentLength`). Single definition lives in
+// segment.zig.
+pub const parseSegmentLength = @import("segment.zig").parseSegmentLength;
 
 pub fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
     const seg_len = parseSegmentLength(data, pos);

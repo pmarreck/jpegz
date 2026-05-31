@@ -226,10 +226,7 @@ pub fn decodeWithOptions(allocator: Allocator, data: []const u8, options: Decode
     };
 }
 
-fn parseSegmentLength(data: []const u8, pos: usize) usize {
-    if (pos + 1 >= data.len) return 0;
-    return (@as(usize, data[pos]) << 8) | data[pos + 1];
-}
+const parseSegmentLength = @import("segment.zig").parseSegmentLength;
 
 fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
     const seg_len = parseSegmentLength(data, pos);

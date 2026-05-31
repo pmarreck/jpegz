@@ -180,10 +180,7 @@ pub const PresetParams = struct {
     RESET: u32 = 0,
 };
 
-fn parseSegmentLength(data: []const u8, pos: usize) usize {
-    if (pos + 1 >= data.len) return 0;
-    return (@as(usize, data[pos]) << 8) | data[pos + 1];
-}
+const parseSegmentLength = @import("segment.zig").parseSegmentLength;
 
 /// SOF55 layout (T.87 §C.2.2):
 ///   FF F7 [Lf:2] [P:1] [Y:2] [X:2] [Nf:1] { [Ci:1] [Hi:1:Vi:1] [Tqi:1] }*Nf
