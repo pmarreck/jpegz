@@ -437,3 +437,50 @@ Read `MEMORY.md` for the one-line summaries on session start.
 **End of handoff.** Keep this doc updated after each milestone — at
 minimum, edit the variant matrix and `git log` block. The format is
 designed to be skim-able in 60 seconds.
+
+---
+
+## Consumer-coordination gaps (logged 2026-06-01, from tiffz)
+
+Two jpegz-flavored items from tiffz's future-directions list. Neither
+blocks anything currently shipping; logged so the roadmap tracks them.
+Source: `inbox/2026-06-01-two-tiffz-jpeg-gaps.md`.
+
+### C — Effective color space after decode (mostly already shipped)
+
+**Finding:** the "report variant" tiffz asked for **already exists.**
+`Image.layout` reports the OUTPUT byte order (`.rgb` for a YCbCr
+source — libjpeg/cleanroom both convert on output), while
+`Image.source_color_space` reports the SOURCE (`.ycbcr`). Verified:
+`libjpeg_wrapper.mapColorSpace` maps `JCS_YCbCr → {source=.ycbcr,
+layout=.rgb}` (wrapper.zig:104); cleanroom `assembleOutput` sets the
+same pair. So a consumer can drive photometric expansion off
+`image.layout` instead of a compile-time `compression==7 &&
+photometric==YCbCr → RGB` override — no jpegz change needed.
+
+**Net-new jpegz work (only if a consumer wants RAW native bytes):**
+an opt-in `DecodeOptions.keep_native_color_space: bool = false` that
+disables the internal YCbCr→RGB (and YCCK→CMYK) conversion, emitting
+the source planes interleaved as-is. Deferred until validate /
+validate_gui (or another consumer) needs native bytes for their own
+color-management pipeline. On-demand, not speculative.
+
+### D — Cleanroom byte parity for Compression=7 (RGB-marked baseline)
+
+**Status:** real cleanroom gap. tiffz calls `internal.wrapperDecode`
+(libjpeg) instead of `decode` (cleanroom) because the cleanroom isn't
+byte-exact for an **RGB-marked** baseline JPEG with spliced abbreviated
+JPEGTables (Mode 2) — the `rgb-jpeg.tif` case. Closing it lets tiffz
+flip one line and drop libjpeg-turbo from its runtime closure.
+
+**Root-cause hypothesis (for whoever picks this up):** the cleanroom
+3-component path (`baseline.assembleOutput`) hardcodes
+`source=.ycbcr` + YCbCr→RGB conversion. An RGB-marked JPEG (APP14
+ColorTransform=0, or 'R'/'G'/'B' component IDs, or Adobe-RGB) carries
+components that are ALREADY R,G,B; libjpeg passes them through
+(`out_color_space=JCS_RGB`, no conversion). The cleanroom wrongly
+applies YCbCr→RGB → divergence. Fix mirrors the APP14-driven CMYK/YCCK
+logic already in `cmyk.zig`: for 3-comp, honor APP14 ColorTransform
+(0 → RGB passthrough, 1/JFIF-default → YCbCr→RGB) plus libjpeg's
+component-ID heuristic for the no-APP14 case. Well-scoped; needs an
+RGB-marked + abbreviated-tables oracle fixture (tiffz has `rgb-jpeg.tif`).
