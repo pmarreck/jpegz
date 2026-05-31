@@ -280,6 +280,13 @@ test "decode 16x16 baseline JPEG with restart markers (DRI=2)" {
 
 /// T1.3: 4×4 CMYK JPEG (4 components, Adobe APP14 colorspace = CMYK).
 const fixture_baseline_4x4_cmyk = @embedFile("fixtures/baseline_4x4_cmyk.jpg");
+// 16×16 YCCK (Adobe APP14 ColorTransform=2) with SUBSAMPLED chroma:
+// comp0/comp3 (Y, K) = 2h2v, comp1/comp2 (Cb, Cr) = 1h1v. Quarter-size
+// chroma planes are what the 4-component assembler over-read before the
+// 2026-05-31 fix (validate_gui heap-overrun report). Generated with:
+//   magick -size 16x16 radial-gradient:yellow-magenta \
+//     -colorspace CMYK -sampling-factor 2x2 -quality 85 <file>
+const fixture_cmyk_16x16_ycck_sub = @embedFile("fixtures/cmyk_16x16_ycck_subsampled.jpg");
 
 test "decode 4x4 CMYK JPEG (Adobe APP14)" {
     const allocator = std.testing.allocator;
@@ -1939,5 +1946,27 @@ test "cleanroom CMYK 4x4 byte-perfect vs wrapper (YCCK ColorTransform=2)" {
     try std.testing.expectEqual(@as(usize, 4 * 4 * 4), cleanroom.pixels.len);
 
     // Byte-perfect against the libjpeg-turbo wrapper.
+    try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+}
+
+test "cmyk cleanroom 16x16 YCCK SUBSAMPLED chroma byte-perfect vs wrapper (heap-overrun regression)" {
+    // Regression for the validate_gui heap over-read (2026-05-31): the
+    // 4-component assembler indexed quarter-size Cb/Cr planes at full
+    // canvas coordinates, reading off the end of the buffer. Decoding
+    // this subsampled YCCK fixture must (a) not crash and (b) be byte-
+    // identical to libjpeg-turbo (the cleanroom now upsamples each
+    // component with the same IJG fancy upsampler the 3-comp path uses).
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.cleanroomDecode(allocator, fixture_cmyk_16x16_ycck_sub);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_cmyk_16x16_ycck_sub);
+    defer wrapper.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u32, 16), cleanroom.width);
+    try std.testing.expectEqual(@as(u32, 16), cleanroom.height);
+    try std.testing.expectEqual(@as(u8, 4), cleanroom.channels);
+    try std.testing.expectEqual(jpegz.PixelLayout.cmyk, cleanroom.layout);
+    try std.testing.expectEqual(@as(usize, 16 * 16 * 4), cleanroom.pixels.len);
+    try std.testing.expectEqual(wrapper.channels, cleanroom.channels);
     try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
 }

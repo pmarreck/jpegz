@@ -825,12 +825,29 @@ fn decodeScan(
         // the per-component planes after assembly succeeds (mirrors
         // `assembleOutput`'s built-in cleanup at line 1367 in the
         // 1/3-comp path).
+        // cmyk.assemble upsamples each component to the canvas itself
+        // (mirroring the 3-comp path), so pass the per-component sampling
+        // factors + frame maxima. Passing raw subsampled planes without
+        // this over-reads the smaller chroma buffers (validate_gui
+        // heap over-read, 2026-05-31).
+        const cmyk_comp_h: [4]u8 = .{
+            @intCast(frame.components[0].h_factor), @intCast(frame.components[1].h_factor),
+            @intCast(frame.components[2].h_factor), @intCast(frame.components[3].h_factor),
+        };
+        const cmyk_comp_v: [4]u8 = .{
+            @intCast(frame.components[0].v_factor), @intCast(frame.components[1].v_factor),
+            @intCast(frame.components[2].v_factor), @intCast(frame.components[3].v_factor),
+        };
         const img = try cmyk_mod.assemble(
             allocator,
             width,
             height,
             plane_w,
             plane_h,
+            cmyk_comp_h,
+            cmyk_comp_v,
+            max_h,
+            max_v,
             .{ planes[0], planes[1], planes[2], planes[3] },
             app14_color_transform,
         );

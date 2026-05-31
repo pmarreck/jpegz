@@ -27,6 +27,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const types = @import("../core/types.zig");
 const errors = @import("../core/errors.zig");
+const color = @import("color.zig");
 
 pub const Error = errors.DecodeError;
 
@@ -98,10 +99,62 @@ pub fn assemble(
     height: u32,
     plane_w: [4]u32,
     plane_h: [4]u32,
+    comp_h: [4]u8,
+    comp_v: [4]u8,
+    max_h: u32,
+    max_v: u32,
     planes: [4][]const u8,
     color_transform: ColorTransform,
 ) Error!types.Image {
-    _ = plane_h;
+    // Upsample each component to the MCU-padded canvas grid before
+    // interleaving — mirrors the 3-component `assembleOutput` recipe
+    // exactly (alias full-res planes; IJG fancy-upsample subsampled
+    // ones) so subsampled CMYK/YCCK output stays byte-identical to
+    // libjpeg-turbo. Without this, a quarter-size Cb/Cr plane indexed
+    // at full-canvas coordinates over-reads its backing buffer
+    // (validate_gui heap over-read, 2026-05-31).
+    const canvas_w: u32 = @max(@max(plane_w[0], plane_w[1]), @max(plane_w[2], plane_w[3]));
+    const canvas_h: u32 = @max(@max(plane_h[0], plane_h[1]), @max(plane_h[2], plane_h[3]));
+    var canvas_planes: [4][]const u8 = .{ &.{}, &.{}, &.{}, &.{} };
+    var canvas_owned: [4]bool = .{ false, false, false, false };
+    defer {
+        var i: usize = 0;
+        while (i < 4) : (i += 1) {
+            if (canvas_owned[i]) allocator.free(canvas_planes[i]);
+        }
+    }
+    {
+        var i: usize = 0;
+        while (i < 4) : (i += 1) {
+            const h_ratio: u32 = max_h / @as(u32, comp_h[i]);
+            const v_ratio: u32 = max_v / @as(u32, comp_v[i]);
+            if (h_ratio == 1 and v_ratio == 1) {
+                // Full-resolution component — alias the plane directly.
+                canvas_planes[i] = planes[i];
+                canvas_owned[i] = false;
+            } else {
+                // Active in-frame extent: ceil(dim * factor / max). Uses
+                // the FRAME dims (not MCU-padded plane dims) so boundary
+                // clamping matches libjpeg-turbo.
+                const active_w: u32 = (width * @as(u32, comp_h[i]) + max_h - 1) / max_h;
+                const active_h: u32 = (height * @as(u32, comp_v[i]) + max_v - 1) / max_v;
+                canvas_planes[i] = try color.fancyUpsample(
+                    allocator,
+                    planes[i],
+                    plane_w[i],
+                    plane_h[i],
+                    canvas_w,
+                    canvas_h,
+                    active_w,
+                    active_h,
+                    h_ratio,
+                    v_ratio,
+                );
+                canvas_owned[i] = true;
+            }
+        }
+    }
+
     const out_len: usize = @as(usize, width) * @as(usize, height) * 4;
     const pixels = try allocator.alloc(u8, out_len);
     errdefer allocator.free(pixels);
@@ -112,31 +165,30 @@ pub fn assemble(
     while (y < height) : (y += 1) {
         var x: u32 = 0;
         while (x < width) : (x += 1) {
-            const idx0: usize = @as(usize, y) * @as(usize, plane_w[0]) + @as(usize, x);
-            const idx1: usize = @as(usize, y) * @as(usize, plane_w[1]) + @as(usize, x);
-            const idx2: usize = @as(usize, y) * @as(usize, plane_w[2]) + @as(usize, x);
-            const idx3: usize = @as(usize, y) * @as(usize, plane_w[3]) + @as(usize, x);
+            // Canvas planes are all `canvas_w × canvas_h`, so a single
+            // canvas-stride offset indexes every component safely.
+            const in_off: usize = @as(usize, y) * @as(usize, canvas_w) + @as(usize, x);
             const out_off: usize = (@as(usize, y) * @as(usize, width) + @as(usize, x)) * 4;
 
             if (is_ycck) {
                 // Components 0/1/2 are Y/Cb/Cr; convert to RGB via the
                 // same 16-bit SCALEBITS fixed-point as color.zig, then
                 // invert to CMY. K (component 3) passes through.
-                const Y: i32 = @intCast(planes[0][idx0]);
-                const Cb: i32 = @as(i32, planes[1][idx1]) - 128;
-                const Cr: i32 = @as(i32, planes[2][idx2]) - 128;
+                const Y: i32 = @intCast(canvas_planes[0][in_off]);
+                const Cb: i32 = @as(i32, canvas_planes[1][in_off]) - 128;
+                const Cr: i32 = @as(i32, canvas_planes[2][in_off]) - 128;
                 const r: i32 = Y + ((Cr * FIX_CR_TO_R + FIX_HALF) >> 16);
                 const g: i32 = Y + ((Cb * FIX_CB_TO_G + Cr * FIX_CR_TO_G + FIX_HALF) >> 16);
                 const b: i32 = Y + ((Cb * FIX_CB_TO_B + FIX_HALF) >> 16);
                 pixels[out_off + 0] = 255 - clamp255(r);
                 pixels[out_off + 1] = 255 - clamp255(g);
                 pixels[out_off + 2] = 255 - clamp255(b);
-                pixels[out_off + 3] = planes[3][idx3];
+                pixels[out_off + 3] = canvas_planes[3][in_off];
             } else {
-                pixels[out_off + 0] = planes[0][idx0];
-                pixels[out_off + 1] = planes[1][idx1];
-                pixels[out_off + 2] = planes[2][idx2];
-                pixels[out_off + 3] = planes[3][idx3];
+                pixels[out_off + 0] = canvas_planes[0][in_off];
+                pixels[out_off + 1] = canvas_planes[1][in_off];
+                pixels[out_off + 2] = canvas_planes[2][in_off];
+                pixels[out_off + 3] = canvas_planes[3][in_off];
             }
         }
     }
