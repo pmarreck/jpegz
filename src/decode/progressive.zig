@@ -33,6 +33,7 @@ const huffman = @import("huffman.zig");
 const idct = @import("idct.zig");
 const color = @import("color.zig");
 const findings_mod = @import("findings.zig");
+const jpeg_markers = @import("jpeg_markers.zig");
 
 const PROG_DEBUG: bool = false;
 inline fn dbg(comptime fmt: []const u8, args: anytype) void {
@@ -51,22 +52,9 @@ const ZIGZAG: [64]u8 = .{
     53, 60, 61, 54, 47, 55, 62, 63,
 };
 
-pub const ComponentInfo = struct {
-    id: u8,
-    h_factor: u4,
-    v_factor: u4,
-    qt_index: u8,
-    dc_table: u8 = 0, // set per scan
-    ac_table: u8 = 0,
-};
-
-pub const FrameInfo = struct {
-    precision: u8,
-    height: u16,
-    width: u16,
-    num_components: u8,
-    components: [4]ComponentInfo,
-};
+// Shared with baseline via jpeg_markers.zig (byte-identical frame types).
+pub const ComponentInfo = jpeg_markers.ComponentInfo;
+pub const FrameInfo = jpeg_markers.FrameInfo;
 
 pub const ScanInfo = struct {
     num_components: u8,
@@ -422,95 +410,12 @@ pub fn decodeWithOptions(
 
 pub const parseSegmentLength = @import("segment.zig").parseSegmentLength;
 
-pub fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
-    const seg_len = parseSegmentLength(data, pos);
-    if (seg_len < 8 or pos + seg_len > data.len) return error.TruncatedStream;
-    var fi: FrameInfo = undefined;
-    fi.precision = data[pos + 2];
-    fi.height = (@as(u16, data[pos + 3]) << 8) | data[pos + 4];
-    fi.width = (@as(u16, data[pos + 5]) << 8) | data[pos + 6];
-    fi.num_components = data[pos + 7];
-    if (fi.num_components == 0 or fi.num_components > 4) return error.InvalidMarker;
-    if (seg_len < 8 + @as(usize, fi.num_components) * 3) return error.TruncatedStream;
-    var i: usize = 0;
-    while (i < fi.num_components) : (i += 1) {
-        const off = pos + 8 + i * 3;
-        fi.components[i] = .{
-            .id = data[off],
-            .h_factor = @intCast(data[off + 1] >> 4),
-            .v_factor = @intCast(data[off + 1] & 0x0F),
-            .qt_index = data[off + 2],
-        };
-    }
-    return fi;
-}
+// SOF / DQT / DHT parsing shared with baseline (see jpeg_markers.zig).
+pub const parseSof = jpeg_markers.parseSof;
 
-pub fn parseDqt(
-    data: []const u8,
-    pos: usize,
-    quant_tables: *[4]?[64]u16,
-) Error!void {
-    const seg_len = parseSegmentLength(data, pos);
-    if (seg_len < 2 or pos + seg_len > data.len) return error.TruncatedStream;
-    var off: usize = pos + 2;
-    const seg_end = pos + seg_len;
-    while (off < seg_end) {
-        if (off >= data.len) return error.TruncatedStream;
-        const pq_tq = data[off];
-        const precision_id: u8 = pq_tq >> 4;
-        const tq: u8 = pq_tq & 0x0F;
-        if (tq > 3) return error.InvalidMarker;
-        off += 1;
-        var table: [64]u16 = undefined;
-        if (precision_id == 0) {
-            if (off + 64 > seg_end) return error.TruncatedStream;
-            var i: usize = 0;
-            while (i < 64) : (i += 1) table[i] = data[off + i];
-            off += 64;
-        } else if (precision_id == 1) {
-            if (off + 128 > seg_end) return error.TruncatedStream;
-            var i: usize = 0;
-            while (i < 64) : (i += 1) {
-                table[i] = (@as(u16, data[off + i * 2]) << 8) | data[off + i * 2 + 1];
-            }
-            off += 128;
-        } else return error.InvalidMarker;
-        quant_tables[tq] = table;
-    }
-}
+pub const parseDqt = jpeg_markers.parseDqt;
 
-fn parseDht(
-    data: []const u8,
-    pos: usize,
-    dc_tables: *[4]?huffman.HuffmanTable,
-    ac_tables: *[4]?huffman.HuffmanTable,
-) Error!void {
-    const seg_len = parseSegmentLength(data, pos);
-    if (seg_len < 2 or pos + seg_len > data.len) return error.TruncatedStream;
-    var off: usize = pos + 2;
-    const seg_end = pos + seg_len;
-    while (off < seg_end) {
-        if (off + 17 > seg_end) return error.TruncatedStream;
-        const tc_th = data[off];
-        const tc: u8 = tc_th >> 4;
-        const th: u8 = tc_th & 0x0F;
-        if (tc > 1 or th > 3) return error.InvalidMarker;
-        off += 1;
-        var bits: [16]u8 = undefined;
-        var total: u16 = 0;
-        for (0..16) |i| {
-            bits[i] = data[off + i];
-            total += bits[i];
-        }
-        off += 16;
-        if (off + total > seg_end) return error.TruncatedStream;
-        const values = data[off .. off + total];
-        const t = huffman.HuffmanTable.buildFromDht(bits, values) catch
-            return error.InvalidMarker;
-        if (tc == 0) dc_tables[th] = t else ac_tables[th] = t;
-        off += total;
-    }
-}
+const parseDht = jpeg_markers.parseDht;
 
 pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
     const seg_len = parseSegmentLength(data, pos);
