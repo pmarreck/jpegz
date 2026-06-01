@@ -524,3 +524,55 @@ The high-value item is the suspected ~80% duplication between
 `decodeScanT(comptime T, comptime cs)` generic. That's a BOLD refactor
 across byte-perfect paths (real regression risk); per refactor policy
 it needs an explicit go/no-go from Peter before execution. Not started.
+
+---
+
+## Step 3 (pending): scan-variant unification — DESIGN READY
+
+Steps 1 (shared `diag.fail`) and 2 (shared `jpeg_markers.zig`) are
+shipped. Step 3 is the bold refactor: collapse the three baseline.zig
+scan decoders into one comptime generic. **Design captured here so the
+next session executes rather than re-analyzes.**
+
+### The three functions (baseline.zig)
+- `decodeScan` (~314L, 8-bit): the feature-rich workhorse — 1/3/4
+  components, all sampling factors, RST resync, lenient mode, thread
+  pool, CMYK/YCCK routing (`cmyk_mod.assemble`), 3-comp `assembleOutput`.
+- `decodeScan12Gray` (~111L, 12-bit, 1-comp): u16 plane, `idct8x8_12`,
+  grayscale output.
+- `decodeScan12Rgb` (~212L, 12-bit, 3-comp): u16 planes, `idct8x8_12`,
+  `fancyUpsample12` + `ycbcrRowToRgb12`.
+
+### Shared skeleton (all three)
+Phase 1 entropy decode (already precision-parameterized via
+`decodeBlockCoefficients(..., precision, ...)`) → Phase 2 IDCT →
+Phase 3 chroma upsample → Phase 4 color-convert + emit.
+
+### The only real divergences (comptime-selectable on P)
+| axis | P=8 | P=12 |
+|---|---|---|
+| sample type | `u8` | `u16` |
+| IDCT | `idct.idct8x8` | `idct.idct8x8_12` |
+| upsample | `color.fancyUpsample` | `color.fancyUpsample12` |
+| color | `color.ycbcrRowToRgb` | `color.ycbcrRowToRgb12` |
+| output bytes | direct `[]u8` | `[]u8` byte-view of `[]u16` (×2) |
+| chroma center / clamp | 128 / 255 | 2048 / 4095 (inside the color/idct helpers, already) |
+
+### Plan
+1. `fn decodeScanT(comptime P: u8, ...)` with
+   `const Sample = if (P <= 8) u8 else u16;` and a comptime helper
+   struct selecting idct/upsample/color fns by P.
+2. Port `decodeScan`'s FULL feature set (it's the superset). The 12-bit
+   cases never hit CMYK/4-comp, so those branches are inert for P=12 —
+   no behavior change.
+3. `decodeScan = decodeScanT(8, ...)`, replace the two 12-bit callers
+   with `decodeScanT(12, ...)`; delete `decodeScan12Gray`/`decodeScan12Rgb`.
+4. **Verification gate (non-negotiable):** byte-perfect across all 13
+   DCT fixtures — 8-bit baseline gray/rgb/4:2:0/4:2:2 + CMYK + YCCK
+   (incl. the new subsampled YCCK), 12-bit gray, 12-bit rgb ×4 sampling
+   — plus the full 71-test decode suite. ANY delta = back out.
+
+### Risk
+High — touches the hottest byte-perfect path. Do it on fresh budget,
+one `./test` per increment. Est. ~600 lines moved/merged. This is why
+it was deferred from the 2026-06-01 session that did steps 1+2.
