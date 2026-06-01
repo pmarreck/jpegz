@@ -38,11 +38,11 @@ const builtin = @import("builtin");
 /// without rewriting every call-site. In ReleaseFast/Safe/Small
 /// builds the helper inlines to a plain `return err` with zero
 /// runtime cost.
+// Thin module-prefixed wrapper over the shared `diag.fail` (single
+// implementation in decode/diag.zig). Call sites stay `fail("tag", err)`
+// and still print "[baseline:tag] ErrorName" in Debug builds.
 inline fn fail(comptime tag: []const u8, err: errors.DecodeError) errors.DecodeError {
-    if (comptime builtin.mode == .Debug) {
-        std.debug.print("[baseline:{s}] {s}\n", .{ tag, @errorName(err) });
-    }
-    return err;
+    return @import("diag.zig").fail("baseline:" ++ tag, err);
 }
 
 /// Resync the entropy stream at a restart-interval boundary
