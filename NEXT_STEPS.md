@@ -484,3 +484,43 @@ logic already in `cmyk.zig`: for 3-comp, honor APP14 ColorTransform
 (0 → RGB passthrough, 1/JFIF-default → YCbCr→RGB) plus libjpeg's
 component-ID heuristic for the no-APP14 case. Well-scoped; needs an
 RGB-marked + abbreviated-tables oracle fixture (tiffz has `rgb-jpeg.tif`).
+
+---
+
+## Fleet code-review triage (2026-06-01)
+
+Three WARN notes from the fleet review (no CRITICAL). Verified each
+before acting; outcomes:
+
+### Duplication note — PARTLY actioned, partly debunked
+- **DONE:** `parseSegmentLength` was byte-identical x4 (verified) →
+  hoisted to `decode/segment.zig`; all decoders re-export it.
+- **DEBUNKED (audit overstated):** `parseDqt`/`parseDht`/`parseSof`
+  are NOT byte-identical across decoders — they diverged in error
+  reporting (`fail(tag,err)` debug helper in baseline vs bare
+  `error.X` in progressive/lossless) and lossless's `parseDht` is
+  semantically DC-tables-only. `parseSos` shares only a prelude.
+  Consolidating these requires first deciding whether to unify the
+  `fail()` debug-trace convention fleet-wide across decoders — a
+  deliberate call, not a mechanical dedupe. Deferred.
+
+### Inadequate-tests note — mostly dismissed (rationale)
+The "0 inline tests" metric undersells the test strategy: this is a
+codec, and its gold-standard tests are the ~100 out-of-line
+byte-perfect-vs-libjpeg/openjpeg oracle fixtures (decode.zig 71,
+validate.zig 11, smoke.zig 11, decode_jp2.zig 7). Oracle parity
+catches any coefficient-level regression a per-routine inline test
+would, and more. Low ROI to add redundant inline tests for IDCT/MCU/
+predictor routines. *Possible* exception worth a focused pass if
+desired: the validator's per-marker paths (it's the 100%-corruption-
+detection guarantee) — but validate.zig already covers clean +
+truncation + missing-SOI + garbage. Not pursuing speculatively.
+
+### Disorganized/long-functions note — bold refactor, needs sign-off
+`decodeScan` (314 lines) etc. are long but algorithmically dense and
+map directly to the spec; `handleRstResync` was already extracted.
+The high-value item is the suspected ~80% duplication between
+`decodeScan` / `decodeScan12Gray` / `decodeScan12Rgb` → a
+`decodeScanT(comptime T, comptime cs)` generic. That's a BOLD refactor
+across byte-perfect paths (real regression risk); per refactor policy
+it needs an explicit go/no-go from Peter before execution. Not started.
