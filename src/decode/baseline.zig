@@ -355,7 +355,8 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                         options,
                     );
                 }
-                return try decodeScan(
+                return try decodeScanT(
+                    8,
                     allocator,
                     data[pos..],
                     &frame.?,
@@ -1102,6 +1103,412 @@ fn decodeScan12Rgb(
         .source_color_space = .ycbcr,
         .layout = .rgb,
     };
+}
+
+/// Unified scan decoder generic over sample precision `P` (8 or 12),
+/// collapsing the former decodeScan / decodeScan12Gray / decodeScan12Rgb
+/// triple. The entropy-decode front half (MCU geometry, per-component
+/// plane allocation, T.81 §F.2 Huffman + dequant via
+/// `decodeBlockCoefficients`) is precision-agnostic and shared; only the
+/// back half (IDCT, chroma upsample, YCbCr→RGB) varies. The split is a
+/// single `comptime P <= 8`, so the u16 instantiation never compiles the
+/// u8-only parallel-IDCT or CMYK/YCCK paths. P=8 is byte-identical to the
+/// former decodeScan — it still routes through the untouched
+/// `assembleOutput` / `cmyk_mod.assemble`; P=12 inlines the former 12-bit
+/// grayscale and RGB tails (`idct8x8_12`, `fancyUpsample12`,
+/// `ycbcrRowToRgb12`).
+fn decodeScanT(
+    comptime P: u8,
+    allocator: Allocator,
+    data: []const u8,
+    frame: *const FrameInfo,
+    quant_tables: *const [4]?[64]u16,
+    dc_tables: *const [4]?huffman.HuffmanTable,
+    ac_tables: *const [4]?huffman.HuffmanTable,
+    restart_interval: u32,
+    options: DecodeOptions,
+    app14_color_transform: cmyk_mod.ColorTransform,
+) Error!types.Image {
+    const Sample = if (P <= 8) u8 else u16;
+    const channels: u8 = frame.num_components;
+    const width: u32 = frame.width;
+    const height: u32 = frame.height;
+
+    // Compute max h/v sampling factors across all components. These
+    // define the MCU size in pixels: max_h*8 wide × max_v*8 tall.
+    // Per-component plane is sized at the component's natural
+    // resolution: mcu_cols * comp.h_factor * 8 wide, etc.
+    //
+    // T.81 §A.2.2 carve-out: for a non-interleaved scan (Ns=1), the MCU
+    // is always a single 8×8 block regardless of the component's
+    // declared H/V factors — those factors are informational only and
+    // don't change the entropy stream layout. So we force max_h = max_v
+    // = 1 here, which makes the MCU loop iterate one block at a time.
+    var max_h: u32 = 1;
+    var max_v: u32 = 1;
+    if (channels > 1) {
+        var i: usize = 0;
+        while (i < channels) : (i += 1) {
+            const c = &frame.components[i];
+            if (@as(u32, c.h_factor) > max_h) max_h = @intCast(c.h_factor);
+            if (@as(u32, c.v_factor) > max_v) max_v = @intCast(c.v_factor);
+        }
+    }
+    const mcu_pixel_w: u32 = max_h * 8;
+    const mcu_pixel_h: u32 = max_v * 8;
+    const mcu_cols: u32 = (width + mcu_pixel_w - 1) / mcu_pixel_w;
+    const mcu_rows: u32 = (height + mcu_pixel_h - 1) / mcu_pixel_h;
+
+    // Per-component plane dimensions (at component's natural resolution).
+    // For non-interleaved scans (channels==1) the H/V factors are ignored
+    // and the plane is just one block per MCU — matches the MCU loop.
+    var plane_w: [4]u32 = .{ 0, 0, 0, 0 };
+    var plane_h: [4]u32 = .{ 0, 0, 0, 0 };
+    {
+        var i: usize = 0;
+        while (i < channels) : (i += 1) {
+            const eff_h: u32 = if (channels == 1) 1 else @as(u32, frame.components[i].h_factor);
+            const eff_v: u32 = if (channels == 1) 1 else @as(u32, frame.components[i].v_factor);
+            plane_w[i] = mcu_cols * eff_h * 8;
+            plane_h[i] = mcu_rows * eff_v * 8;
+        }
+    }
+
+    var planes: [4][]Sample = .{ &.{}, &.{}, &.{}, &.{} };
+    {
+        var i: usize = 0;
+        while (i < channels) : (i += 1) {
+            planes[i] = try allocator.alloc(Sample, plane_w[i] * plane_h[i]);
+        }
+    }
+    errdefer {
+        var j: usize = 0;
+        while (j < channels) : (j += 1) {
+            if (planes[j].len > 0) allocator.free(planes[j]);
+        }
+    }
+
+    // Phase 1 (entropy decode) is inherently serial — DC predictors chain
+    // across MCUs within an RST segment. Phase 2 (IDCT + plane copy) is
+    // per-block independent. Coefficients live in i32 (headroom for
+    // DC*qt) in natural row-major order, one [64] block per 8×8 region.
+    var blocks_w: [4]u32 = .{ 0, 0, 0, 0 };
+    var blocks_h: [4]u32 = .{ 0, 0, 0, 0 };
+    {
+        var i: usize = 0;
+        while (i < channels) : (i += 1) {
+            const eff_h: u32 = if (channels == 1) 1 else @as(u32, frame.components[i].h_factor);
+            const eff_v: u32 = if (channels == 1) 1 else @as(u32, frame.components[i].v_factor);
+            blocks_w[i] = mcu_cols * eff_h;
+            blocks_h[i] = mcu_rows * eff_v;
+        }
+    }
+    var coef_buf: [4][]i32 = .{ &.{}, &.{}, &.{}, &.{} };
+    {
+        var i: usize = 0;
+        while (i < channels) : (i += 1) {
+            const total_blocks: usize = @as(usize, blocks_w[i]) * @as(usize, blocks_h[i]);
+            coef_buf[i] = try allocator.alloc(i32, total_blocks * 64);
+        }
+    }
+    defer {
+        var j: usize = 0;
+        while (j < channels) : (j += 1) {
+            if (coef_buf[j].len > 0) allocator.free(coef_buf[j]);
+        }
+    }
+
+    var br = bitstream.BitReader.init(data);
+    var prev_dc: [4]i32 = .{ 0, 0, 0, 0 };
+    var mcus_since_rst: u32 = 0;
+    var expected_rst: u8 = 0xD0;
+    var lenient_state: LenientState = .{
+        .lenient = options.lenient,
+        .sink = options.findings_sink,
+    };
+
+    // ── Phase 1: serial entropy decode → coefficient buffer ────
+    var mcu_y: u32 = 0;
+    while (mcu_y < mcu_rows) : (mcu_y += 1) {
+        var mcu_x: u32 = 0;
+        while (mcu_x < mcu_cols) : (mcu_x += 1) {
+            if (restart_interval > 0 and mcus_since_rst == restart_interval) {
+                try handleRstResync(&br, &expected_rst, &prev_dc, &mcus_since_rst, options);
+            }
+            var ci: usize = 0;
+            while (ci < channels) : (ci += 1) {
+                const comp = &frame.components[ci];
+                const blocks_v_per_mcu: u32 = if (channels == 1) 1 else @intCast(comp.v_factor);
+                const blocks_h_per_mcu: u32 = if (channels == 1) 1 else @intCast(comp.h_factor);
+                var block_v: u32 = 0;
+                while (block_v < blocks_v_per_mcu) : (block_v += 1) {
+                    var block_h: u32 = 0;
+                    while (block_h < blocks_h_per_mcu) : (block_h += 1) {
+                        const block_idx_x: u32 = mcu_x * blocks_h_per_mcu + block_h;
+                        const block_idx_y: u32 = mcu_y * blocks_v_per_mcu + block_v;
+                        const linear: usize = (@as(usize, block_idx_y) * @as(usize, blocks_w[ci]) + @as(usize, block_idx_x)) * 64;
+                        const slot: *[64]i32 = coef_buf[ci][linear..][0..64];
+                        try decodeBlockCoefficients(
+                            &br,
+                            ci,
+                            comp,
+                            dc_tables,
+                            ac_tables,
+                            quant_tables,
+                            &prev_dc,
+                            slot,
+                            frame.precision,
+                            &lenient_state,
+                        );
+                    }
+                }
+            }
+            mcus_since_rst += 1;
+        }
+    }
+
+    if (comptime P <= 8) {
+        // ── Phase 2: per-block IDCT + plane copy ──────────────────
+        // Per-block work is independent: each task reads its own
+        // coefficient slot and writes a non-overlapping 8×8 region of the
+        // (already allocated) component plane. No shared mutable state;
+        // safe to parallelize without locks.
+        const total_blocks: u64 = blk: {
+            var sum: u64 = 0;
+            for (0..channels) |ci_idx| {
+                sum += @as(u64, blocks_w[ci_idx]) * @as(u64, blocks_h[ci_idx]);
+            }
+            break :blk sum;
+        };
+        // Below this threshold sequential beats parallel (thread spawn +
+        // join ~50µs vs ~100ns per IDCT block → ~512-block crossover).
+        const PARALLEL_BLOCKS_THRESHOLD: u64 = 512;
+        const want_parallel: bool = options.threads != 1 and total_blocks >= PARALLEL_BLOCKS_THRESHOLD;
+
+        // One pool reused across Phase 2 (IDCT) and the color-conversion
+        // stage in assembleOutput — avoids doubling thread-creation cost.
+        var pool: thread_pool.Pool = undefined;
+        var pool_initialized = false;
+        var pool_ptr: ?*thread_pool.Pool = null;
+        defer if (pool_initialized) pool.deinit();
+
+        if (want_parallel) {
+            var n_workers: u32 = options.threads;
+            if (options.threads == 0) {
+                const cpu = std.Thread.getCpuCount() catch 1;
+                n_workers = @intCast(@min(cpu, std.math.maxInt(u32)));
+            }
+            // Cap at the largest plausible work-item count (block rows for
+            // IDCT, output rows for color convert) so the pool isn't
+            // undersized for either stage.
+            var max_units: u32 = height;
+            for (0..channels) |ci_idx| {
+                if (blocks_h[ci_idx] > max_units) max_units = blocks_h[ci_idx];
+            }
+            if (n_workers > max_units) n_workers = max_units;
+            if (n_workers < 1) n_workers = 1;
+
+            if (pool.init(.{ .allocator = allocator, .n_jobs = n_workers })) {
+                pool_initialized = true;
+                pool_ptr = &pool;
+            } else |_| {
+                // Pool init failed (OS thread limit, OOM, etc). Fall
+                // through to the sequential path — decoding still succeeds.
+            }
+        }
+
+        if (pool_ptr) |p| {
+            // Parallel transform: one task per row of blocks per component.
+            var wg: thread_pool.WaitGroup = .{};
+            var ci: usize = 0;
+            while (ci < channels) : (ci += 1) {
+                var by_idx: u32 = 0;
+                while (by_idx < blocks_h[ci]) : (by_idx += 1) {
+                    p.spawnWg(&wg, transformBlockRow, .{
+                        coef_buf[ci],
+                        planes[ci],
+                        plane_w[ci],
+                        blocks_w[ci],
+                        by_idx,
+                    });
+                }
+            }
+            p.waitAndWork(&wg);
+        } else {
+            // Sequential transform.
+            var ci: usize = 0;
+            while (ci < channels) : (ci += 1) {
+                var by_idx: u32 = 0;
+                while (by_idx < blocks_h[ci]) : (by_idx += 1) {
+                    var bx_idx: u32 = 0;
+                    while (bx_idx < blocks_w[ci]) : (bx_idx += 1) {
+                        const linear: usize = (@as(usize, by_idx) * @as(usize, blocks_w[ci]) + @as(usize, bx_idx)) * 64;
+                        const slot: *const [64]i32 = coef_buf[ci][linear..][0..64];
+                        transformBlockToPlane(slot, planes[ci], plane_w[ci], bx_idx * 8, by_idx * 8);
+                    }
+                }
+            }
+        }
+
+        if (channels == 4) {
+            // 4-component (CMYK / YCCK) assembly via `cmyk.zig`, which
+            // handles raw-CMYK pass-through and YCCK→CMYK per APP14
+            // ColorTransform. Pass per-component sampling factors + frame
+            // maxima so it upsamples each plane to the canvas (avoids
+            // over-reading subsampled chroma — validate_gui heap over-read,
+            // 2026-05-31).
+            const cmyk_comp_h: [4]u8 = .{
+                @intCast(frame.components[0].h_factor), @intCast(frame.components[1].h_factor),
+                @intCast(frame.components[2].h_factor), @intCast(frame.components[3].h_factor),
+            };
+            const cmyk_comp_v: [4]u8 = .{
+                @intCast(frame.components[0].v_factor), @intCast(frame.components[1].v_factor),
+                @intCast(frame.components[2].v_factor), @intCast(frame.components[3].v_factor),
+            };
+            const img = try cmyk_mod.assemble(
+                allocator,
+                width,
+                height,
+                plane_w,
+                plane_h,
+                cmyk_comp_h,
+                cmyk_comp_v,
+                max_h,
+                max_v,
+                .{ planes[0], planes[1], planes[2], planes[3] },
+                app14_color_transform,
+            );
+            var p: usize = 0;
+            while (p < channels) : (p += 1) allocator.free(planes[p]);
+            return img;
+        }
+        // 1- and 3-component (grayscale / RGB / YCbCr) — existing path.
+        const plane_w_3: [3]u32 = .{ plane_w[0], plane_w[1], plane_w[2] };
+        const plane_h_3: [3]u32 = .{ plane_h[0], plane_h[1], plane_h[2] };
+        const planes_3: [3][]u8 = .{ planes[0], planes[1], planes[2] };
+        return assembleOutput(allocator, frame, channels, width, height, max_h, max_v, plane_w_3, plane_h_3, &planes_3, pool_ptr);
+    } else {
+        // ── P == 12: IDCT every block into the per-component u16 plane ──
+        // Single-threaded (12-bit images are rare/small; the u8-typed
+        // parallel row worker above is never instantiated here).
+        var ci: usize = 0;
+        while (ci < channels) : (ci += 1) {
+            var by_idx: u32 = 0;
+            while (by_idx < blocks_h[ci]) : (by_idx += 1) {
+                var bx_idx: u32 = 0;
+                while (bx_idx < blocks_w[ci]) : (bx_idx += 1) {
+                    const linear: usize = (@as(usize, by_idx) * @as(usize, blocks_w[ci]) + @as(usize, bx_idx)) * 64;
+                    const slot: *const [64]i32 = coef_buf[ci][linear..][0..64];
+                    var block: [64]u16 = undefined;
+                    idct.idct8x8_12(slot, &block);
+                    const ox: u32 = bx_idx * 8;
+                    const oy: u32 = by_idx * 8;
+                    var blk_y: u32 = 0;
+                    while (blk_y < 8) : (blk_y += 1) {
+                        var blk_x: u32 = 0;
+                        while (blk_x < 8) : (blk_x += 1) {
+                            planes[ci][(oy + blk_y) * plane_w[ci] + (ox + blk_x)] = block[blk_y * 8 + blk_x];
+                        }
+                    }
+                }
+            }
+        }
+
+        if (channels == 1) {
+            // Grayscale: crop plane to (width × height) and alias as u16
+            // bytes (host-endian u16 convention shared with lossless).
+            const out_samples: usize = @as(usize, width) * @as(usize, height);
+            const pixels = try allocator.alloc(u8, out_samples * 2);
+            errdefer allocator.free(pixels);
+            const out_u16: []align(1) u16 = std.mem.bytesAsSlice(u16, pixels);
+            var y: u32 = 0;
+            while (y < height) : (y += 1) {
+                var x: u32 = 0;
+                while (x < width) : (x += 1) {
+                    out_u16[y * width + x] = planes[0][y * plane_w[0] + x];
+                }
+            }
+            var pi: usize = 0;
+            while (pi < channels) : (pi += 1) allocator.free(planes[pi]);
+            return types.Image{
+                .pixels = pixels,
+                .width = width,
+                .height = height,
+                .channels = 1,
+                .bits_per_sample = 12,
+                .source_color_space = .grayscale,
+                .layout = .grayscale,
+            };
+        }
+
+        // 3-component: upsample chroma to the luma canvas, then YCbCr→RGB
+        // per row into a u16 byte-view.
+        const canvas_w: u32 = plane_w[0];
+        const canvas_h: u32 = plane_h[0];
+        var canvas_planes: [3][]const u16 = undefined;
+        var canvas_owned: [3]bool = .{ false, false, false };
+        var canvas_buffers: [3][]u16 = undefined;
+        defer {
+            for (canvas_buffers, canvas_owned) |buf, owned| {
+                if (owned) allocator.free(buf);
+            }
+        }
+        for (0..channels) |idx| {
+            const comp = &frame.components[idx];
+            const h_ratio: u32 = max_h / @as(u32, comp.h_factor);
+            const v_ratio: u32 = max_v / @as(u32, comp.v_factor);
+            if (h_ratio == 1 and v_ratio == 1) {
+                canvas_planes[idx] = planes[idx];
+                canvas_owned[idx] = false;
+            } else {
+                const active_w: u32 = (width * @as(u32, comp.h_factor) + max_h - 1) / max_h;
+                const active_h: u32 = (height * @as(u32, comp.v_factor) + max_v - 1) / max_v;
+                const buf = try color.fancyUpsample12(
+                    allocator,
+                    planes[idx],
+                    plane_w[idx],
+                    plane_h[idx],
+                    canvas_w,
+                    canvas_h,
+                    active_w,
+                    active_h,
+                    h_ratio,
+                    v_ratio,
+                );
+                canvas_buffers[idx] = buf;
+                canvas_planes[idx] = buf;
+                canvas_owned[idx] = true;
+            }
+        }
+
+        const out_u16_count: usize = @as(usize, width) * @as(usize, height) * @as(usize, channels);
+        const pixels = try allocator.alloc(u8, out_u16_count * 2);
+        errdefer allocator.free(pixels);
+        const pixels_u16: []align(1) u16 = std.mem.bytesAsSlice(u16, pixels);
+        var y: u32 = 0;
+        while (y < height) : (y += 1) {
+            color.ycbcrRowToRgb12(
+                canvas_planes[0],
+                canvas_planes[1],
+                canvas_planes[2],
+                canvas_w,
+                width,
+                pixels_u16,
+                y,
+            );
+        }
+        var pi: usize = 0;
+        while (pi < channels) : (pi += 1) allocator.free(planes[pi]);
+        return types.Image{
+            .pixels = pixels,
+            .width = width,
+            .height = height,
+            .channels = 3,
+            .bits_per_sample = 12,
+            .source_color_space = .ycbcr,
+            .layout = .rgb,
+        };
+    }
 }
 
 /// Per-row worker: IDCT every block in row `by_idx` and write into the
