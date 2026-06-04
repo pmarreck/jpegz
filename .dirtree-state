@@ -1,0 +1,41 @@
+# Dirtree: Stateful directory trees in the CLI for humans and LLMs. https://github.com/pmarreck/dirtree
+ver=1.2
+
+annotate=[
+	NEXT_STEPS.md = Session handoff: variant-coverage matrix, prioritized next tasks, architecture decisions
+	SPEC.md = Full project specification: milestones, ABI shape, design decisions
+	build = Bash wrapper: nix build .#default (release); --debug for devShell Debug build
+	docs/superpowers/specs = Frozen design specs (public API, 12-bit precision, arithmetic, JPEG-LS, etc.)
+	flake.nix = Nix flake: pins Zig 0.16.0 + libjpeg-turbo/openjpeg/charls; packages/checks/devShell; Garnix CI
+	include/jpegz_core.h = Hand-curated public C ABI header (jpegz_decode/validate/free/version)
+	src/core/errors.zig = Source of truth for DecodeError/Severity/Variant/FindingCode; numeric values are stable wire format
+	src/core/last_error.zig = Thread-local last-error message buffer backing the C ABI
+	src/core/types.zig = Core public types: Image, ImageMetadata, ColorSpace, PixelLayout
+	src/core/validator.zig = Hand-written marker-chain validator: walks SOI/segments/SOS/EOI, classifies variant, emits findings
+	src/decode = Cleanroom JPEG codec decoders (pure, no I/O) — the project core
+	src/decode/arith_coder.zig = Arithmetic Q-coder state machine (T.81 Annex D)
+	src/decode/arith_decode.zig = Arithmetic-coded JPEG (SOF9/SOF10) entropy decode reusing baseline Phase-2 assemble
+	src/decode/baseline.zig = SOF0/SOF1 8/12-bit DCT decode; unified decodeScanT(comptime P) scan decoder, thread pool, CMYK/YCCK, assembleOutput
+	src/decode/bitstream.zig = Byte-stuffed JPEG bit reader + marker handling
+	src/decode/cmyk.zig = 4-component CMYK/YCCK assembly per APP14 ColorTransform, with chroma upsample
+	src/decode/color.zig = Fixed-point YCbCr to RGB + IJG fancy chroma upsample (8 and 12-bit)
+	src/decode/diag.zig = Shared debug fail() tracer: prints [module:tag] err in Debug builds, no-op in release
+	src/decode/findings.zig = FindingsSink: collects warn/error Findings for validate() spec-deviation reporting
+	src/decode/huffman.zig = Canonical Huffman table build + fast/slow entropy decode
+	src/decode/idct.zig = libjpeg-turbo islow integer IDCT, comptime-generic over precision (8/12)
+	src/decode/jpeg_markers.zig = Shared SOF/DQT/DHT marker-segment parsers (baseline + progressive)
+	src/decode/jpegls.zig = JPEG-LS (T.87) decode entry: LOCO-I predictor + context modeling
+	src/decode/jpegls_bitstream.zig = JPEG-LS bit reader (Golomb-Rice unary + k-bit)
+	src/decode/jpegls_codec.zig = JPEG-LS LOCO-I regular/run-mode codec (Golomb-Rice)
+	src/decode/lossless.zig = SOF3 lossless 8/12/14/16-bit, 1/3-comp, DRI, 7 predictors; byte-exact reconstruction
+	src/decode/progressive.zig = SOF2 progressive multi-scan DCT decode incl. DRI and AC refinement
+	src/decode/segment.zig = Shared parseSegmentLength marker-length primitive
+	src/decode/thread_pool.zig = Minimal worker thread pool (spawnWg/waitAndWork) for parallel IDCT + color convert
+	src/ffi/c_api.zig = C ABI export fn for every public API; exhaustive toCStatus switch fails the build on an unmapped error
+	src/ffi/charls_wrapper.zig = charls (BSD) wrapper for JPEG-LS decode
+	src/ffi/libjpeg_wrapper.zig = libjpeg-turbo wrapper: fallback decode + byte-perfect oracle; setjmp/longjmp error bridge
+	src/ffi/openjpeg_wrapper.zig = openjpeg wrapper for jpeg2000.decode (JP2 box vs raw J2K)
+	src/jpegz.zig = Public Zig core API + decode/validate dispatch: cleanroom decoders with libjpeg/openjpeg/charls wrapper fallback; C ABI re-exports
+	test = Bash wrapper: nix build .#checks.*.{test,build}, accumulates sub-check failures (no set -e)
+	tools/gen_c_header.zig = Comptime walker over core/errors.zig; emits include/jpegz_errno.h at build
+]
