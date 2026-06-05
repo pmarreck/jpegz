@@ -14,6 +14,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const build_options = @import("jpegz_build_options");
 
 // ── Re-exports from canonical core modules ──────────────────────
 const errors = @import("core/errors.zig");
@@ -630,7 +631,9 @@ pub const internal = struct {
         return @import("decode/progressive.zig").decodeAndDumpCoefs(allocator, data);
     }
     pub fn wrapperDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
-        return @import("ffi/libjpeg_wrapper.zig").decode(allocator, data);
+        if (comptime build_options.with_libjpeg_oracle) {
+            return @import("ffi/libjpeg_wrapper.zig").decode(allocator, data);
+        } else return error.NotImplemented;
     }
     /// Arithmetic-coded JPEG decode (SOF9 / SOF10). Returns
     /// `error.NotImplemented` until B1 lands; tests calling this
@@ -643,9 +646,12 @@ pub const internal = struct {
     }
     /// Diagnostic: dump per-block coefs from libjpeg-turbo via
     /// `jpeg_read_coefficients` — RAW, natural order, pre-dequant.
-    pub const WrapperCoefDump = @import("ffi/libjpeg_wrapper.zig").CoefDump;
+    /// Gated on the libjpeg oracle; an empty type when -Dwith-libjpeg-oracle=false.
+    pub const WrapperCoefDump = if (build_options.with_libjpeg_oracle) @import("ffi/libjpeg_wrapper.zig").CoefDump else struct {};
     pub fn wrapperDumpCoefs(allocator: Allocator, data: []const u8) DecodeError!WrapperCoefDump {
-        return @import("ffi/libjpeg_wrapper.zig").dumpCoefs(allocator, data);
+        if (comptime build_options.with_libjpeg_oracle) {
+            return @import("ffi/libjpeg_wrapper.zig").dumpCoefs(allocator, data);
+        } else return error.NotImplemented;
     }
     pub fn arithDecode(allocator: Allocator, data: []const u8) DecodeError!Image {
         return @import("decode/arith_decode.zig").decode(allocator, data);

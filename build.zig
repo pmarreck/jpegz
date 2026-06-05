@@ -30,30 +30,43 @@ pub fn build(b: *std.Build) void {
         "Compile + link vendored charls (JPEG-LS support). Default true.",
     ) orelse true;
 
-    // Expose `with_charls` to Zig source via @import("jpegz_build_options").
-    // src/ffi/charls_wrapper.zig branches its @cImport on this so the
-    // charls header doesn't need to be resolvable when the gate is off.
+    // -Dwith-libjpeg-oracle=false drops libjpeg-turbo from the build. It is
+    // ONLY used as the byte-perfect test oracle (jpegz.internal.wrapperDecode /
+    // wrapperDumpCoefs); the runtime decode() path is cleanroom-only and never
+    // calls it. Default true so jpegz CI + oracle comparisons keep working;
+    // prod / consumer builds pass false to shed the libjpeg-turbo dependency.
+    const with_libjpeg_oracle = b.option(
+        bool,
+        "with-libjpeg-oracle",
+        "Compile + link libjpeg-turbo as the dev/test oracle. Default true; false drops it from prod.",
+    ) orelse true;
+
+    // Expose options to Zig source via @import("jpegz_build_options").
+    // charls_wrapper.zig branches its @cImport on with_charls, and src/jpegz.zig
+    // gates its libjpeg-oracle internals on with_libjpeg_oracle, so neither C
+    // header needs to resolve when its gate is off.
     //
-    // Name is intentionally namespaced (NOT the conventional
-    // `build_options`) to avoid Zig 0.16's package-graph dedup
-    // collision when a downstream consumer pulls in two jpegz versions
-    // transitively (e.g. validate pins jpegz directly AND through
-    // tiffz). Both copies would otherwise register a module called
-    // `build_options` and Zig surfaces "file exists in modules
-    // build_options1 and build_options3" errors. The jpegz-prefixed
-    // name keeps each copy's options module distinct.
+    // Name is intentionally namespaced (NOT the conventional `build_options`)
+    // to avoid Zig 0.16's package-graph dedup collision when a downstream
+    // consumer pulls in two jpegz versions transitively (e.g. validate pins
+    // jpegz directly AND through tiffz). Both copies would otherwise register a
+    // module called `build_options` and Zig surfaces "file exists in modules
+    // build_options1 and build_options3" errors. The jpegz-prefixed name keeps
+    // each copy's options module distinct.
     const build_options = b.addOptions();
     build_options.addOption(bool, "with_charls", with_charls);
+    build_options.addOption(bool, "with_libjpeg_oracle", with_libjpeg_oracle);
     const build_options_mod = build_options.createModule();
     jpegz_mod.addImport("jpegz_build_options", build_options_mod);
 
     // Link C deps (system; provided by Nix flake's buildInputs):
     //   - libjpeg-turbo (jpeglib.h, used by src/ffi/libjpeg_wrapper.zig)
+    //                   — DEV/TEST ORACLE ONLY, gated on -Dwith-libjpeg-oracle.
     //   - openjpeg     (openjpeg.h, used by src/ffi/openjpeg_wrapper.zig)
     //   - charls       (charls/charls.h, used by src/ffi/charls_wrapper.zig)
     //                   — VENDORED: compiled from source via -Dcharls-src
     //                   or CHARLS_SRC env, see the charls block below.
-    jpegz_mod.linkSystemLibrary("jpeg", .{});
+    if (with_libjpeg_oracle) jpegz_mod.linkSystemLibrary("jpeg", .{});
     jpegz_mod.linkSystemLibrary("openjp2", .{});
     if (with_charls) jpegz_mod.link_libcpp = true;
     jpegz_mod.link_libc = true;
@@ -384,7 +397,7 @@ pub fn build(b: *std.Build) void {
     // c_smoke at the same -Dlibjpeg-lib / -Dopenjpeg-lib paths the
     // library itself was given. Native builds: these options are
     // unset and Zig finds the libs via the host wrapper-cc.
-    c_smoke_mod.linkSystemLibrary("jpeg", .{});
+    if (with_libjpeg_oracle) c_smoke_mod.linkSystemLibrary("jpeg", .{});
     c_smoke_mod.linkSystemLibrary("openjp2", .{});
     c_smoke_mod.link_libcpp = true; // libjpegz.a pulls in vendored charls (C++)
     if (opt_libjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
