@@ -1,6 +1,5 @@
 # Dirtree: Stateful directory trees in the CLI for humans and LLMs. https://github.com/pmarreck/dirtree
 ver=1.2
-
 annotate=[
 	NEXT_STEPS.md = Session handoff: variant-coverage matrix, prioritized next tasks, architecture decisions
 	SPEC.md = Full project specification: milestones, ABI shape, design decisions
@@ -15,7 +14,7 @@ annotate=[
 	src/decode = Cleanroom JPEG codec decoders (pure, no I/O) — the project core
 	src/decode/arith_coder.zig = Arithmetic Q-coder state machine (T.81 Annex D)
 	src/decode/arith_decode.zig = Arithmetic-coded JPEG (SOF9/SOF10) entropy decode reusing baseline Phase-2 assemble
-	src/decode/baseline.zig = SOF0/SOF1 8/12-bit DCT decode; unified decodeScanT(comptime P) scan decoder, thread pool, CMYK/YCCK, assembleOutput
+	src/decode/baseline.zig = SOF0/SOF1 8/12-bit DCT decode; unified decodeScanT(comptime P) + precision-generic assembleOutputT(P); thread pool, CMYK/YCCK
 	src/decode/bitstream.zig = Byte-stuffed JPEG bit reader + marker handling
 	src/decode/cmyk.zig = 4-component CMYK/YCCK assembly per APP14 ColorTransform, with chroma upsample
 	src/decode/color.zig = Fixed-point YCbCr to RGB + IJG fancy chroma upsample (8 and 12-bit)

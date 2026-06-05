@@ -565,10 +565,19 @@ blast radius on the hot 8-bit path.
 3. Route 12-bit RGB → `decodeScanT(12)`. Green.
 4. Delete the three obsolete functions. Green.
 
-### Optional follow-up (deferred — needs its own go/no-go)
-Make `assembleOutput` itself precision-generic (`assembleOutputT(comptime P)`
-+ a thin u8 wrapper for arith_decode) so the inlined 12-bit final stage folds
-into the shared helper too, shortening `decodeScanT`. This is a *bold* change
-touching the arith_decode-shared helper. The current state is the agreed safe
-endpoint: dedup achieved, single entry point, byte-perfect across all 13 DCT
-fixtures + the full suite.
+### Follow-up: assembleOutput genericized — ✅ SHIPPED 2026-06-04
+
+`assembleOutput` is now `assembleOutputT(comptime P)` — the chroma upsample +
+YCbCr→RGB + output-packing final stage is precision-generic. `decodeScanT`'s
+1/3-component path calls it for BOTH precisions (one call site), replacing the
+~95-line 12-bit tail that was previously inlined in `decodeScanT`; 4-component
+CMYK/YCCK (P=8) still routes through `cmyk_mod.assemble`. A thin u8
+`assembleOutput` wrapper (`= assembleOutputT(8, ...)`) keeps `arith_decode`
+(SOF9) and any other u8 caller working unchanged.
+
+Done safe-incrementally with the byte-perfect gate: (A) add `assembleOutputT`
++ wrapper, validate the u8 path; (B) rewire `decodeScanT` to call it for both
+precisions, delete the inlined 12-bit tail, validate the u16 path. Both green
+across the full suite. baseline.zig: 1179 → 1128 lines; `decodeScanT` now has a
+single final-stage call site. Step 3 + this follow-up together fully unify the
+scan-decode + assemble path.
