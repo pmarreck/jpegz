@@ -1,7 +1,7 @@
 //! Inverse 8×8 DCT — three flavors:
 //!
-//!   1. `idct8x8_float` — direct f64 implementation per T.81 Annex A.
-//!      Slow but obviously correct; kept as an oracle for tests.
+//!   1. `idct8x8_fpd` — direct T.81 Annex A IDCT in fixed-point decimal
+//!      Integer constants × 10^6, i128 math; no runtime float. Test oracle.
 //!
 //!   2. `idct8x8` — 8-bit thin wrapper over `idct8x8Generic(8, ...)`.
 //!      Public stable API used by SOF0/SOF1 8-bit cleanroom. Output
@@ -32,7 +32,6 @@
 const std = @import("std");
 
 const N: usize = 8;
-const PI: f64 = 3.141592653589793;
 
 // ─────── islow integer IDCT (libjpeg-turbo's jpeg_idct_islow) ────────
 
@@ -303,58 +302,67 @@ pub fn idct8x8Generic(comptime P: u8, coeffs: *const [64]i32, out: *[64]Sample(P
     }
 }
 
-// ─────── Reference float IDCT (kept for tests / oracle) ──────────────
+// ─────── Reference fixed-point-decimal IDCT (kept for tests / oracle) ──────
 
-/// IDCT cosine basis: cos((2x+1) * u * π / 16). Precomputed at
-/// comptime so the hot path is just multiply-accumulate.
-const COS_TABLE: [N][N]f64 = blk: {
-    @setEvalBranchQuota(10000);
-    var t: [N][N]f64 = undefined;
-    var u: usize = 0;
-    while (u < N) : (u += 1) {
-        var x: usize = 0;
-        while (x < N) : (x += 1) {
-            t[u][x] = @cos(@as(f64, @floatFromInt(2 * x + 1)) *
-                @as(f64, @floatFromInt(u)) * PI / 16.0);
-        }
-    }
-    break :blk t;
+/// IDCT cosine basis cos((2x+1)·u·π/16), written as fixed-point **decimal**
+/// scalars: each entry is the true value × 10^6, rounded to an integer (the
+/// decimal point is "6 places", tracked in the arithmetic below). No floats —
+/// these are the ITU-T T.81 Annex A basis values authored directly as
+/// integers. Rows are frequency u (0..7), columns spatial x (0..7).
+const FPD_SCALE: i128 = 1_000_000; // 10^6 — six tracked decimal places
+
+const COS_Q: [N][N]i64 = .{
+    .{ 1000000, 1000000, 1000000, 1000000, 1000000, 1000000, 1000000, 1000000 },
+    .{ 980785, 831470, 555570, 195090, -195090, -555570, -831470, -980785 },
+    .{ 923880, 382683, -382683, -923880, -923880, -382683, 382683, 923880 },
+    .{ 831470, -195090, -980785, -555570, 555570, 980785, 195090, -831470 },
+    .{ 707107, -707107, -707107, 707107, 707107, -707107, -707107, 707107 },
+    .{ 555570, -980785, 195090, 831470, -831470, -195090, 980785, -555570 },
+    .{ 382683, -923880, 923880, -382683, -382683, 923880, -923880, 382683 },
+    .{ 195090, -555570, 831470, -980785, 980785, -831470, 555570, -195090 },
 };
 
-/// Per-axis normalization factor: 1/√2 for u==0, 1 otherwise.
-const NORM: [N]f64 = blk: {
-    @setEvalBranchQuota(10000);
-    var n: [N]f64 = undefined;
-    n[0] = 1.0 / @sqrt(2.0);
-    var i: usize = 1;
-    while (i < N) : (i += 1) n[i] = 1.0;
-    break :blk n;
-};
+/// Per-axis normalization C(u): 1/√2 for u==0 (707107 = round(0.7071068×10^6)),
+/// else 1 (1000000). Same ×10^6 fixed-point decimal scale as COS_Q.
+const NORM_Q: [N]i64 = .{ 707107, 1000000, 1000000, 1000000, 1000000, 1000000, 1000000, 1000000 };
 
-/// Reference float IDCT — direct mathematical implementation per T.81
-/// Annex A. Used as an oracle in tests; production path is the integer
-/// `idct8x8` above. Slow (~4096 multiplies per block) but obviously correct.
-pub fn idct8x8_float(coeffs: *const [64]i32, out: *[64]u8) void {
+/// Reference IDCT — the direct T.81 Annex A double-sum done entirely in
+/// **fixed-point decimal** (integers with the decimal point tracked), so it is
+/// float-free at runtime. Kept as an oracle for tests; the production path is
+/// the integer `idct8x8` above. Slow (~4096 i128 multiply-accumulates per
+/// block) but obviously correct.
+///
+/// Each term = coeff × NORM_Q[u] × NORM_Q[v] × COS_Q[u][x] × COS_Q[v][y],
+/// carrying four ×10^6 constant scales (10^24 total); the spec's 1/4 factor is
+/// the extra ÷4. The block accumulates in i128, then a single
+/// round-half-away-from-zero divide by 4·10^24 recovers the integer sample,
+/// + 128 level shift (T.81 §A.3.1), clamped to [0, 255]. i128 has ample
+/// headroom: worst-case |term| ≈ i32_max × 10^24 ≈ 2·10^33, ×64 ≪ i128_max.
+pub fn idct8x8_fpd(coeffs: *const [64]i32, out: *[64]u8) void {
+    const denom: i128 = 4 * FPD_SCALE * FPD_SCALE * FPD_SCALE * FPD_SCALE; // 4·10^24
+    const half: i128 = @divTrunc(denom, 2);
     var y: usize = 0;
     while (y < N) : (y += 1) {
         var x: usize = 0;
         while (x < N) : (x += 1) {
-            var sum: f64 = 0;
+            var sum: i128 = 0;
             var v: usize = 0;
             while (v < N) : (v += 1) {
                 var u: usize = 0;
                 while (u < N) : (u += 1) {
-                    sum += NORM[u] * NORM[v] *
-                        @as(f64, @floatFromInt(coeffs[v * N + u])) *
-                        COS_TABLE[u][x] * COS_TABLE[v][y];
+                    sum += @as(i128, coeffs[v * N + u]) *
+                        @as(i128, NORM_Q[u]) * @as(i128, NORM_Q[v]) *
+                        @as(i128, COS_Q[u][x]) * @as(i128, COS_Q[v][y]);
                 }
             }
-            const sample = sum * 0.25 + 128.0;
-            const rounded: i32 = @intFromFloat(@round(sample));
-            const clamped: u8 = if (rounded < 0) 0
-                else if (rounded > 255) 255
-                else @intCast(rounded);
-            out[y * N + x] = clamped;
+            // Round-half-away-from-zero divide by denom (folds the 1/4 and the
+            // 10^24 constant scale), then level-shift and clamp.
+            const sample_int: i128 = if (sum >= 0)
+                @divTrunc(sum + half, denom)
+            else
+                @divTrunc(sum - half, denom);
+            const shifted: i128 = sample_int + 128;
+            out[y * N + x] = if (shifted < 0) 0 else if (shifted > 255) 255 else @intCast(shifted);
         }
     }
 }
@@ -439,4 +447,36 @@ test "idct8x8Generic clamps to [0, 2^P-1] at every P" {
         idct8x8Generic(P, &coeffs, &out);
         for (out) |s| try std.testing.expectEqual(@as(Sample(P), 0), s);
     }
+}
+
+test "idct8x8_fpd (fixed-point-decimal oracle) matches production islow idct8x8 within tolerance" {
+    // Cross-validate the spec-derived Annex-A fixed-point-decimal reference
+    // against the production islow integer IDCT over pseudo-random blocks.
+    // Both approximate the true IDCT (T.81 §A.3.3); the project's IDCT
+    // tolerance is ≤2 LSB, which bounds their difference. A deterministic LCG
+    // keeps the test reproducible without depending on std.Random's API.
+    var seed: u32 = 0xC0FFEE;
+    var trial: usize = 0;
+    while (trial < 200) : (trial += 1) {
+        var coeffs: [64]i32 = undefined;
+        for (&coeffs) |*c| {
+            seed = seed *% 1103515245 +% 12345;
+            c.* = @as(i32, @intCast((seed >> 16) & 0x7FF)) - 1024; // [-1024, 1023]
+        }
+        var a: [64]u8 = undefined;
+        var b: [64]u8 = undefined;
+        idct8x8(&coeffs, &a);
+        idct8x8_fpd(&coeffs, &b);
+        for (a, b) |va, vb| {
+            const d = if (va > vb) va - vb else vb - va;
+            try std.testing.expect(d <= 2);
+        }
+    }
+}
+
+test "idct8x8_fpd all-zero coefficients yield uniform 128" {
+    const coeffs = [_]i32{0} ** 64;
+    var out: [64]u8 = undefined;
+    idct8x8_fpd(&coeffs, &out);
+    for (out) |s| try std.testing.expectEqual(@as(u8, 128), s);
 }
