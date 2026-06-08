@@ -1970,3 +1970,22 @@ test "cmyk cleanroom 16x16 YCCK SUBSAMPLED chroma byte-perfect vs wrapper (heap-
     try std.testing.expectEqual(wrapper.channels, cleanroom.channels);
     try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
 }
+
+// gap D — RGB-marked baseline (Adobe APP14 ColorTransform=0): the three
+// components are already R,G,B and must be passed through, NOT YCbCr→RGB
+// converted. libjpeg passes them through; the cleanroom must match byte-exact.
+const fixture_baseline_16x16_rgb_marked = @embedFile("fixtures/baseline_16x16_rgb_marked.jpg");
+
+test "RGB-marked baseline (Adobe APP14 transform=0) decodes as RGB, byte-matching libjpeg" {
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.cleanroomDecode(allocator, fixture_baseline_16x16_rgb_marked);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_baseline_16x16_rgb_marked);
+    defer wrapper.deinit(allocator);
+    try std.testing.expectEqual(wrapper.width, cleanroom.width);
+    try std.testing.expectEqual(wrapper.height, cleanroom.height);
+    // Source color space must be reported as RGB (not YCbCr).
+    try std.testing.expectEqual(jpegz.ColorSpace.rgb, cleanroom.source_color_space);
+    // Pixels must be the RGB passthrough libjpeg produces (no chroma transform).
+    try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+}

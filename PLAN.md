@@ -358,6 +358,16 @@ machinery where possible).
 
 ## Recently completed
 
+- 2026-06-08 EST — Gap D: RGB-marked baseline cleanroom parity — an Adobe
+  APP14 ColorTransform=0 3-component JPEG (e.g. `cjpeg -rgb`) carries R,G,B
+  directly; the cleanroom was wrongly YCbCr→RGB converting it. `decodeScanT`
+  now computes an `rgb_passthrough` flag (APP14 transform 0 for a 3-comp
+  frame) and `assembleOutputT` interleaves the planes as-is, reporting
+  `source_color_space = .rgb` — byte-matching libjpeg. Unblocks tiffz
+  dropping its `internal.wrapperDecode` for the `rgb-jpeg.tif` case. Fixture
+  `baseline_16x16_rgb_marked.jpg` + TDD cross-check vs `wrapperDecode`.
+  Follow-up: the no-APP14 'R'/'G'/'B' component-ID heuristic (rarer in the
+  wild; needs a hand-crafted fixture since cjpeg always writes APP14).
 - 2026-05-06 EST — M1.8 + M1.9 handoff recipes — concrete integration
   patches dropped in validate/inbox/ and tiffz/inbox/. Each contains
   the exact flake.nix + build.zig changes, the shim file in full,

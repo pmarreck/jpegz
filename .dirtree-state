@@ -36,5 +36,6 @@ annotate=[
 	src/ffi/openjpeg_wrapper.zig = openjpeg wrapper for jpeg2000.decode (JP2 box vs raw J2K)
 	src/jpegz.zig = Public Zig core API + decode/validate dispatch: cleanroom decoders with libjpeg/openjpeg/charls wrapper fallback; C ABI re-exports
 	test = Bash wrapper: nix build .#checks.*.{test,build}, accumulates sub-check failures (no set -e)
+	tests/unit/fixtures/baseline_16x16_rgb_marked.jpg = RGB-marked baseline JPEG (Adobe APP14 transform=0) — gap-D cleanroom RGB-passthrough test fixture
 	tools/gen_c_header.zig = Comptime walker over core/errors.zig; emits include/jpegz_errno.h at build
 ]

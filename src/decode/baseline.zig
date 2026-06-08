@@ -765,7 +765,15 @@ fn decodeScanT(
     const plane_w_3: [3]u32 = .{ plane_w[0], plane_w[1], plane_w[2] };
     const plane_h_3: [3]u32 = .{ plane_h[0], plane_h[1], plane_h[2] };
     const planes_3: [3][]Sample = .{ planes[0], planes[1], planes[2] };
-    return assembleOutputT(P, allocator, frame, channels, width, height, max_h, max_v, plane_w_3, plane_h_3, &planes_3, pool_ptr);
+    // gap D: a 3-component frame marked RGB (Adobe APP14 ColorTransform=0,
+    // enum .cmyk — which for 3 components means RGB) carries components that
+    // are already R,G,B; pass them through instead of YCbCr→RGB converting, to
+    // match libjpeg. 12-bit never hits this (always YCbCr in v1).
+    const rgb_passthrough: bool = if (comptime P <= 8)
+        (channels == 3 and app14_color_transform == .cmyk)
+    else
+        false;
+    return assembleOutputT(P, allocator, frame, channels, width, height, max_h, max_v, plane_w_3, plane_h_3, &planes_3, pool_ptr, rgb_passthrough);
 }
 
 /// Per-row worker: IDCT every block in row `by_idx` and write into the
@@ -993,6 +1001,7 @@ pub fn assembleOutputT(
     plane_h: [3]u32,
     planes: *const [3][]SampleT(P),
     pool: ?*thread_pool.Pool,
+    rgb_passthrough: bool,
 ) Error!types.Image {
     const Sample = SampleT(P);
     const out_count: usize = @as(usize, width) * @as(usize, height) * @as(usize, channels);
@@ -1063,7 +1072,20 @@ pub fn assembleOutputT(
         // Color conversion is per-row independent. For P=8 it parallelizes on
         // the shared IDCT thread pool when supplied; P=12 stays sequential.
         if (comptime P <= 8) {
-            if (pool) |p| {
+            if (rgb_passthrough) {
+                // RGB passthrough — the 3 components are already R,G,B at canvas
+                // resolution; interleave directly, no chroma transform (gap D).
+                var y: u32 = 0;
+                while (y < height) : (y += 1) {
+                    var x: u32 = 0;
+                    while (x < width) : (x += 1) {
+                        const o = (y * width + x) * 3;
+                        pixels[o + 0] = canvas_planes[0][y * canvas_w + x];
+                        pixels[o + 1] = canvas_planes[1][y * canvas_w + x];
+                        pixels[o + 2] = canvas_planes[2][y * canvas_w + x];
+                    }
+                }
+            } else if (pool) |p| {
                 var wg: thread_pool.WaitGroup = .{};
                 var y: u32 = 0;
                 while (y < height) : (y += 1) {
@@ -1103,7 +1125,7 @@ pub fn assembleOutputT(
         .height = height,
         .channels = channels,
         .bits_per_sample = if (comptime P <= 8) 8 else 12,
-        .source_color_space = if (channels == 1) .grayscale else .ycbcr,
+        .source_color_space = if (channels == 1) .grayscale else if (rgb_passthrough) .rgb else .ycbcr,
         .layout = if (channels == 1) .grayscale else .rgb,
     };
 }
@@ -1123,6 +1145,6 @@ pub fn assembleOutput(
     planes: *const [3][]u8,
     pool: ?*thread_pool.Pool,
 ) Error!types.Image {
-    return assembleOutputT(8, allocator, frame, channels, width, height, max_h, max_v, plane_w, plane_h, planes, pool);
+    return assembleOutputT(8, allocator, frame, channels, width, height, max_h, max_v, plane_w, plane_h, planes, pool, false);
 }
 
