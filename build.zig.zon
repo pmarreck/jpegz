@@ -6,11 +6,14 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        "deps",
         "include",
         "tests",
         "LICENSE",
         "README.md",
     },
     .fingerprint = 0xaaef54e4e0b0d6b2,
-    .dependencies = .{},
+    .dependencies = .{
+        .openjpeg = .{ .path = "deps/openjpeg" },
+    },
 }

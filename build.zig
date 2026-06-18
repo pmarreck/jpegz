@@ -67,7 +67,6 @@ pub fn build(b: *std.Build) void {
     //                   — VENDORED: compiled from source via -Dcharls-src
     //                   or CHARLS_SRC env, see the charls block below.
     if (with_libjpeg_oracle) jpegz_mod.linkSystemLibrary("jpeg", .{});
-    jpegz_mod.linkSystemLibrary("openjp2", .{});
     if (with_charls) jpegz_mod.link_libcpp = true;
     jpegz_mod.link_libc = true;
 
@@ -84,6 +83,18 @@ pub fn build(b: *std.Build) void {
     if (opt_libjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
     if (opt_openjpeg_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
     if (opt_openjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
+
+    // openjpeg linkage: link the system lib when a path is provided (native
+    // nix build — the flake passes -Dopenjpeg-lib); otherwise Zig-vendor it
+    // from deps/openjpeg (a self-contained no-SIMD libopenjp2) so jpegz
+    // cross-compiles to every target including windows-{x86_64,aarch64}.
+    if (opt_openjpeg_lib != null) {
+        jpegz_mod.linkSystemLibrary("openjp2", .{});
+    } else {
+        const openjpeg_dep = b.dependency("openjpeg", .{ .target = target, .optimize = optimize });
+        jpegz_mod.linkLibrary(openjpeg_dep.artifact("openjp2"));
+    }
+
 
     // ── charls — vendored, compiled by Zig (gated on -Dwith-charls) ──
     //
@@ -398,7 +409,7 @@ pub fn build(b: *std.Build) void {
     // library itself was given. Native builds: these options are
     // unset and Zig finds the libs via the host wrapper-cc.
     if (with_libjpeg_oracle) c_smoke_mod.linkSystemLibrary("jpeg", .{});
-    c_smoke_mod.linkSystemLibrary("openjp2", .{});
+    if (opt_openjpeg_lib != null) c_smoke_mod.linkSystemLibrary("openjp2", .{});
     c_smoke_mod.link_libcpp = true; // libjpegz.a pulls in vendored charls (C++)
     if (opt_libjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
     if (opt_openjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });

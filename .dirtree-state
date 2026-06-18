@@ -4,6 +4,7 @@ annotate=[
 	NEXT_STEPS.md = Session handoff: variant-coverage matrix, prioritized next tasks, architecture decisions
 	SPEC.md = Full project specification: milestones, ABI shape, design decisions
 	build = Bash wrapper: nix build .#default (release); --debug for devShell Debug build
+	deps/openjpeg = Vendored openjpeg (uclouvain 2.5.4, no-SIMD) — static libopenjp2 compiled by Zig for cross/Windows; used when no -Dopenjpeg-lib is given
 	docs/superpowers/specs = Frozen design specs (public API, 12-bit precision, arithmetic, JPEG-LS, etc.)
 	flake.nix = Nix flake: pins Zig 0.16.0 + libjpeg-turbo/openjpeg/charls; packages/checks/devShell; Garnix CI
 	include/jpegz_core.h = Hand-curated public C ABI header (jpegz_decode/validate/free/version)

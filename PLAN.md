@@ -358,6 +358,21 @@ machinery where possible).
 
 ## Recently completed
 
+- 2026-06-11 EST — Vendored openjpeg for cross-compile (Mecha Validate
+  Windows-launch unblock) — `linkSystemLibrary("openjp2")` was unconditional,
+  breaking mingw/`-static` cross (no zig-findable static openjp2; mingw
+  openjpeg won't build). build.zig now auto-picks: system openjp2 when
+  `-Dopenjpeg-lib` is given (native nix, fast), else the Zig-vendored static
+  libopenjp2 from `deps/openjpeg/` (uclouvain 2.5.4, 22-file no-SIMD; pattern
+  stolen from validate's core). `c_smoke`'s openjp2 link gated likewise (the
+  vendored static lib propagates through the jpegz lib). jpegz module API
+  unchanged — pure pin bump for consumers. Verified: native ./test green;
+  `x86_64-windows-gnu` test-build links clean (RED was 18 undefined `opj_*`).
+  Vendored path only fetches `openjpeg_src` when used, so the native sandbox
+  build needs no flake FOD. libjpeg needs NO vendoring (gated test-only via
+  `-Dwith-libjpeg-oracle`; gap D lets tiffz drop `wrapperDecode`). Pin chain:
+  jpegz → tiffz → validate. Follow-up: flake windows cross-check (zigDeps
+  FOD) as the persistent CI regression gate.
 - 2026-06-08 EST — Gap D: RGB-marked baseline cleanroom parity — an Adobe
   APP14 ColorTransform=0 3-component JPEG (e.g. `cjpeg -rgb`) carries R,G,B
   directly; the cleanroom was wrongly YCbCr→RGB converting it. `decodeScanT`
