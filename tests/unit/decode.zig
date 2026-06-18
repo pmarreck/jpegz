@@ -454,6 +454,27 @@ test "fancy upsampling matches libjpeg-turbo on 4:2:0 (cleanroom == wrapper)" {
     try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
 }
 
+/// Mode-2 (JPEGTables-spliced / abbreviated) JPEG-in-TIFF stream. Built
+/// from tiffz's `rgb-jpeg.tif` (Compression=7, 157×151 RGB, JPEGTables
+/// Mode 2) by the TN2 splice: JPEGTables (SOI…DQT…DHT…EOI) minus trailing
+/// EOI ++ strip (SOI…SOF SOS scan…EOI) minus leading SOI → one complete
+/// `SOI tables SOF SOS scan EOI` baseline stream. libjpeg decodes it fine;
+/// the cleanroom was producing a uniform color shift from byte 0 — a
+/// table-inheritance gap where DQT/DHT carried in the spliced prefix
+/// weren't applied. Differential gate vs the libjpeg oracle.
+const fixture_mode2_spliced = @embedFile("fixtures/rgb-mode2-spliced.jpg");
+
+test "Mode-2 JPEGTables-spliced baseline is byte-perfect vs libjpeg-turbo" {
+    const allocator = std.testing.allocator;
+    var cleanroom = try jpegz.internal.cleanroomDecode(allocator, fixture_mode2_spliced);
+    defer cleanroom.deinit(allocator);
+    var wrapper = try jpegz.internal.wrapperDecode(allocator, fixture_mode2_spliced);
+    defer wrapper.deinit(allocator);
+    try std.testing.expectEqual(wrapper.width, cleanroom.width);
+    try std.testing.expectEqual(wrapper.height, cleanroom.height);
+    try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+}
+
 /// 4×4 16-bit grayscale lossless. precision 16, all 0x8000.
 const fixture_lossless_4x4_gray16 = @embedFile("fixtures/lossless_4x4_gray16.jpg");
 const fixture_lossless_16x16_gray_dri = @embedFile("fixtures/lossless_16x16_gray_dri.jpg");

@@ -343,6 +343,7 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                         restart_interval,
                         options,
                         app14_color_transform,
+                        saw_jfif,
                     );
                 }
                 if (frame.?.precision == 12 and frame.?.num_components == 3) {
@@ -357,6 +358,7 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                         restart_interval,
                         options,
                         app14_color_transform,
+                        saw_jfif,
                     );
                 }
                 return try decodeScanT(
@@ -370,6 +372,7 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                     restart_interval,
                     options,
                     app14_color_transform,
+                    saw_jfif,
                 );
             },
             // Standalone markers we can skip safely:
@@ -473,6 +476,7 @@ fn decodeScanT(
     restart_interval: u32,
     options: DecodeOptions,
     app14_color_transform: cmyk_mod.ColorTransform,
+    saw_jfif: bool,
 ) Error!types.Image {
     const Sample = if (P <= 8) u8 else u16;
     const channels: u8 = frame.num_components;
@@ -765,14 +769,26 @@ fn decodeScanT(
     const plane_w_3: [3]u32 = .{ plane_w[0], plane_w[1], plane_w[2] };
     const plane_h_3: [3]u32 = .{ plane_h[0], plane_h[1], plane_h[2] };
     const planes_3: [3][]Sample = .{ planes[0], planes[1], planes[2] };
-    // gap D: a 3-component frame marked RGB (Adobe APP14 ColorTransform=0,
-    // enum .cmyk — which for 3 components means RGB) carries components that
-    // are already R,G,B; pass them through instead of YCbCr→RGB converting, to
-    // match libjpeg. 12-bit never hits this (always YCbCr in v1).
-    const rgb_passthrough: bool = if (comptime P <= 8)
-        (channels == 3 and app14_color_transform == .cmyk)
-    else
-        false;
+    // gap D + Mode-2: decide whether a 3-component frame is already R,G,B
+    // (pass through) or YCbCr (convert), mirroring libjpeg-turbo's
+    // default_decompress_parms (jdmaster.c) precedence exactly:
+    //   1. JFIF (APP0) marker present      ⇒ YCbCr
+    //   2. else Adobe APP14 ColorTransform ⇒ 0 (enum .cmyk) RGB, 1/2 YCbCr/YCCK
+    //   3. else guess from component IDs    ⇒ ('R','G','B')=(82,71,66) RGB,
+    //                                          anything else (incl. 1,2,3) YCbCr
+    // The original gap-D fix only covered case 2 (Adobe transform=0). A
+    // JPEGTables-spliced TIFF strip (Mode 2) carries neither JFIF nor Adobe
+    // and signals RGB purely through component IDs — case 3. 12-bit never
+    // hits this (always YCbCr in v1).
+    const rgb_passthrough: bool = if (comptime P <= 8) blk: {
+        if (channels != 3) break :blk false;
+        if (saw_jfif) break :blk false;
+        if (app14_color_transform == .cmyk) break :blk true;
+        if (app14_color_transform != .none) break :blk false;
+        break :blk frame.components[0].id == 'R' and
+            frame.components[1].id == 'G' and
+            frame.components[2].id == 'B';
+    } else false;
     return assembleOutputT(P, allocator, frame, channels, width, height, max_h, max_v, plane_w_3, plane_h_3, &planes_3, pool_ptr, rgb_passthrough);
 }
 

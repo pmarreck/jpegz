@@ -358,6 +358,21 @@ machinery where possible).
 
 ## Recently completed
 
+- 2026-06-18 EST — Mode-2 (JPEGTables-spliced) RGB-by-component-ID parity.
+  validate found the cleanroom decoding a Mode-2 JPEG-in-TIFF strip
+  (`tiffz/rgb-jpeg.tif`, spliced per TN2) to a uniform color shift while
+  libjpeg decoded it fine — the last blocker on tiffz's oracle-off flip.
+  Root cause: the stream signals RGB via **component IDs 'R','G','B'**
+  (82,71,66) with **no JFIF and no Adobe APP14** marker; gap D only handled
+  the APP14-transform=0 RGB signal, so the cleanroom defaulted to YCbCr and
+  color-converted. Fix: `decodeScanT`'s `rgb_passthrough` now mirrors
+  libjpeg-turbo's full `default_decompress_parms` (jdmaster.c) precedence —
+  JFIF⇒YCbCr, else Adobe APP14 transform, else component-ID guess
+  ('R','G','B'⇒RGB, else YCbCr) — threading `saw_jfif` into the scan
+  decoder. RED→GREEN differential test vs the libjpeg oracle
+  (`tests/unit/fixtures/rgb-mode2-spliced.jpg`, extracted from the TIFF);
+  full suite green, gap-D test still passes. Unblocks the tiffz flip +
+  validate Windows full-parity chain.
 - 2026-06-18 EST — Flake Windows cross-check (persistent CI regression gate).
   `build.zig` gained a `test-build` step (compile+link every test exe + the
   `c_smoke` C CLI, no run) so a sandbox can verify the Windows link without an
