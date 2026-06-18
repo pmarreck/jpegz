@@ -358,6 +358,19 @@ machinery where possible).
 
 ## Recently completed
 
+- 2026-06-18 EST — Flake Windows cross-check (persistent CI regression gate).
+  `build.zig` gained a `test-build` step (compile+link every test exe + the
+  `c_smoke` C CLI, no run) so a sandbox can verify the Windows link without an
+  x86_64-windows runner. `flake.nix` gained a `zigDeps` fixed-output derivation
+  (`zig build --fetch=all`, hash `sha256-3PE/qYD…`) pre-fetching the vendored
+  openjpeg source, plus a `checks.cross-windows` derivation that copies the FOD
+  cache in and runs `zig build test-build -Dtarget=x86_64-windows-gnu
+  -Dwith-charls=false -Dwith-libjpeg-oracle=false`. Build-only ⇒ host-agnostic
+  (runs on this Mac and on Garnix's linux builders alike; no Thelio needed).
+  Verified locally: `nix build .#checks.aarch64-darwin.cross-windows` → "windows
+  cross-link ok"; native `build`/`test` checks untouched (they pass
+  `-Dopenjpeg-lib` and never touch the FOD). Closes the openjpeg-vendoring
+  follow-up.
 - 2026-06-11 EST — Vendored openjpeg for cross-compile (Mecha Validate
   Windows-launch unblock) — `linkSystemLibrary("openjp2")` was unconditional,
   breaking mingw/`-static` cross (no zig-findable static openjp2; mingw

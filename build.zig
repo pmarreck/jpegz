@@ -199,6 +199,7 @@ pub fn build(b: *std.Build) void {
     // The `test` step depends on all three; failure of any propagates.
     // ============================================================
     const test_step = b.step("test", "Run unit tests");
+    const test_build_step = b.step("test-build", "Compile all tests without running, for cross-target link verification");
 
     // (1) Public smoke suite — imports `jpegz` like any consumer.
     const smoke_mod = b.createModule(.{
@@ -212,6 +213,7 @@ pub fn build(b: *std.Build) void {
         .root_module = smoke_mod,
     });
     test_step.dependOn(&b.addRunArtifact(smoke_tests).step);
+    test_build_step.dependOn(&smoke_tests.step);
 
     // (2) Inline tests in the core module itself.
     const jpegz_inline_tests = b.addTest(.{
@@ -219,6 +221,7 @@ pub fn build(b: *std.Build) void {
         .root_module = jpegz_mod,
     });
     test_step.dependOn(&b.addRunArtifact(jpegz_inline_tests).step);
+    test_build_step.dependOn(&jpegz_inline_tests.step);
 
     // (2b) Cleanroom decode unit tests (each module owns its own tests).
     const bitstream_mod = b.createModule(.{
@@ -231,6 +234,7 @@ pub fn build(b: *std.Build) void {
         .root_module = bitstream_mod,
     });
     test_step.dependOn(&b.addRunArtifact(bitstream_tests).step);
+    test_build_step.dependOn(&bitstream_tests.step);
 
     const huffman_mod = b.createModule(.{
         .root_source_file = b.path("src/decode/huffman.zig"),
@@ -242,6 +246,7 @@ pub fn build(b: *std.Build) void {
         .root_module = huffman_mod,
     });
     test_step.dependOn(&b.addRunArtifact(huffman_tests).step);
+    test_build_step.dependOn(&huffman_tests.step);
 
     const idct_mod = b.createModule(.{
         .root_source_file = b.path("src/decode/idct.zig"),
@@ -253,6 +258,7 @@ pub fn build(b: *std.Build) void {
         .root_module = idct_mod,
     });
     test_step.dependOn(&b.addRunArtifact(idct_tests).step);
+    test_build_step.dependOn(&idct_tests.step);
 
     const last_error_mod = b.createModule(.{
         .root_source_file = b.path("src/core/last_error.zig"),
@@ -264,6 +270,7 @@ pub fn build(b: *std.Build) void {
         .root_module = last_error_mod,
     });
     test_step.dependOn(&b.addRunArtifact(last_error_tests).step);
+    test_build_step.dependOn(&last_error_tests.step);
 
     const arith_coder_mod = b.createModule(.{
         .root_source_file = b.path("src/decode/arith_coder.zig"),
@@ -275,6 +282,7 @@ pub fn build(b: *std.Build) void {
         .root_module = arith_coder_mod,
     });
     test_step.dependOn(&b.addRunArtifact(arith_coder_tests).step);
+    test_build_step.dependOn(&arith_coder_tests.step);
 
     const jpegls_bitstream_mod = b.createModule(.{
         .root_source_file = b.path("src/decode/jpegls_bitstream.zig"),
@@ -286,6 +294,7 @@ pub fn build(b: *std.Build) void {
         .root_module = jpegls_bitstream_mod,
     });
     test_step.dependOn(&b.addRunArtifact(jpegls_bitstream_tests).step);
+    test_build_step.dependOn(&jpegls_bitstream_tests.step);
 
     // The jpegls cleanroom (`src/decode/jpegls.zig`) and its codec
     // helpers (`jpegls_codec.zig`) belong to jpegz_mod via relative
@@ -317,6 +326,7 @@ pub fn build(b: *std.Build) void {
         .root_module = decode_mod,
     });
     test_step.dependOn(&b.addRunArtifact(decode_tests).step);
+    test_build_step.dependOn(&decode_tests.step);
 
     // (4) Validate test suite (M1.5 — hand-written marker walker).
     const validate_mod = b.createModule(.{
@@ -330,6 +340,7 @@ pub fn build(b: *std.Build) void {
         .root_module = validate_mod,
     });
     test_step.dependOn(&b.addRunArtifact(validate_tests).step);
+    test_build_step.dependOn(&validate_tests.step);
 
     // (5) JPEG 2000 decode test suite (M1.6 — openjpeg wrap).
     const decode_jp2_mod = b.createModule(.{
@@ -343,6 +354,7 @@ pub fn build(b: *std.Build) void {
         .root_module = decode_jp2_mod,
     });
     test_step.dependOn(&b.addRunArtifact(decode_jp2_tests).step);
+    test_build_step.dependOn(&decode_jp2_tests.step);
 
     // ============================================================
     // `zig build fuzz` — fuzz harnesses for jpegz.decode and
@@ -427,6 +439,7 @@ pub fn build(b: *std.Build) void {
     c_smoke_mod.addIncludePath(b.path("tests"));
     c_smoke_mod.linkLibrary(lib);
     test_step.dependOn(&b.addRunArtifact(c_smoke).step);
+    test_build_step.dependOn(&c_smoke.step);
 
     // ============================================================
     // `zig build cleanroom-diff` — non-committed analysis tool that

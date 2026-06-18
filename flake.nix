@@ -99,9 +99,37 @@
         commonNativeBuildInputs = [ zigPkg pkgs.git pkgs.cacert ];
         commonBuildInputs = [ libjpegTurbo openjpegPkg ];
 
-        # Phase 1 has no external Zig dependencies — `build.zig.zon` will be
-        # added when the first dependency is introduced. Until then we don't
-        # need the fixed-output `zigDeps` derivation pattern from CLAUDE.md.
+        # Fixed-output derivation pre-fetching every Zig dependency tarball
+        # (CLAUDE.md Strategy 1). The only network dep is the vendored
+        # openjpeg source (`deps/openjpeg/build.zig.zon` → uclouvain v2.5.4),
+        # pulled when the build links openjpeg from source rather than the
+        # system lib — i.e. the windows cross-check below, which has no
+        # `-Dopenjpeg-lib` to short-circuit it. The native build/test checks
+        # pass `-Dopenjpeg-lib` and never touch this. Single hash covers the
+        # whole tree; bump it when `build.zig.zon` (or deps/) changes:
+        #   1. set zigDepsHash = pkgs.lib.fakeHash
+        #   2. nix build .#checks.<system>.cross-windows  → prints real hash
+        #   3. paste it back here.
+        zigDepsHash = "sha256-3PE/qYD4gEHF4COMwfxsNp7cMIMcTXtyt0Pq5DSmi/8=";
+        zigDeps = pkgs.stdenv.mkDerivation {
+          pname = "jpegz-zig-deps";
+          version = "0.1.0";
+          src = ./.;
+          nativeBuildInputs = commonNativeBuildInputs;
+          dontConfigure = true;
+          outputHashMode = "recursive";
+          outputHashAlgo = "sha256";
+          outputHash = zigDepsHash;
+          buildPhase = ''
+            export HOME=$TMPDIR
+            export ZIG_GLOBAL_CACHE_DIR=$out
+            export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+            export GIT_SSL_CAINFO=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+            zig build --fetch=all
+          '';
+          dontInstall = true;
+          dontFixup = true;
+        };
 
         mkJpegzPackage = { optimize ? "ReleaseFast" }:
           pkgs.stdenv.mkDerivation {
@@ -143,6 +171,37 @@
             echo "tests passed" > $out/result
           '';
         };
+
+        # Windows cross-link regression gate. The vendored static openjpeg
+        # (deps/openjpeg) is what lets jpegz cross-compile to mingw, where
+        # the system openjp2/libjpeg are unavailable. We can't *run* a
+        # windows binary in the sandbox, so this is build-only: `test-build`
+        # compiles AND links every test exe (the link step is where missing
+        # openjp2 symbols would surface — the original RED was 18 undefined
+        # `opj_*`). charls + the libjpeg oracle are off so the closure is
+        # openjpeg-only, exactly matching the shipping windows artifact.
+        # Build-only ⇒ host-agnostic: this runs on any builder, no
+        # x86_64-windows runner needed. Deps come from the FOD above.
+        crossWindowsCheck = pkgs.stdenv.mkDerivation {
+          pname = "jpegz-cross-windows";
+          version = "0.0.1";
+          src = ./.;
+          nativeBuildInputs = commonNativeBuildInputs;
+          dontConfigure = true;
+          buildPhase = ''
+            export HOME=$TMPDIR
+            export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
+            mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
+            cp -r ${zigDeps}/* "$ZIG_GLOBAL_CACHE_DIR/"
+            chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
+            zig build test-build -Dtarget=x86_64-windows-gnu \
+              -Dwith-charls=false -Dwith-libjpeg-oracle=false
+          '';
+          installPhase = ''
+            mkdir -p $out
+            echo "windows cross-link ok" > $out/result
+          '';
+        };
       in {
         packages.default = mkJpegzPackage {};
         packages.jpegz = self.packages.${system}.default;
@@ -150,6 +209,7 @@
         checks = {
           build = self.packages.${system}.default;
           test = jpegzTestCheck;
+          cross-windows = crossWindowsCheck;
         };
 
         devShells.default = pkgs.mkShell {
