@@ -358,6 +358,21 @@ machinery where possible).
 
 ## Recently completed
 
+- 2026-06-21 EST — Fix Linux CI regression from openjpeg vendoring (lazy dep).
+  Garnix had been RED on x86_64-linux + aarch64-linux `build`/`test` since
+  6063dac9 (the openjpeg vendoring) — missed because local `./test` on macOS
+  passed (darwin nix sandbox allows network; Linux sandbox does not). Root
+  cause: the vendored `.openjpeg` dep was **non-lazy** and linked via
+  `b.dependency`, so Zig fetched `openjpeg_src` from GitHub at manifest
+  resolution **even on the native system-openjpeg path** (which never links
+  it) → `NameServerFailure` in the network-less Linux sandbox. Fix: mark the
+  dep `.lazy = true` in build.zig.zon and use `b.lazyDependency` in build.zig,
+  so `openjpeg_src` is fetched only on the cross path that actually links the
+  vendored lib. Proven locally: native build into a fresh Zig cache →
+  BUILD_EXIT=0 with an empty cache `/p` (nothing fetched), despite network
+  being available; cross-windows still links (FOD `--fetch=all` still pulls
+  the lazy dep; zigDepsHash unchanged). Also fixes eager fetches for module
+  consumers (tiffz/validate building jpegz).
 - 2026-06-18 EST — Mode-2 (JPEGTables-spliced) RGB-by-component-ID parity.
   validate found the cleanroom decoding a Mode-2 JPEG-in-TIFF strip
   (`tiffz/rgb-jpeg.tif`, spliced per TN2) to a uniform color shift while

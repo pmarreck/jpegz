@@ -14,6 +14,11 @@
     },
     .fingerprint = 0xaaef54e4e0b0d6b2,
     .dependencies = .{
-        .openjpeg = .{ .path = "deps/openjpeg" },
+        // Lazy: only the cross-compile path (vendored static openjp2, no
+        // system -Dopenjpeg-lib) links this and triggers its fetch. A
+        // non-lazy dep would be fetched eagerly at manifest resolution even
+        // on the native system-openjpeg path, breaking the sandboxed Linux
+        // build (no network). Pairs with b.lazyDependency in build.zig.
+        .openjpeg = .{ .path = "deps/openjpeg", .lazy = true },
     },
 }

@@ -90,8 +90,11 @@ pub fn build(b: *std.Build) void {
     // cross-compiles to every target including windows-{x86_64,aarch64}.
     if (opt_openjpeg_lib != null) {
         jpegz_mod.linkSystemLibrary("openjp2", .{});
-    } else {
-        const openjpeg_dep = b.dependency("openjpeg", .{ .target = target, .optimize = optimize });
+    } else if (b.lazyDependency("openjpeg", .{ .target = target, .optimize = optimize })) |openjpeg_dep| {
+        // lazyDependency (not dependency): the vendored openjp2 source is
+        // fetched ONLY when this branch runs (cross-compile, no system lib).
+        // The native system-openjpeg path above never calls this, so the
+        // sandboxed Linux build never needs network for openjpeg_src.
         jpegz_mod.linkLibrary(openjpeg_dep.artifact("openjp2"));
     }
 
