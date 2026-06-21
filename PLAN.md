@@ -356,6 +356,28 @@ machinery where possible).
 - _M2.5:_ arithmetic coding fixtures barely exist in the wild — we may
   have to synthesize them via libjpeg-turbo's own arithmetic encoder.
 
+## In progress — wire dormant T.81 finding codes (validation strictness)
+
+Goal: a strict validator must surface table/structure-level spec
+violations a permissive library swallows. ~12 declared `FindingCode`s are
+dormant (never emitted). Wiring each as a classifier-over-sets test
+(corrupt-fixture fires, clean-fixture silent). Batch 1 = structural codes
+addable in the marker walker (`core/validator.zig`):
+
+- [x] `quantization_table_corrupt` — DQT §B.2.4: Pq∈{0,1}, Tq∈{0..3} (2026-06-21)
+- [x] `sof_component_count_invalid` — SOF §B.2.2: Nf>=1 && seg_len==8+3Nf (2026-06-21)
+- [ ] `sos_component_mismatch` — SOS §B.2.3: each Cs ∈ SOF component IDs
+- [ ] `arithmetic_table_corrupt` — DAC §B.2.4.3
+- [ ] `progressive_scan_invalid` — SOF2 SOS Ss/Se/Ah/Al constraints
+- [ ] `lossless_predictor_invalid` — SOF3 SOS Ss (predictor) 0..7
+- [ ] `lossless_pointtransform_invalid` — SOF3 SOS Al (point transform)
+- [ ] `progressive_scan_count` (info), `embedded_thumbnail_present` (info)
+
+Deferred (need decode-path/JPEG-LS work, not marker walk):
+`dct_coefficient_overflow`, `jpegls_invalid_run_mode`,
+`jpegls_context_table_invalid`. JP2 codes are option B (un-stub
+`jpeg2000.validate`) — separate.
+
 ## Recently completed
 
 - 2026-06-21 EST — Seed the zigDeps FOD into the native build/test checks

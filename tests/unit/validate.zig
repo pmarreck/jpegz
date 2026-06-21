@@ -231,3 +231,76 @@ test "validate non-JPEG bytes → FAIL, missing_soi finding" {
     }
     try std.testing.expect(found_missing_soi);
 }
+
+// ── Dormant T.81 code wiring (validation strictness for upstream Validate) ──
+// A strict validator must surface table/structure-level spec violations that
+// permissive libraries silently tolerate. Each new code is tested as a
+// classifier over sets: it fires on the malformed set, stays silent on the
+// well-formed one.
+
+/// Offset of the first occurrence of marker byte `m` (the byte after a
+/// 0xFF prefix) in `data`, or null. Helper for in-test corruption.
+fn findMarker(data: []const u8, m: u8) ?usize {
+    var i: usize = 0;
+    while (i + 1 < data.len) : (i += 1) {
+        if (data[i] == 0xFF and data[i + 1] == m) return i;
+    }
+    return null;
+}
+
+fn reportHasCode(report: jpegz.ValidationReport, code: jpegz.FindingCode) bool {
+    for (report.findings.items) |f| {
+        if (f.code == code) return true;
+    }
+    return false;
+}
+
+test "validate: quantization_table_corrupt classifies bad Pq/Tq, silent on clean" {
+    const allocator = std.testing.allocator;
+
+    // Negative: the clean fixture's DQTs are well-formed — no quant finding.
+    {
+        var report = try jpegz.validate(allocator, fixture_baseline_2x2_rgb);
+        defer report.deinit(allocator);
+        try std.testing.expect(!reportHasCode(report, .quantization_table_corrupt));
+    }
+
+    // Positive: corrupt the first DQT's PqTq byte (FF DB Lhi Llo, then PqTq)
+    // two distinct illegal ways (T.81 §B.2.4: Pq∈{0,1}, Tq∈{0..3}).
+    const bad_pqtq = [_]u8{ 0x50, 0x07 }; // Pq=5 ; Tq=7
+    for (bad_pqtq) |pqtq| {
+        const buf = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
+        defer allocator.free(buf);
+        const dqt = findMarker(buf, 0xDB).?;
+        buf[dqt + 4] = pqtq;
+
+        var report = try jpegz.validate(allocator, buf);
+        defer report.deinit(allocator);
+        try std.testing.expect(reportHasCode(report, .quantization_table_corrupt));
+    }
+}
+
+test "validate: sof_component_count_invalid classifies Nf=0 and length-inconsistent Nf" {
+    const allocator = std.testing.allocator;
+
+    // Negative: clean fixture (SOF0 Nf=3, length 17 = 8 + 3*3) is consistent.
+    {
+        var report = try jpegz.validate(allocator, fixture_baseline_2x2_rgb);
+        defer report.deinit(allocator);
+        try std.testing.expect(!reportHasCode(report, .sof_component_count_invalid));
+    }
+
+    // Positive: corrupt the SOF0 Nf byte (body offset 5: prec,H,H,W,W,Nf).
+    // Nf=0 is invalid; Nf=5 makes seg_len(17) != 8 + 3*Nf(23) — inconsistent.
+    const bad_nf = [_]u8{ 0x00, 0x05 };
+    for (bad_nf) |nf| {
+        const buf = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
+        defer allocator.free(buf);
+        const sof = findMarker(buf, 0xC0).?; // FF C0 (SOF0)
+        buf[sof + 2 + 2 + 5] = nf; // FF C0 Lhi Llo, then body[5] = Nf
+
+        var report = try jpegz.validate(allocator, buf);
+        defer report.deinit(allocator);
+        try std.testing.expect(reportHasCode(report, .sof_component_count_invalid));
+    }
+}

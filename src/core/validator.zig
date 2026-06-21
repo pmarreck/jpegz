@@ -28,6 +28,7 @@ const Marker = struct {
     const SOS: u8 = 0xDA;
     const DHT: u8 = 0xC4;
     const DAC: u8 = 0xCC; // arithmetic conditioning
+    const DQT: u8 = 0xDB;
     // SOF markers — see classifyVariant.
     const RST0: u8 = 0xD0;
     const RST7: u8 = 0xD7;
@@ -189,6 +190,28 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             }
         }
 
+        // ── DQT: validate each quantization table header (T.81 §B.2.4) ──
+        // Pq (high nibble) must be 0 (8-bit Q values) or 1 (16-bit); Tq (low
+        // nibble, table destination) must be 0..3. A permissive decoder may
+        // limp on a malformed table; a validator flags it so the spec
+        // deviation is not silently swallowed.
+        if (marker_byte == Marker.DQT) {
+            var qp: usize = seg_body_start;
+            while (qp < seg_end) {
+                const pqtq = data[qp];
+                const pq = pqtq >> 4;
+                const tq = pqtq & 0x0F;
+                if (pq > 1 or tq > 3) {
+                    try addFinding(&report, allocator, .fail, .quantization_table_corrupt,
+                        qp, "DQT Pq must be 0 or 1 and Tq must be 0..3");
+                    break; // table size is ambiguous once Pq is invalid
+                }
+                // Advance past this table: 1 header byte + 64 coefficients
+                // (1 byte each for Pq=0, 2 bytes each for Pq=1).
+                qp += 1 + @as(usize, 64) * (@as(usize, pq) + 1);
+            }
+        }
+
         // ── SOF: identify variant and record dimensions ───────
         if (classifyVariant(marker_byte)) |variant| {
             if (seen_sof) {
@@ -214,6 +237,17 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                     const width = readU16BE(data, seg_body_start + 3);
                     report.width = @as(u32, width);
                     report.height = @as(u32, height);
+
+                    // Nf (component count) must be >= 1 and the segment length
+                    // must equal 8 + 3*Nf (T.81 §B.2.2: 1 prec + 2 H + 2 W + 1
+                    // Nf + 3 bytes per component, plus the 2 length bytes). A
+                    // mismatch means the declared count is inconsistent with
+                    // the marker — flag rather than silently mis-parse.
+                    const nf = data[seg_body_start + 5];
+                    if (nf == 0 or @as(usize, seg_len) != 8 + 3 * @as(usize, nf)) {
+                        try addFinding(&report, allocator, .fail, .sof_component_count_invalid,
+                            seg_body_start + 5, "SOF Nf must be >= 1 and segment length must equal 8 + 3*Nf");
+                    }
 
                     if (precision != 8 and precision != 12 and precision != 16) {
                         try addFinding(&report, allocator, .fail, .invalid_sof_precision,
