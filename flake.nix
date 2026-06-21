@@ -144,6 +144,15 @@
               export HOME=$TMPDIR
               export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
               mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
+              # Seed the cache with the pre-fetched vendored deps (openjpeg
+              # source). Even on the native system-openjpeg path, Zig reads
+              # the full build.zig.zon dependency tree at manifest resolution
+              # and would try to fetch openjpeg_src from GitHub — which fails
+              # in the network-less Linux sandbox. Pre-seeding from the FOD
+              # makes that fetch a cache hit. (Same pattern the cross-windows
+              # check uses; that check passes on Garnix Linux, proving it.)
+              cp -r ${zigDeps}/* "$ZIG_GLOBAL_CACHE_DIR/"
+              chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
               # Keep NIX_CFLAGS_COMPILE / NIX_LDFLAGS — Zig consults them
               # to find libjpeg-turbo and openjpeg headers and libraries.
               zig build -Doptimize=${optimize} ${zigTargetFlag} ${depFlags} --prefix $out
@@ -163,6 +172,10 @@
             export HOME=$TMPDIR
             export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
             mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
+            # Seed the cache with pre-fetched vendored deps (see mkJpegzPackage
+            # for the why) so manifest resolution never needs network.
+            cp -r ${zigDeps}/* "$ZIG_GLOBAL_CACHE_DIR/"
+            chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
             # Keep NIX_CFLAGS_COMPILE / NIX_LDFLAGS for libjpeg-turbo / openjpeg.
             timeout 600 zig build test ${zigTargetFlag} ${depFlags} || { echo "Tests failed"; exit 1; }
           '';

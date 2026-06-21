@@ -358,6 +358,17 @@ machinery where possible).
 
 ## Recently completed
 
+- 2026-06-21 EST — Seed the zigDeps FOD into the native build/test checks
+  (the actual Linux CI fix). The lazy-dep change alone did NOT green Garnix
+  Linux — CI still failed with the same `openjpeg_src` `NameServerFailure`.
+  Empirically (CI is ground truth; my macOS local tests were confounded by
+  the darwin sandbox having network), Zig's manifest resolution still reaches
+  the vendored openjpeg's `openjpeg_src` URL dep in the network-less Linux
+  sandbox. Fix: copy the `zigDeps` FOD into `ZIG_GLOBAL_CACHE_DIR` in both
+  `mkJpegzPackage` and `jpegzTestCheck` buildPhases (the exact pattern the
+  cross-windows check uses — and that check already passes on Garnix Linux,
+  which is the proof the pattern works there). The `.lazy` change stays: it
+  spares module consumers (tiffz/validate building jpegz) the eager fetch.
 - 2026-06-21 EST — Fix Linux CI regression from openjpeg vendoring (lazy dep).
   Garnix had been RED on x86_64-linux + aarch64-linux `build`/`test` since
   6063dac9 (the openjpeg vendoring) — missed because local `./test` on macOS
