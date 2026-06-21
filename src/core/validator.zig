@@ -118,6 +118,9 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     var sof_offset: ?u64 = null;
     var seen_sos: bool = false;
     var seen_eoi: bool = false;
+    // Membership bitmap of component IDs (Ci) declared by the SOF, used
+    // to validate SOS component selectors (Cs) cross-segment.
+    var sof_comp_ids = [_]bool{false} ** 256;
 
     // ── Step 2: Walk markers ──────────────────────────────────
     while (pos < data.len) {
@@ -247,6 +250,12 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                     if (nf == 0 or @as(usize, seg_len) != 8 + 3 * @as(usize, nf)) {
                         try addFinding(&report, allocator, .fail, .sof_component_count_invalid,
                             seg_body_start + 5, "SOF Nf must be >= 1 and segment length must equal 8 + 3*Nf");
+                    } else {
+                        // Record each declared component ID (Ci) for the SOS cross-check.
+                        var ci: usize = 0;
+                        while (ci < nf) : (ci += 1) {
+                            sof_comp_ids[data[seg_body_start + 6 + 3 * ci]] = true;
+                        }
                     }
 
                     if (precision != 8 and precision != 12 and precision != 16) {
@@ -273,6 +282,22 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             }
         } else if (marker_byte == Marker.SOS) {
             seen_sos = true;
+            // Validate scan component selectors (Cs) reference SOF-declared
+            // components (T.81 §B.2.3). SOS body: Ns, then Ns×(Cs, Td/Ta).
+            // Only meaningful once a SOF has been seen (missing SOF is
+            // reported separately) — otherwise the bitmap is empty.
+            if (seen_sof and seg_body_start < seg_end) {
+                const ns = data[seg_body_start];
+                var cj: usize = 0;
+                while (cj < ns and seg_body_start + 1 + 2 * cj < seg_end) : (cj += 1) {
+                    const cs = data[seg_body_start + 1 + 2 * cj];
+                    if (!sof_comp_ids[cs]) {
+                        try addFinding(&report, allocator, .fail, .sos_component_mismatch,
+                            seg_body_start + 1 + 2 * cj,
+                            "SOS component selector Cs not declared in SOF");
+                    }
+                }
+            }
             // Entropy-coded data follows. Skip until we hit a non-RST,
             // non-padding marker (likely EOI, but could be another SOS
             // for progressive/multi-scan sequences).

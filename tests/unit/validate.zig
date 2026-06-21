@@ -304,3 +304,26 @@ test "validate: sof_component_count_invalid classifies Nf=0 and length-inconsist
         try std.testing.expect(reportHasCode(report, .sof_component_count_invalid));
     }
 }
+
+test "validate: sos_component_mismatch classifies Cs not declared in SOF, silent on clean" {
+    const allocator = std.testing.allocator;
+
+    // Negative: clean fixture's SOS selectors (1,2,3) all match the SOF.
+    {
+        var report = try jpegz.validate(allocator, fixture_baseline_2x2_rgb);
+        defer report.deinit(allocator);
+        try std.testing.expect(!reportHasCode(report, .sos_component_mismatch));
+    }
+
+    // Positive: corrupt the first SOS component selector (Cs0) to an ID not
+    // present in the SOF component list. Body: FF DA Lhi Llo Ns Cs0 ... so
+    // Cs0 is at sos+5. 0x63 = 99 (not a declared component).
+    const buf = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
+    defer allocator.free(buf);
+    const sos = findMarker(buf, 0xDA).?;
+    buf[sos + 5] = 0x63;
+
+    var report = try jpegz.validate(allocator, buf);
+    defer report.deinit(allocator);
+    try std.testing.expect(reportHasCode(report, .sos_component_mismatch));
+}

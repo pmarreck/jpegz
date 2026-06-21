@@ -366,7 +366,7 @@ addable in the marker walker (`core/validator.zig`):
 
 - [x] `quantization_table_corrupt` — DQT §B.2.4: Pq∈{0,1}, Tq∈{0..3} (2026-06-21)
 - [x] `sof_component_count_invalid` — SOF §B.2.2: Nf>=1 && seg_len==8+3Nf (2026-06-21)
-- [ ] `sos_component_mismatch` — SOS §B.2.3: each Cs ∈ SOF component IDs
+- [x] `sos_component_mismatch` — SOS §B.2.3: each Cs ∈ SOF component IDs (2026-06-21)
 - [ ] `arithmetic_table_corrupt` — DAC §B.2.4.3
 - [ ] `progressive_scan_invalid` — SOF2 SOS Ss/Se/Ah/Al constraints
 - [ ] `lossless_predictor_invalid` — SOF3 SOS Ss (predictor) 0..7
