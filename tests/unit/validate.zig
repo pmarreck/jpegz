@@ -9,6 +9,7 @@ const jpegz = @import("jpegz");
 const fixture_baseline_2x2_rgb = @embedFile("fixtures/baseline_2x2_rgb.jpg");
 const fixture_progressive_8x8 = @embedFile("fixtures/progressive_8x8_rgb.jpg");
 const fixture_lossless_4x4_gray8 = @embedFile("fixtures/lossless_4x4_gray8.jpg");
+const fixture_arith_8x8_gray = @embedFile("fixtures/arith_baseline_8x8_gray.jpg");
 
 test "validate clean baseline JPEG → valid, baseline_huffman" {
     const allocator = std.testing.allocator;
@@ -402,4 +403,78 @@ test "validate: lossless_pointtransform_invalid classifies nonzero Ah in lossles
     var report = try jpegz.validate(allocator, buf);
     defer report.deinit(allocator);
     try std.testing.expect(reportHasCode(report, .lossless_pointtransform_invalid));
+}
+
+test "validate: arithmetic_table_corrupt classifies bad Tc/Tb in DAC, silent on clean" {
+    const allocator = std.testing.allocator;
+
+    // Negative: clean arithmetic fixture's DAC is well-formed.
+    {
+        var report = try jpegz.validate(allocator, fixture_arith_8x8_gray);
+        defer report.deinit(allocator);
+        try std.testing.expect(!reportHasCode(report, .arithmetic_table_corrupt));
+    }
+
+    // Positive: a DAC entry is (Tc/Tb, Cs). Tc (high nibble) must be 0 or 1;
+    // Tb (low nibble) must be 0..3 (T.81 §B.2.4.3). Corrupt the first entry.
+    const bad_tctb = [_]u8{ 0x20, 0x05 }; // Tc=2 ; Tb=5
+    for (bad_tctb) |tctb| {
+        const buf = try allocator.dupe(u8, fixture_arith_8x8_gray);
+        defer allocator.free(buf);
+        const dac = findMarker(buf, 0xCC).?;
+        buf[dac + 4] = tctb; // FF CC Lhi Llo, then TcTb
+
+        var report = try jpegz.validate(allocator, buf);
+        defer report.deinit(allocator);
+        try std.testing.expect(reportHasCode(report, .arithmetic_table_corrupt));
+    }
+}
+
+test "validate: progressive_scan_count is INFO on progressive, absent on baseline" {
+    const allocator = std.testing.allocator;
+
+    // Positive: a progressive frame decodes in multiple scans.
+    {
+        var report = try jpegz.validate(allocator, fixture_progressive_8x8);
+        defer report.deinit(allocator);
+        try std.testing.expect(reportHasCode(report, .progressive_scan_count));
+    }
+    // Negative: a single-scan baseline must not carry the observation.
+    {
+        var report = try jpegz.validate(allocator, fixture_baseline_2x2_rgb);
+        defer report.deinit(allocator);
+        try std.testing.expect(!reportHasCode(report, .progressive_scan_count));
+    }
+}
+
+test "validate: embedded_thumbnail_present detects JFIF APP0 thumbnail, silent when absent" {
+    const allocator = std.testing.allocator;
+
+    // Negative: the clean fixture's JFIF declares a 0×0 (absent) thumbnail.
+    {
+        var report = try jpegz.validate(allocator, fixture_baseline_2x2_rgb);
+        defer report.deinit(allocator);
+        try std.testing.expect(!reportHasCode(report, .embedded_thumbnail_present));
+    }
+
+    // Positive: splice a 1×1 thumbnail into the JFIF APP0 — set Xthumb=Ythumb=1,
+    // insert 3 RGB bytes after Ythumb, bump the APP0 segment length 16 → 19.
+    const orig = fixture_baseline_2x2_rgb;
+    const app0 = findMarker(orig, 0xE0).?;
+    const ins_at = app0 + 18; // first byte past the 16-byte APP0 segment
+    const buf = try allocator.alloc(u8, orig.len + 3);
+    defer allocator.free(buf);
+    @memcpy(buf[0..ins_at], orig[0..ins_at]);
+    buf[ins_at] = 0;
+    buf[ins_at + 1] = 0;
+    buf[ins_at + 2] = 0;
+    @memcpy(buf[ins_at + 3 ..], orig[ins_at..]);
+    buf[app0 + 2] = 0x00;
+    buf[app0 + 3] = 0x13; // length 16 -> 19
+    buf[app0 + 16] = 1; // Xthumbnail
+    buf[app0 + 17] = 1; // Ythumbnail
+
+    var report = try jpegz.validate(allocator, buf);
+    defer report.deinit(allocator);
+    try std.testing.expect(reportHasCode(report, .embedded_thumbnail_present));
 }

@@ -121,6 +121,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     // Membership bitmap of component IDs (Ci) declared by the SOF, used
     // to validate SOS component selectors (Cs) cross-segment.
     var sof_comp_ids = [_]bool{false} ** 256;
+    var sos_count: u32 = 0; // number of SOS (scan) markers seen
 
     // ── Step 2: Walk markers ──────────────────────────────────
     while (pos < data.len) {
@@ -191,6 +192,20 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             if (classifyAppSignature(marker_byte, data[seg_body_start..seg_end])) |code| {
                 try addFinding(&report, allocator, .info, code, marker_offset, null);
             }
+            // Embedded thumbnail (T.81 JFIF Annex B / JFXX extension). A JFIF
+            // APP0 with nonzero Xthumbnail×Ythumbnail carries an inline RGB
+            // thumbnail; a JFXX APP0 extension is a thumbnail by definition.
+            if (marker_byte == 0xE0) {
+                const body = data[seg_body_start..seg_end];
+                if (body.len >= 14 and std.mem.eql(u8, body[0..5], "JFIF\x00")) {
+                    if (body[12] != 0 and body[13] != 0)
+                        try addFinding(&report, allocator, .info, .embedded_thumbnail_present,
+                            marker_offset, "JFIF APP0 carries an embedded thumbnail");
+                } else if (body.len >= 5 and std.mem.eql(u8, body[0..5], "JFXX\x00")) {
+                    try addFinding(&report, allocator, .info, .embedded_thumbnail_present,
+                        marker_offset, "JFXX APP0 extension thumbnail present");
+                }
+            }
         }
 
         // ── DQT: validate each quantization table header (T.81 §B.2.4) ──
@@ -212,6 +227,22 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                 // Advance past this table: 1 header byte + 64 coefficients
                 // (1 byte each for Pq=0, 2 bytes each for Pq=1).
                 qp += 1 + @as(usize, 64) * (@as(usize, pq) + 1);
+            }
+        }
+
+        // ── DAC: validate arithmetic conditioning entries (T.81 §B.2.4.3) ──
+        // Each entry is a (Tc/Tb, Cs) pair: Tc (high nibble) must be 0 (DC)
+        // or 1 (AC); Tb (low nibble, conditioning table destination) must be
+        // 0..3. A malformed entry is flagged rather than silently accepted.
+        if (marker_byte == Marker.DAC) {
+            var dp: usize = seg_body_start;
+            while (dp + 1 < seg_end) : (dp += 2) {
+                const tctb = data[dp];
+                if ((tctb >> 4) > 1 or (tctb & 0x0F) > 3) {
+                    try addFinding(&report, allocator, .fail, .arithmetic_table_corrupt,
+                        dp, "DAC Tc must be 0 or 1 and Tb must be 0..3");
+                    break;
+                }
             }
         }
 
@@ -282,6 +313,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             }
         } else if (marker_byte == Marker.SOS) {
             seen_sos = true;
+            sos_count += 1;
             // Validate scan component selectors (Cs) reference SOF-declared
             // components (T.81 §B.2.3). SOS body: Ns, then Ns×(Cs, Td/Ta).
             // Only meaningful once a SOF has been seen (missing SOF is
@@ -372,6 +404,19 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     if (!seen_eoi and report.overall != .fail) {
         try addFinding(&report, allocator, .warn, .missing_eoi, data.len,
             "stream lacks EOI marker (0xFF 0xD9)");
+    }
+
+    // Progressive frames decode in multiple scans; surface the count as an
+    // observation (consumers may use it for quality / progressive-render hints).
+    switch (report.variant) {
+        .progressive_huffman, .progressive_arithmetic => {
+            if (sos_count > 0) {
+                var nbuf: [48]u8 = undefined;
+                const detail = std.fmt.bufPrint(&nbuf, "{d} progressive scans", .{sos_count}) catch "progressive scans";
+                try addFinding(&report, allocator, .info, .progressive_scan_count, null, detail);
+            }
+        },
+        else => {},
     }
 
     // ── Step 4: Codec-level integrity ──────────────────────────
