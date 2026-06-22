@@ -298,6 +298,47 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                     }
                 }
             }
+
+            // Validate the scan's spectral / predictor parameters per frame
+            // type. SOS body tail is Ss, Se, AhAl after Ns×(Cs,Td/Ta).
+            if (seen_sof and seg_body_start < seg_end) {
+                const ns2 = data[seg_body_start];
+                const spec_off = seg_body_start + 1 + 2 * @as(usize, ns2);
+                if (spec_off + 2 < seg_end) {
+                    const ss = data[spec_off];
+                    const se = data[spec_off + 1];
+                    const ahal = data[spec_off + 2];
+                    const ah = ahal >> 4;
+                    const al = ahal & 0x0F;
+                    switch (report.variant) {
+                        .progressive_huffman, .progressive_arithmetic => {
+                            // T.81 §G.1.1.1.1: Ss,Se ≤ 63 and Ah,Al ≤ 13; a DC
+                            // scan (Ss=0) must have Se=0; an AC scan (Ss≠0) must
+                            // have Se in Ss..63.
+                            const bad = ss > 63 or se > 63 or ah > 13 or al > 13 or
+                                (ss == 0 and se != 0) or (ss != 0 and se < ss);
+                            if (bad) try addFinding(&report, allocator, .fail,
+                                .progressive_scan_invalid, spec_off,
+                                "progressive SOS spectral/approximation parameters violate T.81 §G");
+                        },
+                        .lossless_huffman, .lossless_arithmetic => {
+                            // T.81 §H.1: Ss is the predictor selector (1..7);
+                            // Ah must be 0 (lossless has no successive
+                            // approximation — the byte carries only the point
+                            // transform in Al).
+                            if (ss < 1 or ss > 7)
+                                try addFinding(&report, allocator, .fail,
+                                    .lossless_predictor_invalid, spec_off,
+                                    "lossless predictor (Ss) must be 1..7");
+                            if (ah != 0)
+                                try addFinding(&report, allocator, .fail,
+                                    .lossless_pointtransform_invalid, spec_off + 2,
+                                    "lossless scan must have Ah=0 (byte carries only point transform Al)");
+                        },
+                        else => {},
+                    }
+                }
+            }
             // Entropy-coded data follows. Skip until we hit a non-RST,
             // non-padding marker (likely EOI, but could be another SOS
             // for progressive/multi-scan sequences).

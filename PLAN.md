@@ -368,9 +368,9 @@ addable in the marker walker (`core/validator.zig`):
 - [x] `sof_component_count_invalid` — SOF §B.2.2: Nf>=1 && seg_len==8+3Nf (2026-06-21)
 - [x] `sos_component_mismatch` — SOS §B.2.3: each Cs ∈ SOF component IDs (2026-06-21)
 - [ ] `arithmetic_table_corrupt` — DAC §B.2.4.3
-- [ ] `progressive_scan_invalid` — SOF2 SOS Ss/Se/Ah/Al constraints
-- [ ] `lossless_predictor_invalid` — SOF3 SOS Ss (predictor) 0..7
-- [ ] `lossless_pointtransform_invalid` — SOF3 SOS Al (point transform)
+- [x] `progressive_scan_invalid` — SOF2 SOS Ss/Se/Ah/Al (2026-06-21)
+- [x] `lossless_predictor_invalid` — SOF3 SOS Ss (predictor) 1..7 (2026-06-21)
+- [x] `lossless_pointtransform_invalid` — SOF3 lossless Ah must be 0 (2026-06-21)
 - [ ] `progressive_scan_count` (info), `embedded_thumbnail_present` (info)
 
 Deferred (need decode-path/JPEG-LS work, not marker walk):

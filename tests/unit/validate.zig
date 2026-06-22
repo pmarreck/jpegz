@@ -327,3 +327,79 @@ test "validate: sos_component_mismatch classifies Cs not declared in SOF, silent
     defer report.deinit(allocator);
     try std.testing.expect(reportHasCode(report, .sos_component_mismatch));
 }
+
+test "validate: progressive_scan_invalid classifies bad spectral selection, silent on clean" {
+    const allocator = std.testing.allocator;
+
+    // Negative: every scan in the clean progressive fixture is well-formed.
+    {
+        var report = try jpegz.validate(allocator, fixture_progressive_8x8);
+        defer report.deinit(allocator);
+        try std.testing.expect(!reportHasCode(report, .progressive_scan_invalid));
+    }
+
+    // Positive: force the first SOS to Ss=0, Se=5 — a DC scan (Ss=0) must
+    // have Se=0 (T.81 §G.1.1.1.1). SOS body: Ns, Ns×(Cs,Td/Ta), Ss, Se, AhAl.
+    const buf = try allocator.dupe(u8, fixture_progressive_8x8);
+    defer allocator.free(buf);
+    const sos = findMarker(buf, 0xDA).?;
+    const body = sos + 4;
+    const ns = buf[body];
+    const ss_off = body + 1 + 2 * @as(usize, ns);
+    buf[ss_off] = 0;
+    buf[ss_off + 1] = 5;
+
+    var report = try jpegz.validate(allocator, buf);
+    defer report.deinit(allocator);
+    try std.testing.expect(reportHasCode(report, .progressive_scan_invalid));
+}
+
+test "validate: lossless_predictor_invalid classifies predictor outside 1..7" {
+    const allocator = std.testing.allocator;
+
+    {
+        var report = try jpegz.validate(allocator, fixture_lossless_4x4_gray8);
+        defer report.deinit(allocator);
+        try std.testing.expect(!reportHasCode(report, .lossless_predictor_invalid));
+    }
+
+    // SOS Ss = predictor selector; valid 1..7 (T.81 §H.1). Try 0 and 8.
+    const bad_pred = [_]u8{ 0, 8 };
+    for (bad_pred) |p| {
+        const buf = try allocator.dupe(u8, fixture_lossless_4x4_gray8);
+        defer allocator.free(buf);
+        const sos = findMarker(buf, 0xDA).?;
+        const body = sos + 4;
+        const ns = buf[body];
+        const ss_off = body + 1 + 2 * @as(usize, ns);
+        buf[ss_off] = p;
+
+        var report = try jpegz.validate(allocator, buf);
+        defer report.deinit(allocator);
+        try std.testing.expect(reportHasCode(report, .lossless_predictor_invalid));
+    }
+}
+
+test "validate: lossless_pointtransform_invalid classifies nonzero Ah in lossless scan" {
+    const allocator = std.testing.allocator;
+
+    {
+        var report = try jpegz.validate(allocator, fixture_lossless_4x4_gray8);
+        defer report.deinit(allocator);
+        try std.testing.expect(!reportHasCode(report, .lossless_pointtransform_invalid));
+    }
+
+    // Lossless has no successive approximation: the AhAl byte must have
+    // Ah=0 (it carries only the point transform Al). Set Ah=1.
+    const buf = try allocator.dupe(u8, fixture_lossless_4x4_gray8);
+    defer allocator.free(buf);
+    const sos = findMarker(buf, 0xDA).?;
+    const body = sos + 4;
+    const ns = buf[body];
+    const ahal_off = body + 1 + 2 * @as(usize, ns) + 2;
+    buf[ahal_off] = 0x10; // Ah=1, Al=0
+
+    var report = try jpegz.validate(allocator, buf);
+    defer report.deinit(allocator);
+    try std.testing.expect(reportHasCode(report, .lossless_pointtransform_invalid));
+}
