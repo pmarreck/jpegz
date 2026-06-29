@@ -46,9 +46,14 @@ progressive. Lift validate's `jpeg_lossless_decoder.zig` directly. Add an
 implementation is mostly FFI-into-C-libs in this phase. Both validate and
 tiffz can depend on jpegz the day it's stood up.
 
-**Phase 2 (cleanroom replacement).** Rewrite each codec in pure Zig,
-keeping the C deps as test oracles only. Final state: zero C deps;
-libjpeg-turbo and openjpeg ship only in `tests/` for sanity-check
+**Phase 2 (self-contained Zig decoders).** Reimplement each codec in
+Zig, keeping the C deps as test oracles only. **T.81 / T.87** (baseline,
+progressive, lossless, arithmetic, JPEG-LS) are cleanroom Zig. **JPEG 2000
+(T.800)** is provided by the sibling `jp2z` — a *faithful Zig port of
+openjpeg* (BSD-2, attributed), not a cleanroom reimplementation; openjpeg
+remains the JP2 runtime path until jp2z's port is feature-complete. Final
+state: zero **system** C deps; libjpeg-turbo and openjpeg ship only in
+`tests/` for sanity-check
 assertions. See `SPEC.md` §6 for the order (baseline first, then
 progressive, then lossless rewrite, then arithmetic, then JPEG-LS, then
 JPEG 2000 wavelet pipeline).

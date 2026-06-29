@@ -241,8 +241,10 @@ pub fn decodeWithOptions(
     // for byte-perfect regression testing.
     //
     // (The lone documented exception is `jpegz.jpeg2000.decode`,
-    // which delegates to openjpeg until M2.7 cleanroom JP2 ships —
-    // separate entry point, not reached through this dispatcher.)
+    // which delegates to openjpeg until the jp2z JP2 path lands — a
+    // faithful Zig PORT of openjpeg (BSD-2, attributed), NOT a cleanroom
+    // reimplementation — separate entry point, not reached through this
+    // dispatcher.)
     const baseline = @import("decode/baseline.zig");
 
     // JPEG-LS comes first: T.87 uses a different SOF marker (SOF55 =
@@ -469,18 +471,19 @@ pub const jpeg2000 = struct {
 
     /// Same as `decode` but accepts `DecodeOptions`. Today's openjpeg
     /// wrapper does not yet plumb `options.threads` through to
-    /// `opj_codec_set_threads` — that lands with the cleanroom JP2
-    /// path (M2.7) or as a wrapper-side enhancement when needed.
+    /// `opj_codec_set_threads` — that lands with the jp2z JP2 path
+    /// or as a wrapper-side enhancement when needed.
     ///
-    /// **Architecture exception (documented):** this is the ONE
-    /// runtime non-cleanroom dependency in the public dispatch
-    /// surface. JPEG 2000 (T.800) needs the full wavelet + EBCOT
-    /// tier-1/2 pipeline (multi-month build); until milestone M2.7
-    /// ships, the public API delegates to openjpeg here. Every
-    /// other public entry point is cleanroom-only at runtime;
-    /// libjpeg-turbo / charls remain available exclusively as
-    /// build-time oracles via `jpegz.internal.*` for byte-perfect
-    /// regression testing.
+    /// **Architecture note (documented):** this is the ONE runtime
+    /// dependency on a C library in the public dispatch surface. JPEG
+    /// 2000 (T.800) is handled by the sibling `jp2z` — a faithful Zig
+    /// PORT of openjpeg (BSD-2, attributed), not a cleanroom rewrite —
+    /// but jp2z's own production decode still routes through openjpeg
+    /// today, so jpegz delegates to openjpeg here until that cutover.
+    /// Every other public entry point IS cleanroom-only at runtime
+    /// (T.81 / T.87); libjpeg-turbo / charls remain available
+    /// exclusively as build-time oracles via `jpegz.internal.*` for
+    /// byte-perfect regression testing.
     pub fn decodeWithOptions(
         allocator: Allocator,
         data: []const u8,

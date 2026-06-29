@@ -3,14 +3,19 @@
 **Mission recap.** jpegz is the spec-complete JPEG family decoder for
 the Zig ecosystem. Zig stdlib has no native JPEG support; zigimg's
 `src/formats/jpeg.zig` is 322 lines, baseline-only, not spec-complete.
-jpegz fills that gap. **End state: pure Zig, zero C deps in the
-shipped binary**, full T.81 / T.87 / T.800 coverage including the
-arithmetic-coded and lossless modes the wider ecosystem skips.
+jpegz fills that gap. **End state: self-contained Zig decoders, zero
+*system* C deps in the shipped binary**, full T.81 / T.87 / T.800
+coverage including the arithmetic-coded and lossless modes the wider
+ecosystem skips. **T.81 / T.87 are cleanroom Zig; T.800 (JPEG 2000) is a
+faithful Zig port of openjpeg (BSD-2, attributed) via the sibling jp2z —
+not a cleanroom reimplementation.**
 
 Phase 1 (wrapper) was scaffolding to unblock validate + tiffz in days
 instead of weeks. The wrapper milestones are DONE; the actual product
-is the cleanroom Zig implementation, with libjpeg-turbo and openjpeg
-demoted to `tests/oracles/` for byte-equal verification.
+is the self-contained Zig implementation (cleanroom for T.81/T.87; a
+BSD-attributed Zig port of openjpeg, via jp2z, for T.800), with
+libjpeg-turbo and openjpeg demoted to `tests/oracles/` for byte-equal
+verification.
 
 Date format: tick boxes with `_(YYYY-MM-DD EST)_`. Keep the last few
 completed items for continuity; prune older ones when context is no
