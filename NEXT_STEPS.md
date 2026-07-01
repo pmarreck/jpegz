@@ -1,5 +1,13 @@
 # jpegz NEXT_STEPS — Handoff to Next Session
 
+> **Provenance note (canonical: `LICENSING_NOTES.md`).** "Cleanroom" below
+> is scoped: the entropy/structural, lossless (§H), JPEG-LS (T.87) and
+> arithmetic (Annex D) layers are cleanroom; the DCT DSP kernels (islow
+> IDCT, color conversion, upsampling) are pure-Zig **ports** of
+> libjpeg-turbo (BSD-3, attributed). "100%" in coverage tables/triggers
+> refers to test/variant coverage, not cleanroom provenance.
+
+
 **Last updated:** 2026-05-13.
 **Maintained for:** the next Claude session (or any other agent / human)
 who picks this up. Anchored to commits on `yolo`.

@@ -480,10 +480,15 @@ pub const jpeg2000 = struct {
     /// PORT of openjpeg (BSD-2, attributed), not a cleanroom rewrite —
     /// but jp2z's own production decode still routes through openjpeg
     /// today, so jpegz delegates to openjpeg here until that cutover.
-    /// Every other public entry point IS cleanroom-only at runtime
-    /// (T.81 / T.87); libjpeg-turbo / charls remain available
-    /// exclusively as build-time oracles via `jpegz.internal.*` for
-    /// byte-perfect regression testing.
+    /// Every other public entry point is pure-Zig at runtime (no C
+    /// dependency). Provenance is mixed (canonical: LICENSING_NOTES.md):
+    /// the entropy / structural / lossless (T.81 §H) / JPEG-LS (T.87) /
+    /// arithmetic (T.81 Annex D) layers are cleanroom from the ITU-T
+    /// specs; the DCT DSP kernels (islow IDCT, YCbCr→RGB, upsampling)
+    /// are pure-Zig ports of libjpeg-turbo (BSD-3, attributed). The
+    /// oracle libs (libjpeg-turbo / charls) remain available only as
+    /// build-time oracles via `jpegz.internal.*` for byte-perfect
+    /// regression testing.
     pub fn decodeWithOptions(
         allocator: Allocator,
         data: []const u8,

@@ -55,6 +55,15 @@ TIFF) for months.
 
 ### Phase 2 — cleanroom pure-Zig replacement
 
+> **Provenance outcome (canonical: `LICENSING_NOTES.md`).** The Phase-2
+> reimplementation is cleanroom (from ITU-T spec) for the entropy/structural,
+> lossless (T.81 §H), JPEG-LS (T.87) and arithmetic (Annex D) layers. The DCT
+> **DSP kernels** (islow IDCT, YCbCr→RGB color conversion, chroma upsampling)
+> were ported from libjpeg-turbo source to stay byte-identical for oracle
+> testing — pure-Zig **ports**, BSD-3-attributed, not cleanroom. JPEG 2000
+> (T.800) is a pure-Zig port of openjpeg via jp2z. "Cleanroom" is scoped
+> accordingly; the always-true claim is "no libjpeg/openjpeg runtime dep."
+
 Rewrite each codec in pure Zig, retaining libjpeg-turbo + openjpeg
 as test oracles ONLY. End state: zero C deps in shipped binary.
 

@@ -31,13 +31,16 @@ Any consumer (validate / tiffz / image tools) ──► C FFI ──► jpegz Zi
 lift validate's pure-Zig lossless decoder. Ship a working ABI day one
 so validate + tiffz unblock immediately.
 
-**Phase 2 (months):** reimplement each codec in Zig. T.81 / T.87 are
-cleanroom; JPEG 2000 (T.800) is the sibling `jp2z` — a faithful Zig PORT
-of openjpeg (BSD-2, attributed), not cleanroom. Keep libjpeg-turbo +
-openjpeg as test oracles. End state: zero *system* C deps in the shipped
-binary (the JP2 codec is vendored/ported Zig, BSD-attributed). NOTE:
-jp2z's production decode is still openjpeg today; dropping it is jp2z
-Phases 2-3 (unstarted), so the JP2 cutover is a ways out.
+**Phase 2 (months):** reimplement each codec in Zig. Cleanroom (from ITU-T
+spec): entropy/structural parsing, lossless (T.81 §H), JPEG-LS (T.87),
+arithmetic (T.81 Annex D). PORTS (pure-Zig, BSD-attributed, byte-identical for
+oracle testing): the DCT DSP kernels — islow IDCT, YCbCr→RGB color conversion,
+chroma upsampling — from libjpeg-turbo (BSD-3); and JPEG 2000 (T.800) from
+openjpeg (BSD-2) via the sibling `jp2z`. Keep libjpeg-turbo + openjpeg as test
+oracles. End state: **zero system C deps in the shipped binary** (no
+libjpeg/openjpeg runtime dependency). NOTE: jp2z's production decode is still
+openjpeg today; dropping it is jp2z Phases 2-3 (unstarted), so the JP2 cutover
+is a ways out. Canonical provenance: `LICENSING_NOTES.md`.
 
 ## Key terminology
 

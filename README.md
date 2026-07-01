@@ -46,15 +46,17 @@ progressive. Lift validate's `jpeg_lossless_decoder.zig` directly. Add an
 implementation is mostly FFI-into-C-libs in this phase. Both validate and
 tiffz can depend on jpegz the day it's stood up.
 
-**Phase 2 (self-contained Zig decoders).** Reimplement each codec in
-Zig, keeping the C deps as test oracles only. **T.81 / T.87** (baseline,
-progressive, lossless, arithmetic, JPEG-LS) are cleanroom Zig. **JPEG 2000
-(T.800)** is provided by the sibling `jp2z` — a *faithful Zig port of
-openjpeg* (BSD-2, attributed), not a cleanroom reimplementation; openjpeg
-remains the JP2 runtime path until jp2z's port is feature-complete. Final
-state: zero **system** C deps; libjpeg-turbo and openjpeg ship only in
-`tests/` for sanity-check
-assertions. See `SPEC.md` §6 for the order (baseline first, then
+**Phase 2 (self-contained Zig decoders).** Reimplement each codec in Zig,
+keeping the C deps as test oracles only. The **entropy, structural, lossless
+(T.81 §H), JPEG-LS (T.87) and arithmetic (T.81 Annex D) layers are cleanroom**
+Zig, written from the ITU-T specs. The DCT **DSP kernels** — islow IDCT,
+YCbCr→RGB color conversion, chroma upsampling — are pure-Zig **ports of
+libjpeg-turbo** (BSD-3, attributed in `THIRD_PARTY_NOTICES.md`), kept
+byte-identical for oracle testing, **not** cleanroom. **JPEG 2000 (T.800)** is
+a pure-Zig **port of openjpeg** (BSD-2) via the sibling `jp2z` (openjpeg is
+still the JP2 runtime path until jp2z's port is feature-complete). The shipped
+binary has **no libjpeg / openjpeg / charls runtime dependency**. Canonical
+provenance: `LICENSING_NOTES.md`. See `SPEC.md` §6 for the order (baseline first, then
 progressive, then lossless rewrite, then arithmetic, then JPEG-LS, then
 JPEG 2000 wavelet pipeline).
 

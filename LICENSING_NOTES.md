@@ -16,6 +16,56 @@ Phase 1 transitively pulls in two C deps (libjpeg-turbo, openjpeg).
 Both are MIT-compatible. Phase 2 retires them in favor of pure-Zig
 implementations.
 
+## Provenance: cleanroom vs. port (CANONICAL — source of truth)
+
+This section is the single source of truth for how jpegz may describe its
+codecs. Other docs (README, PROJECT_OVERVIEW, PLAN, SPEC, design notes) must
+be consistent with it. "Cleanroom" is a legal/marketing term of art — claim it
+ONLY where the code was written from the ITU-T spec, never where an algorithm
+shape was adapted from libjpeg-turbo/openjpeg source.
+
+**Universal claim (always true, use where one line is needed):**
+> jpegz has **no libjpeg / openjpeg / charls runtime dependency — pure Zig.**
+(Those libraries are build-time test oracles only, gated off in shipping builds.)
+
+**Cleanroom — written from ITU-T T.81 / T.87 (claim "cleanroom" freely, scoped):**
+- Marker / segment parsing (T.81 Annex B)
+- Huffman decode + canonical table generation (T.81 Annex C, Fig C.2)
+- Bitstream reader / byte-destuffing (T.81 §F.1.2.3)
+- Dequantization
+- Lossless predictive decode (T.81 §H, SOF3)
+- Arithmetic Q-coder (T.81 Annex D / Table D.3, §F.1.4) — spec-primary
+- JPEG-LS / LOCO-I (T.87) — see `docs/.../2026-05-16-jpegls-cleanroom-design.md`
+- `idct8x8_fpd` — reference IDCT from T.81 Annex A (**test oracle only**, not
+  the production path)
+
+**Port — pure-Zig reimplementations of libjpeg-turbo (BSD-3) source, kept
+byte-identical for oracle testing (describe as "port", NOT "cleanroom";
+BSD-3 attribution required — see `THIRD_PARTY_NOTICES.md`):**
+- Production integer IDCT `idct8x8` / `idct8x8_12` / `idct8x8Generic` — islow,
+  from `jidctint.c` / `jidct12.c` (constants, CONST_BITS, PASS1_BITS copied)
+- YCbCr→RGB color conversion `ycbcrRowToRgb` — from `jdcolor.c` (SCALEBITS,
+  FIX_* fixed-point)
+- Fancy chroma upsampling `fancyUpsample` — IJG fancy upsampling
+- CMYK / YCCK assembly — mirrors libjpeg-turbo
+
+**Port — pure-Zig port of openjpeg (BSD-2), via the sibling `jp2z`:**
+- JPEG 2000 (T.800), the `jpegz.jpeg2000` re-export. (Today still delegates to
+  the openjpeg C wrapper at runtime; jp2z's Zig port is not yet its production
+  path — see the cutover plan.)
+
+**Approved phrasings:**
+- ✅ "pure-Zig JPEG-family decoder; no libjpeg/openjpeg runtime dependency"
+- ✅ "cleanroom entropy, lossless, JPEG-LS and arithmetic layers (ITU-T T.81/T.87)"
+- ✅ "DCT DSP kernels are pure-Zig ports of libjpeg-turbo (BSD-3, attributed)"
+- ❌ "100% cleanroom JPEG" / "cleanroom across all formats" (the DCT DSP kernels
+     and the JP2 path are ports)
+
+**Reclaim path (tracked, future):** switching production to `idct8x8_fpd` +
+spec-derived color/upsampling would make the DCT path genuinely cleanroom, at
+the cost of byte-divergence from libjpeg (breaks byte-exact oracle tests;
+downstream tiffz/validate impact). Evaluate separately — see PLAN.md.
+
 ## License compatibility
 
 - **libjpeg-turbo** — BSD-3-Clause. MIT-compatible. Phase 1 vendored

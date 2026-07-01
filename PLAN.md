@@ -6,14 +6,18 @@ the Zig ecosystem. Zig stdlib has no native JPEG support; zigimg's
 jpegz fills that gap. **End state: self-contained Zig decoders, zero
 *system* C deps in the shipped binary**, full T.81 / T.87 / T.800
 coverage including the arithmetic-coded and lossless modes the wider
-ecosystem skips. **T.81 / T.87 are cleanroom Zig; T.800 (JPEG 2000) is a
-faithful Zig port of openjpeg (BSD-2, attributed) via the sibling jp2z —
-not a cleanroom reimplementation.**
+ecosystem skips. **Provenance (canonical: `LICENSING_NOTES.md`):** the
+entropy/structural, lossless (§H), JPEG-LS (T.87) and arithmetic (Annex D)
+layers are cleanroom Zig; the DCT DSP kernels (islow IDCT, color conversion,
+upsampling) are pure-Zig **ports** of libjpeg-turbo (BSD-3); T.800 (JPEG 2000)
+is a pure-Zig **port** of openjpeg (BSD-2) via jp2z. No libjpeg/openjpeg
+runtime dependency.
 
 Phase 1 (wrapper) was scaffolding to unblock validate + tiffz in days
 instead of weeks. The wrapper milestones are DONE; the actual product
-is the self-contained Zig implementation (cleanroom for T.81/T.87; a
-BSD-attributed Zig port of openjpeg, via jp2z, for T.800), with
+is the self-contained Zig implementation (cleanroom entropy/lossless/
+JPEG-LS/arithmetic core; BSD-attributed libjpeg-turbo ports for the DCT DSP
+kernels; a BSD-attributed openjpeg port, via jp2z, for T.800), with
 libjpeg-turbo and openjpeg demoted to `tests/oracles/` for byte-equal
 verification.
 
@@ -360,6 +364,25 @@ machinery where possible).
   decoded images come out truncated.
 - _M2.5:_ arithmetic coding fixtures barely exist in the wild — we may
   have to synthesize them via libjpeg-turbo's own arithmetic encoder.
+
+## Future — reclaim a cleanroom DCT path (evaluate; not committed)
+
+Provenance audit (2026-06-30, per Einstein) found the production DCT DSP
+kernels are libjpeg-turbo PORTS, not cleanroom: islow IDCT
+(`idct8x8`/`idct8x8Generic`, from jidctint.c/jidct12.c), YCbCr→RGB color
+conversion (`ycbcrRowToRgb`, from jdcolor.c), fancy chroma upsampling, and
+CMYK/YCCK. Docs now describe these accurately as ports (BSD-3, attributed
+in THIRD_PARTY_NOTICES.md). Peter's call: **accurate now, reclaim later.**
+
+- [ ] Evaluate swapping production to the cleanroom `idct8x8_fpd` (T.81
+      Annex A) + writing color conversion / upsampling from the JFIF/T.871
+      spec equations, to make the DCT path genuinely cleanroom.
+- [ ] **Byte-divergence analysis FIRST:** islow ≠ ideal Annex A IDCT, so
+      output would no longer byte-match libjpeg — this breaks the
+      byte-exact oracle tests and may affect downstream tiffz/validate
+      (which were built around byte-identity). Quantify the delta and
+      coordinate with Einstein (cross-board) + tiffz/validate before any
+      swap. Likely means oracle tests move to a tolerance bound.
 
 ## In progress — wire dormant T.81 finding codes (validation strictness)
 
