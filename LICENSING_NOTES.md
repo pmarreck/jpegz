@@ -24,9 +24,12 @@ be consistent with it. "Cleanroom" is a legal/marketing term of art — claim it
 ONLY where the code was written from the ITU-T spec, never where an algorithm
 shape was adapted from libjpeg-turbo/openjpeg source.
 
-**Universal claim (always true, use where one line is needed):**
-> jpegz has **no libjpeg / openjpeg / charls runtime dependency — pure Zig.**
-(Those libraries are build-time test oracles only, gated off in shipping builds.)
+**Universal claim (accurate, use where one line is needed):**
+> **JPEG / JPEG-LS decode is pure Zig** — no *required* libjpeg-turbo or CharLS
+> runtime dependency (both are droppable: `-Dwith-libjpeg-oracle=false`,
+> `-Dwith-charls=false`). **JPEG 2000 (T.800) links a vendored openjpeg
+> (BSD-2) at runtime** until the jp2z cutover — so a default build is NOT
+> "zero C deps"; the JP2 codec is openjpeg.
 
 **Cleanroom — written from ITU-T T.81 / T.87 (claim "cleanroom" freely, scoped):**
 - Marker / segment parsing (T.81 Annex B)
@@ -39,9 +42,15 @@ shape was adapted from libjpeg-turbo/openjpeg source.
 - `idct8x8_fpd` — reference IDCT from T.81 Annex A (**test oracle only**, not
   the production path)
 
-**Port — pure-Zig reimplementations of libjpeg-turbo (BSD-3) source, kept
-byte-identical for oracle testing (describe as "port", NOT "cleanroom";
-BSD-3 attribution required — see `THIRD_PARTY_NOTICES.md`):**
+**Port — pure-Zig reimplementations of libjpeg-turbo source, kept
+byte-identical for oracle testing (describe as "port", NOT "cleanroom").**
+**License is the IJG License, NOT BSD-3:** `jidctint.c` / `jdcolor.c` are
+inherited from the original libjpeg (IJG); libjpeg-turbo's `LICENSE.md`
+assigns inherited code the **IJG License** (README.ijg) — BSD-3 governs only
+the TurboJPEG API. Attribution: Thomas G. Lane / Guido Vollbeding + IJG
+acknowledgment ("based in part on the work of the Independent JPEG Group"),
+plus D. R. Commander for libjpeg-turbo modifications. Full text in
+`THIRD_PARTY_NOTICES.md`.
 - Production integer IDCT `idct8x8` / `idct8x8_12` / `idct8x8Generic` — islow,
   from `jidctint.c` / `jidct12.c` (constants, CONST_BITS, PASS1_BITS copied)
 - YCbCr→RGB color conversion `ycbcrRowToRgb` — from `jdcolor.c` (SCALEBITS,
@@ -55,11 +64,13 @@ BSD-3 attribution required — see `THIRD_PARTY_NOTICES.md`):**
   path — see the cutover plan.)
 
 **Approved phrasings:**
-- ✅ "pure-Zig JPEG-family decoder; no libjpeg/openjpeg runtime dependency"
+- ✅ "pure-Zig JPEG / JPEG-LS decoder — no required libjpeg/CharLS runtime dep"
 - ✅ "cleanroom entropy, lossless, JPEG-LS and arithmetic layers (ITU-T T.81/T.87)"
-- ✅ "DCT DSP kernels are pure-Zig ports of libjpeg-turbo (BSD-3, attributed)"
-- ❌ "100% cleanroom JPEG" / "cleanroom across all formats" (the DCT DSP kernels
-     and the JP2 path are ports)
+- ✅ "DCT DSP kernels are pure-Zig ports of libjpeg-turbo, under the IJG License"
+- ✅ "JPEG 2000 links a vendored openjpeg (BSD-2) at runtime until the jp2z cutover"
+- ❌ "100% cleanroom JPEG" / "cleanroom across all formats"
+- ❌ "no openjpeg runtime dependency" / "zero C deps" (openjpeg backs JP2 today)
+- ❌ crediting the ported IDCT/color kernels to BSD-3 (they are IJG-licensed)
 
 **Reclaim path (tracked, future):** switching production to `idct8x8_fpd` +
 spec-derived color/upsampling would make the DCT path genuinely cleanroom, at

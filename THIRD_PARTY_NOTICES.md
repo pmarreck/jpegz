@@ -1,71 +1,88 @@
 # Third-party notices (jpegz)
 
-jpegz is MIT-licensed (see `LICENSE`). It links **no** third-party C libraries
-in shipping builds — libjpeg-turbo, openjpeg, and charls are build-time test
-oracles only, gated off by `-Dwith-libjpeg-oracle=false` / `-Dwith-charls=false`
-and the vendored/ported JP2 path.
+jpegz is MIT-licensed (see `LICENSE`). Third-party components fall into three
+tiers; obligations differ per tier. Canonical provenance: `LICENSING_NOTES.md`.
 
-However, several pure-Zig kernels were **reimplemented from (ported from) the
-source of the projects below**, kept byte-identical for oracle verification. Per
-`LICENSING_NOTES.md`, that adaptation of algorithm shape requires the upstream
-BSD attribution even though the C code is not linked. Those notices follow.
-
----
-
-## libjpeg-turbo — BSD-3-Clause
-
-Algorithm shapes ported into pure Zig (see `LICENSING_NOTES.md` "Provenance"):
-- Integer "islow" inverse DCT — `src/decode/idct.zig` (from `jidctint.c` /
-  `jidct12.c`: CONST_BITS, PASS1_BITS, fixed-point multiplier constants).
-- YCbCr→RGB color conversion — `src/decode/color.zig` `ycbcrRowToRgb`
-  (from `jdcolor.c`: SCALEBITS, FIX_* fixed-point scheme).
-- Fancy chroma upsampling — `src/decode/color.zig` `fancyUpsample`
-  (IJG fancy upsampling).
-- CMYK / YCCK assembly — `src/decode/cmyk.zig`.
-
-```
-Copyright (C)2009-2024 D. R. Commander. All Rights Reserved.
-Copyright (C)2015 Viktor Szathmáry. All Rights Reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-- Redistributions of source code must retain the above copyright notice,
-  this list of conditions and the following disclaimer.
-- Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-- Neither the name of the libjpeg-turbo Project nor the names of its
-  contributors may be used to endorse or promote products derived from this
-  software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS",
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-```
+**Accurate linkage summary (correcting an earlier over-claim):**
+- **JPEG / JPEG-LS decode is pure Zig** with no *required* C runtime dependency:
+  libjpeg-turbo is a droppable test oracle (`-Dwith-libjpeg-oracle=false`) and
+  CharLS is a droppable JPEG-LS build-time oracle (`-Dwith-charls=false`).
+- **JPEG 2000 (T.800) links a vendored openjpeg at runtime** (BSD-2) — this is a
+  genuine runtime dependency today, until the `jp2z` cutover. So jpegz is NOT
+  "zero C deps" in a default build; the JP2 codec is openjpeg.
 
 ---
 
-## OpenJPEG — BSD-2-Clause
+## Tier 1 — PORTED into pure Zig (attribution OBLIGATORY)
 
-The JPEG 2000 (T.800) path is provided by the sibling project `jp2z`, a
-pure-Zig port of OpenJPEG. jpegz re-exports it as `jpegz.jpeg2000` and (today)
-still delegates to the OpenJPEG C wrapper at runtime. OpenJPEG attribution:
+Algorithm shapes reimplemented in Zig from **libjpeg-turbo** source, kept
+byte-identical for oracle testing. These specific files are **inherited from the
+original libjpeg (IJG)** and libjpeg-turbo's `LICENSE.md` assigns them the **IJG
+License** (README.ijg), not the project-level BSD-3-Clause (BSD-3 governs only
+the TurboJPEG API / build system). The IJG terms explicitly bind derivative
+works: *"These conditions apply to any software derived from or based on the IJG
+code, not just to the unmodified library."*
+
+Ported files:
+- `src/decode/idct.zig` — islow integer IDCT, from libjpeg-turbo `src/jidctint.c`
+  (CONST_BITS, PASS1_BITS, fixed-point multiplier constants).
+- `src/decode/color.zig` — `ycbcrRowToRgb` from `src/jdcolor.c` (SCALEBITS,
+  FIX_* fixed-point); `fancyUpsample` from IJG fancy upsampling.
+- `src/decode/cmyk.zig` — CMYK/YCCK assembly mirroring libjpeg-turbo.
+
+**Copyright (verbatim from the ported file headers + README.ijg):**
+```
+jidctint.c / jdcolor.c were part of the Independent JPEG Group's software:
+  Copyright (C) 1991-1998, Thomas G. Lane.
+  Modification developed 2002-2018 by Guido Vollbeding.
+libjpeg-turbo Modifications:
+  Copyright (C) 2015, 2020, 2022, 2026, D. R. Commander.
+
+IJG software is copyright (C) 1991-2020, Thomas G. Lane, Guido Vollbeding.
+All Rights Reserved except as specified in the license.
+```
+
+**Required acknowledgment (IJG License clause 2):**
+> This software is based in part on the work of the Independent JPEG Group.
+
+**IJG License (README.ijg), permission and conditions (verbatim):**
+```
+Permission is hereby granted to use, copy, modify, and distribute this
+software (or portions thereof) for any purpose, without fee, subject to these
+conditions:
+(1) If any part of the source code for this software is distributed, then this
+README file must be included, with this copyright and no-warranty notice
+unaltered; and any additions, deletions, or changes to the original files
+must be clearly indicated in accompanying documentation.
+(2) If only executable code is distributed, then the accompanying
+documentation must state that "this software is based in part on the work of
+the Independent JPEG Group".
+(3) Permission for use of this software is granted only if the user accepts
+full responsibility for any undesirable consequences; the authors accept
+NO LIABILITY for damages of any kind.
+
+These conditions apply to any software derived from or based on the IJG code,
+not just to the unmodified library.
+
+Permission is NOT granted for the use of any IJG author's name or company name
+in advertising or publicity relating to this software or products derived from
+it.
+```
+**Change indication (IJG clause 1):** the above files were *reimplemented in Zig*
+(`src/decode/idct.zig`, `color.zig`, `cmyk.zig`); the fixed-point constants and
+algorithm structure are preserved for byte-identical output, all surrounding
+code is new. libjpeg-turbo's own `LICENSE.md` and `README.ijg` are the
+authoritative texts.
+
+---
+
+## Tier 2 — RUNTIME dependency (attribution OBLIGATORY when distributed)
+
+**OpenJPEG — BSD-2-Clause.** The JPEG 2000 (T.800) path (`jpegz.jpeg2000`) links
+a vendored `libopenjp2` at runtime (`deps/openjpeg`, uclouvain 2.5.4). This is a
+real runtime dependency in the shipped binary until the `jp2z` cutover.
 
 ```
-The copyright in this software is being made available under the 2-clauses
-BSD License, included below. This software may be subject to other third
-party and contributor rights, including patent rights, and no such rights
-are granted under this license.
-
 Copyright (c) 2002-2014, Universite catholique de Louvain (UCL), Belgium
 Copyright (c) 2002-2014, Professor Benoit Macq
 Copyright (c) 2003-2014, Antonin Descampe
@@ -86,23 +103,26 @@ modification, are permitted provided that the following conditions are met:
    and/or other materials provided with the distribution.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
+AND ANY EXPRESS OR IMPLIED WARRANTIES ARE DISCLAIMED. [full BSD-2 disclaimer;
+see deps/openjpeg upstream LICENSE.]
 ```
 
 ---
 
-## charls — BSD-3-Clause
+## Tier 3 — TEST-ORACLE ONLY (NO code adapted — courtesy)
 
-Build-time JPEG-LS (T.87) oracle only (`-Dwith-charls`), used to verify the
-cleanroom JPEG-LS decoder. Not linked in shipping builds and not ported from
-(the JPEG-LS decoder is cleanroom from T.87), so listed for completeness.
-Copyright (c) Team CharLS. BSD-3-Clause.
+No jpegz code was adapted from these; they are differential oracles only. The
+production `decode()` dispatcher is cleanroom-only at runtime and never calls
+them (it surfaces `error.NotImplemented` rather than falling back to a C lib).
+Listed for completeness / distribution when linked as oracles.
+
+- **CharLS — BSD-3-Clause.** Copyright (c) Team CharLS. JPEG-LS (T.87)
+  differential oracle only (`-Dwith-charls`, droppable), reachable solely via
+  `jpegz.internal.charlsDecode` — the production path never calls it. **The
+  jpegz JPEG-LS decoder is cleanroom from ITU-T T.87 — no CharLS code was
+  adapted**, so the cleanroom claim stands; this notice is a courtesy (and a
+  distribution requirement only when CharLS is actually linked as an oracle).
+- **libjpeg-turbo — as oracle.** When `-Dwith-libjpeg-oracle=true`, linked as a
+  byte-perfect verification oracle (`jpegz.internal.wrapperDecode`); the runtime
+  `decode()` path never calls it. Governed as above (IJG for inherited code,
+  BSD-3 for TurboJPEG API). Droppable with `-Dwith-libjpeg-oracle=false`.

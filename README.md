@@ -51,12 +51,14 @@ keeping the C deps as test oracles only. The **entropy, structural, lossless
 (T.81 §H), JPEG-LS (T.87) and arithmetic (T.81 Annex D) layers are cleanroom**
 Zig, written from the ITU-T specs. The DCT **DSP kernels** — islow IDCT,
 YCbCr→RGB color conversion, chroma upsampling — are pure-Zig **ports of
-libjpeg-turbo** (BSD-3, attributed in `THIRD_PARTY_NOTICES.md`), kept
+libjpeg-turbo** (IJG License — inherited libjpeg code, attributed in
+`THIRD_PARTY_NOTICES.md`), kept
 byte-identical for oracle testing, **not** cleanroom. **JPEG 2000 (T.800)** is
 a pure-Zig **port of openjpeg** (BSD-2) via the sibling `jp2z` (openjpeg is
-still the JP2 runtime path until jp2z's port is feature-complete). The shipped
-binary has **no libjpeg / openjpeg / charls runtime dependency**. Canonical
-provenance: `LICENSING_NOTES.md`. See `SPEC.md` §6 for the order (baseline first, then
+still the JP2 runtime path until jp2z's port is feature-complete). JPEG /
+JPEG-LS decode needs **no required libjpeg / CharLS runtime dependency** (both
+droppable); the **JP2 path links a vendored openjpeg (BSD-2) at runtime** until
+the jp2z cutover. Canonical provenance: `LICENSING_NOTES.md`. See `SPEC.md` §6 for the order (baseline first, then
 progressive, then lossless rewrite, then arithmetic, then JPEG-LS, then
 JPEG 2000 wavelet pipeline).
 

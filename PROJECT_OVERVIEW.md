@@ -35,10 +35,12 @@ so validate + tiffz unblock immediately.
 spec): entropy/structural parsing, lossless (T.81 §H), JPEG-LS (T.87),
 arithmetic (T.81 Annex D). PORTS (pure-Zig, BSD-attributed, byte-identical for
 oracle testing): the DCT DSP kernels — islow IDCT, YCbCr→RGB color conversion,
-chroma upsampling — from libjpeg-turbo (BSD-3); and JPEG 2000 (T.800) from
+chroma upsampling — from libjpeg-turbo (IJG License, inherited libjpeg code);
+and JPEG 2000 (T.800) from
 openjpeg (BSD-2) via the sibling `jp2z`. Keep libjpeg-turbo + openjpeg as test
-oracles. End state: **zero system C deps in the shipped binary** (no
-libjpeg/openjpeg runtime dependency). NOTE: jp2z's production decode is still
+oracles. End state: JPEG/JPEG-LS decode is pure Zig (no required libjpeg/CharLS runtime
+dep); the **JP2 path still links a vendored openjpeg (BSD-2) at runtime** until
+the jp2z cutover — so a default build is NOT zero-C-deps yet. NOTE: jp2z's production decode is still
 openjpeg today; dropping it is jp2z Phases 2-3 (unstarted), so the JP2 cutover
 is a ways out. Canonical provenance: `LICENSING_NOTES.md`.
 

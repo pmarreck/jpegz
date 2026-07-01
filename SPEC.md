@@ -60,12 +60,17 @@ TIFF) for months.
 > lossless (T.81 §H), JPEG-LS (T.87) and arithmetic (Annex D) layers. The DCT
 > **DSP kernels** (islow IDCT, YCbCr→RGB color conversion, chroma upsampling)
 > were ported from libjpeg-turbo source to stay byte-identical for oracle
-> testing — pure-Zig **ports**, BSD-3-attributed, not cleanroom. JPEG 2000
-> (T.800) is a pure-Zig port of openjpeg via jp2z. "Cleanroom" is scoped
-> accordingly; the always-true claim is "no libjpeg/openjpeg runtime dep."
+> testing — pure-Zig **ports** under the **IJG License** (inherited libjpeg
+> code), not cleanroom, not BSD-3. JPEG 2000 (T.800) is a pure-Zig port of
+> openjpeg via jp2z, but the **JP2 path links a vendored openjpeg (BSD-2) at
+> runtime** until the cutover. "Cleanroom" is scoped accordingly; the
+> always-true claim is "JPEG/JPEG-LS decode is pure Zig, no required
+> libjpeg/CharLS runtime dep."
 
 Rewrite each codec in pure Zig, retaining libjpeg-turbo + openjpeg
-as test oracles ONLY. End state: zero C deps in shipped binary.
+as test oracles ONLY. End state: JPEG/JPEG-LS decode is pure Zig (no required
+libjpeg/CharLS runtime dep); the JP2 (T.800) path links a vendored openjpeg
+(BSD-2) at runtime until the jp2z cutover — see LICENSING_NOTES.md.
 
 Order (each step includes the prior step's tests as a regression
 oracle):

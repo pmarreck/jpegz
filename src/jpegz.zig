@@ -485,7 +485,8 @@ pub const jpeg2000 = struct {
     /// the entropy / structural / lossless (T.81 §H) / JPEG-LS (T.87) /
     /// arithmetic (T.81 Annex D) layers are cleanroom from the ITU-T
     /// specs; the DCT DSP kernels (islow IDCT, YCbCr→RGB, upsampling)
-    /// are pure-Zig ports of libjpeg-turbo (BSD-3, attributed). The
+    /// are pure-Zig ports of libjpeg-turbo under the IJG License
+    /// (inherited libjpeg code — see THIRD_PARTY_NOTICES.md). The
     /// oracle libs (libjpeg-turbo / charls) remain available only as
     /// build-time oracles via `jpegz.internal.*` for byte-perfect
     /// regression testing.

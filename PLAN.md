@@ -9,9 +9,10 @@ coverage including the arithmetic-coded and lossless modes the wider
 ecosystem skips. **Provenance (canonical: `LICENSING_NOTES.md`):** the
 entropy/structural, lossless (§H), JPEG-LS (T.87) and arithmetic (Annex D)
 layers are cleanroom Zig; the DCT DSP kernels (islow IDCT, color conversion,
-upsampling) are pure-Zig **ports** of libjpeg-turbo (BSD-3); T.800 (JPEG 2000)
-is a pure-Zig **port** of openjpeg (BSD-2) via jp2z. No libjpeg/openjpeg
-runtime dependency.
+upsampling) are pure-Zig **ports** of libjpeg-turbo (IJG License — inherited
+libjpeg code); T.800 (JPEG 2000) is a pure-Zig **port** of openjpeg (BSD-2) via
+jp2z. JPEG/JPEG-LS need no required libjpeg/CharLS runtime dep; the JP2 path
+links a vendored openjpeg at runtime until the jp2z cutover.
 
 Phase 1 (wrapper) was scaffolding to unblock validate + tiffz in days
 instead of weeks. The wrapper milestones are DONE; the actual product
