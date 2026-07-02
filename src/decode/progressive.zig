@@ -402,8 +402,8 @@ pub fn decodeWithOptions(
     // ── Final pass: dequant + IDCT each block, emit pixels ────────
     // Dispatch on precision at comptime via the generic Phase 2.
     return switch (frame.?.precision) {
-        8 => try assembleProgressiveGeneric(8, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v),
-        12 => try assembleProgressiveGeneric(12, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v),
+        8 => try assembleProgressiveGeneric(8, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, options.findings_sink),
+        12 => try assembleProgressiveGeneric(12, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, options.findings_sink),
         else => unreachable, // gated above
     };
 }
@@ -1001,7 +1001,7 @@ fn assembleProgressive(
     max_h: u32,
     max_v: u32,
 ) Error!types.Image {
-    return assembleProgressiveGeneric(8, allocator, frame, quant_tables, coefs, blocks_w, blocks_h, max_h, max_v);
+    return assembleProgressiveGeneric(8, allocator, frame, quant_tables, coefs, blocks_w, blocks_h, max_h, max_v, null);
 }
 
 /// Phase 2 of progressive decode, generic over precision P ∈ {8, 12}.
@@ -1038,6 +1038,7 @@ pub fn assembleProgressiveGeneric(
     blocks_h: *const [3]u32,
     max_h: u32,
     max_v: u32,
+    sink: ?*findings_mod.FindingsSink,
 ) Error!types.Image {
     const Sample = idct.Sample(P); // u8 for P=8, u16 for P=12.
     const channels: u8 = frame.num_components;
@@ -1059,6 +1060,8 @@ pub fn assembleProgressiveGeneric(
     }
 
     // Per block: dequant in zig-zag space, un-zig-zag, IDCT, copy.
+    // Set if any block's IDCT wrapped on out-of-range coefficients (corrupt).
+    var of_flag = std.atomic.Value(bool).init(false);
     i = 0;
     while (i < channels) : (i += 1) {
         const comp = &frame.components[i];
@@ -1085,7 +1088,7 @@ pub fn assembleProgressiveGeneric(
                     natural[ZIGZAG[n]] = @as(i32, zz[n]);
                 }
                 var block_pix: [64]Sample = undefined;
-                idct.idct8x8Generic(P, &natural, &block_pix);
+                if (idct.idct8x8Generic(P, &natural, &block_pix)) of_flag.store(true, .monotonic);
                 // Copy 8×8 spatial block into plane.
                 var py: u32 = 0;
                 while (py < 8) : (py += 1) {
@@ -1098,6 +1101,11 @@ pub fn assembleProgressiveGeneric(
                 }
             }
         }
+    }
+
+    if (of_flag.load(.monotonic)) {
+        if (sink) |sk| sk.emit(.fail, .dct_coefficient_overflow, null,
+            "IDCT intermediate overflowed on out-of-range DCT coefficients (corrupt entropy data; wrapped like libjpeg)") catch return error.OutOfMemory;
     }
 
     // Free coefficient buffers (no longer needed).

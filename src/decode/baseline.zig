@@ -626,6 +626,9 @@ fn decodeScanT(
     defer if (pool_initialized) pool.deinit();
 
     // ── Phase 2: per-block IDCT into the per-component plane ───────
+    // Set if any block's IDCT wrapped on out-of-range coefficients (corrupt
+    // entropy). Atomic because the parallel path stores from worker threads.
+    var of_flag = std.atomic.Value(bool).init(false);
     if (comptime P <= 8) {
         // Per-block work is independent: each task reads its own coefficient
         // slot and writes a non-overlapping 8×8 region of the (already
@@ -681,6 +684,7 @@ fn decodeScanT(
                         plane_w[ci],
                         blocks_w[ci],
                         by_idx,
+                        &of_flag,
                     });
                 }
             }
@@ -695,7 +699,7 @@ fn decodeScanT(
                     while (bx_idx < blocks_w[ci]) : (bx_idx += 1) {
                         const linear: usize = (@as(usize, by_idx) * @as(usize, blocks_w[ci]) + @as(usize, bx_idx)) * 64;
                         const slot: *const [64]i32 = coef_buf[ci][linear..][0..64];
-                        transformBlockToPlane(slot, planes[ci], plane_w[ci], bx_idx * 8, by_idx * 8);
+                        transformBlockToPlane(slot, planes[ci], plane_w[ci], bx_idx * 8, by_idx * 8, &of_flag);
                     }
                 }
             }
@@ -712,7 +716,7 @@ fn decodeScanT(
                     const linear: usize = (@as(usize, by_idx) * @as(usize, blocks_w[ci]) + @as(usize, bx_idx)) * 64;
                     const slot: *const [64]i32 = coef_buf[ci][linear..][0..64];
                     var block: [64]u16 = undefined;
-                    idct.idct8x8_12(slot, &block);
+                    if (idct.idct8x8_12(slot, &block)) of_flag.store(true, .monotonic);
                     const ox: u32 = bx_idx * 8;
                     const oy: u32 = by_idx * 8;
                     var blk_y: u32 = 0;
@@ -724,6 +728,16 @@ fn decodeScanT(
                     }
                 }
             }
+        }
+    }
+
+    // Corrupt/out-of-range coefficients wrapped in the IDCT (formerly a
+    // panic; validate fuzz crasher #9). Surface as a finding so the crash
+    // becomes a validator signal: dct_coefficient_overflow = corrupt data.
+    if (of_flag.load(.monotonic)) {
+        if (options.findings_sink) |sink| {
+            sink.emit(.fail, .dct_coefficient_overflow, null,
+                "IDCT intermediate overflowed on out-of-range DCT coefficients (corrupt entropy data; wrapped like libjpeg)") catch return error.OutOfMemory;
         }
     }
 
@@ -802,12 +816,13 @@ fn transformBlockRow(
     plane_w: u32,
     blocks_w_for_comp: u32,
     by_idx: u32,
+    of_flag: *std.atomic.Value(bool),
 ) void {
     var bx_idx: u32 = 0;
     while (bx_idx < blocks_w_for_comp) : (bx_idx += 1) {
         const linear: usize = (@as(usize, by_idx) * @as(usize, blocks_w_for_comp) + @as(usize, bx_idx)) * 64;
         const slot: *const [64]i32 = coef_buf[linear..][0..64];
-        transformBlockToPlane(slot, plane, plane_w, bx_idx * 8, by_idx * 8);
+        transformBlockToPlane(slot, plane, plane_w, bx_idx * 8, by_idx * 8, of_flag);
     }
 }
 
@@ -955,9 +970,12 @@ pub fn transformBlockToPlane(
     plane_w: u32,
     block_x: u32,
     block_y: u32,
+    of_flag: *std.atomic.Value(bool),
 ) void {
     var block: [64]u8 = undefined;
-    idct.idct8x8(coeffs, &block);
+    // islow wraps on out-of-range (corrupt) coefficients instead of panicking;
+    // record the wrap so decodeScanT can emit dct_coefficient_overflow.
+    if (idct.idct8x8(coeffs, &block)) of_flag.store(true, .monotonic);
     var by: u32 = 0;
     while (by < 8) : (by += 1) {
         var bx: u32 = 0;

@@ -2010,3 +2010,28 @@ test "RGB-marked baseline (Adobe APP14 transform=0) decodes as RGB, byte-matchin
     // Pixels must be the RGB passthrough libjpeg produces (no chroma transform).
     try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
 }
+
+/// Fuzz crasher #9 (validate DNG → embedded JPEG → jpegz.decode): a
+/// well-formed 8×8 baseline JPEG whose dequantized AC coefficient
+/// (category-10 amplitude 1023 × quant 255 = 260865) overflows the islow
+/// IDCT's i32 intermediates (c1 × FIX_1_501321110). Formerly a panic; now
+/// wraps like libjpeg AND emits dct_coefficient_overflow (crash → signal).
+const fixture_overflow_ac_8x8 = @embedFile("fixtures/overflow_ac_8x8.jpg");
+
+test "IDCT overflow: out-of-range coefficient decodes without panic + emits dct_coefficient_overflow" {
+    const allocator = std.testing.allocator;
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+    // Must NOT panic (formerly did). Decode succeeds with wrapped (best-effort)
+    // pixels, matching libjpeg's silent-wrap behavior on the same bytes.
+    var img = try jpegz.decodeWithOptions(allocator, fixture_overflow_ac_8x8, .{ .findings_sink = &sink });
+    defer img.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 8), img.width);
+    try std.testing.expectEqual(@as(u32, 8), img.height);
+    // The overflow is surfaced as a fail-severity finding, not swallowed.
+    var found = false;
+    for (sink.items()) |f| {
+        if (f.code == .dct_coefficient_overflow and f.severity == .fail) found = true;
+    }
+    try std.testing.expect(found);
+}
