@@ -26,6 +26,38 @@ Date format: tick boxes with `_(YYYY-MM-DD EST)_`. Keep the last few
 completed items for continuity; prune older ones when context is no
 longer load-bearing.
 
+## ⏸ WIND-DOWN STATE (2026-07-07, fleet migration to Thelio)
+
+**Current state: GREEN. Nothing in flight.** `yolo @ cc844e27`, pushed, ALL
+Garnix checks green (test/build/cross-windows/packages across x86_64-linux,
+aarch64-linux, macos-aarch64) — test check runs **ReleaseSafe**.
+
+Recent session arc (newest first; details in "Recently completed"):
+- `cc844e27` fix(jpegls): setDefaultThresholds u12-overflow (Zig 0.16 @min
+  result-type refinement) + tests flipped to ReleaseSafe (flake). DISPATCH 2.
+- `074ccb3a` fix: IDCT no-panic-on-overflow (fuzz crasher #9) + code 58.
+- Earlier: 9 dormant T.81 validator findings wired; Mode-2 RGB-by-component-ID
+  parity; Windows openjpeg vendoring + cross-CI gate; cleanroom/port provenance
+  docs (IJG license for ported IDCT/color kernels).
+
+**Pin chain is Einstein's** (do NOT bump pins): 074ccb3a + cc844e27 + 6 prior
+commits → one tiffz bump → validate. He drives; nothing downstream waiting.
+
+**Next steps when resumed on the Thelio (in priority order):**
+1. OPEN, low-priority (Einstein's call): 5 `decode_jp2` signal-TRAP crashes
+   under `zig build test` --listen runner with VENDORED openjpeg in ReleaseSafe.
+   Standalone + nix CI (system openjpeg) both PASS → harness/vendored-openjpeg
+   artifact, not a real JP2 bug; build-only windows path; moots at jp2z cutover.
+2. Deferred dormant validator codes needing decode-path work (not marker walk):
+   `dct_coefficient_overflow` DONE (via #9); still open: `jpegls_invalid_run_mode`,
+   `jpegls_context_table_invalid`.
+3. JP2 validation is a STUB (`jpeg2000.validate` returns pass/empty) until the
+   jp2z cutover (all-at-M6 per Peter); append jp2z FindingCodes 250-253 then
+   (needs Einstein registry sign-off — no code-number changes without it).
+4. Future/optional: reclaim a cleanroom DCT path (swap islow port -> idct8x8_fpd
+   + spec-derived color) — gated on byte-divergence analysis + Einstein
+   cross-board (breaks byte-exact oracle tests; downstream tiffz/validate).
+
 ## Phase 1 — wrapper MVP (DONE — scaffolding)
 
 - [x] **M1.1 — Scaffold + flake.nix.** `flake.nix` with zig 0.15.2,
@@ -407,6 +439,19 @@ Deferred (need decode-path/JPEG-LS work, not marker walk):
 `jpeg2000.validate`) — separate.
 
 ## Recently completed
+
+- 2026-07-02 EST — Fixed jpegls setDefaultThresholds u12-overflow (fleet Pattern 3,
+  Einstein DISPATCH 2) + flipped tests to ReleaseSafe. Zig 0.16 @min result-type
+  refinement made @min(MAXVAL,4095) a u12, so +128 overflowed on any >8-bit image
+  (silently wrong FACTOR in ReleaseFast; panic in ReleaseSafe). Fixed by widening
+  the refined @min result to i32 (correct math). flake jpegzTestCheck now runs
+  -Doptimize=ReleaseSafe (whole test compilation). CI green (garnix test
+  x86_64-linux success). yolo @ cc844e27.
+  FOLLOW-UP (reported to Einstein, STOP-condition inventory): the ReleaseSafe flip
+  surfaces 5 decode_jp2 signal-TRAP crashes ONLY with VENDORED openjpeg under
+  `zig build test` --listen runner; standalone AND nix CI (system openjpeg) pass.
+  Harness/vendored-openjpeg artifact, not a real JP2 decode bug; build-only
+  windows path; moots at jp2z cutover.
 
 - 2026-07-01 EST — Fixed IDCT overflow PANIC on malformed input (validate fuzz
   crasher #9, paid-chain critical path). idct8x8Generic wraps via
