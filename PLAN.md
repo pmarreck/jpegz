@@ -403,11 +403,21 @@ addable in the marker walker (`core/validator.zig`):
 - [x] `progressive_scan_count` (info) + `embedded_thumbnail_present` (info) (2026-06-21)
 
 Deferred (need decode-path/JPEG-LS work, not marker walk):
-`dct_coefficient_overflow`, `jpegls_invalid_run_mode`,
-`jpegls_context_table_invalid`. JP2 codes are option B (un-stub
+`jpegls_invalid_run_mode`, `jpegls_context_table_invalid` (dct_coefficient_overflow DONE 2026-07-01 via IDCT crash #9 fix). JP2 codes are option B (un-stub
 `jpeg2000.validate`) — separate.
 
 ## Recently completed
+
+- 2026-07-01 EST — Fixed IDCT overflow PANIC on malformed input (validate fuzz
+  crasher #9, paid-chain critical path). idct8x8Generic wraps via
+  @{add,sub,mul,shl}WithOverflow (C-faithful, byte-exact w/ oracle) instead of
+  panicking, and reports overflow -> baseline/progressive/arith emit dormant
+  code 58 dct_coefficient_overflow (crash -> validator signal; zero ABI change).
+  Reproduced from validate DNG artifact; 143-byte regression fixture
+  (overflow_ac_8x8.jpg) committed. yolo @ 074ccb3a.
+  FOLLOW-UP: a separate pre-existing Debug-only integer overflow in
+  jpegls_codec.zig:118 (setDefaultThresholds) surfaced during repro; harmless
+  in ReleaseFast; flagged to Einstein as a possible separate fuzz target.
 
 - 2026-06-21 EST — Seed the zigDeps FOD into the native build/test checks
   (the actual Linux CI fix). The lazy-dep change alone did NOT green Garnix
