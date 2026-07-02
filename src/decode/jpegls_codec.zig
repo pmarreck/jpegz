@@ -115,7 +115,13 @@ pub const ScanState = struct {
         const maxv_i: i32 = @intCast(self.MAXVAL);
         if (self.MAXVAL >= 128) {
             // FACTOR ∈ [1, 16] for MAXVAL ∈ [128, 4095].
-            const factor: i32 = @intCast(((@min(self.MAXVAL, 4095)) + 128) >> 8);
+            // NOTE (fleet Pattern 3 / Zig 0.16): @min(x, 4095) result-type-
+            // refines to u12 (4095 = 0xFFF), so `@min(...) + 128` overflows u12
+            // once MAXVAL ≥ 3968 (any >8-bit image). ReleaseFast wrapped it
+            // silently (wrong FACTOR for 16-bit); ReleaseSafe/validate-fuzz
+            // panicked. Fix: compute in i32 (widen the refined @min result).
+            const clamped_maxv: i32 = @min(maxv_i, 4095);
+            const factor: i32 = (clamped_maxv + 128) >> 8;
             const t1_basic: i32 = factor * (3 - 2) + 2 + 3 * near_i;
             const t2_basic: i32 = factor * (7 - 2) + 2 + 5 * near_i;
             const t3_basic: i32 = factor * (21 - 2) + 2 + 7 * near_i;

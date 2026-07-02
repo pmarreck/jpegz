@@ -177,7 +177,14 @@
             cp -r ${zigDeps}/* "$ZIG_GLOBAL_CACHE_DIR/"
             chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
             # Keep NIX_CFLAGS_COMPILE / NIX_LDFLAGS for libjpeg-turbo / openjpeg.
-            timeout 600 zig build test ${zigTargetFlag} ${depFlags} || { echo "Tests failed"; exit 1; }
+            # -Doptimize=ReleaseSafe: tests MUST be safety-checked. ReleaseFast
+            # masks UB (integer overflow, bounds) — a fleet false-green (Pattern
+            # 3, 2026-07-01): jpegls setDefaultThresholds overflowed on valid
+            # 16-bit input yet ./test was green because it ran ReleaseFast.
+            # This flips the WHOLE test compilation (jpegz_mod + every test
+            # module) to ReleaseSafe; the package build keeps its explicit
+            # -Doptimize=ReleaseFast, benchmarks stay ReleaseFast.
+            timeout 600 zig build test -Doptimize=ReleaseSafe ${zigTargetFlag} ${depFlags} || { echo "Tests failed"; exit 1; }
           '';
           installPhase = ''
             mkdir -p $out

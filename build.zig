@@ -201,7 +201,18 @@ pub fn build(b: *std.Build) void {
     //   3. src/core/errors.zig    — inline tests (numeric stability)
     // The `test` step depends on all three; failure of any propagates.
     // ============================================================
-    const test_step = b.step("test", "Run unit tests");
+    // FLEET FLOOR — tests run ReleaseSafe (fleet finding 2026-07-01, Pattern 3):
+    // ReleaseFast masks UB (integer overflow, bounds) so a green ./test can hide
+    // real crashers — e.g. jpegls setDefaultThresholds overflowed on valid 16-bit
+    // input, invisible in ReleaseFast. Enforcement lives in flake.nix
+    // (jpegzTestCheck passes -Doptimize=ReleaseSafe), which flips the ENTIRE test
+    // compilation — the shared `jpegz` module + every test module — to ReleaseSafe
+    // in one shot. (A per-module `.optimize = .ReleaseSafe` here, rarz-style,
+    // would leave import-based tests' jpegz code at ReleaseFast, since Zig honors
+    // per-module optimize; jpegz's `jpegz` module is shared with the shipped lib,
+    // which must stay ReleaseFast.) `./test` runs the flake check, so it is safe;
+    // benchmarks + the packaged lib stay ReleaseFast.
+    const test_step = b.step("test", "Run unit tests (ReleaseSafe via flake; see note above)");
     const test_build_step = b.step("test-build", "Compile all tests without running, for cross-target link verification");
 
     // (1) Public smoke suite — imports `jpegz` like any consumer.
