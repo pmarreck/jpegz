@@ -59,6 +59,12 @@ pub fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
     fi.width = (@as(u16, data[pos + 5]) << 8) | data[pos + 6];
     fi.num_components = data[pos + 7];
     if (fi.num_components == 0 or fi.num_components > 4) return fail("sof_bad_ncomp", error.InvalidMarker);
+    // T.81 §B.2.2: X (width) must be > 0; Y (height) = 0 is defined only
+    // alongside a DNL segment, which this decoder (like libjpeg without
+    // DNL support) does not accept. Reject zero dimensions here so no
+    // downstream allocation / MCU assembly / chroma upsampling ever runs
+    // over an empty component plane (was an OOB crash in color.fancyUpsample).
+    if (fi.width == 0 or fi.height == 0) return fail("sof_zero_dimension", error.InvalidMarker);
     if (seg_len < 8 + @as(usize, fi.num_components) * 3) return error.TruncatedStream;
     var i: usize = 0;
     while (i < fi.num_components) : (i += 1) {

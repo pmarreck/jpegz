@@ -272,6 +272,17 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                     report.width = @as(u32, width);
                     report.height = @as(u32, height);
 
+                    // T.81 §B.2.2: a SOF declaring zero width or height is not
+                    // a decodable image (Y=0 needs DNL, which we, like libjpeg,
+                    // reject). Fail structurally at the marker walk so it fires
+                    // for every variant and so the fail-verdict skips the codec
+                    // decode-through below (a zero dimension was an OOB crash in
+                    // color.fancyUpsample on an empty plane).
+                    if (width == 0 or height == 0) {
+                        try addFinding(&report, allocator, .fail, .invalid_dimensions,
+                            seg_body_start + 1, "SOF declares zero width or height");
+                    }
+
                     // Nf (component count) must be >= 1 and the segment length
                     // must equal 8 + 3*Nf (T.81 §B.2.2: 1 prec + 2 H + 2 W + 1
                     // Nf + 3 bytes per component, plus the 2 length bytes). A

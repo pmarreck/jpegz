@@ -478,3 +478,55 @@ test "validate: embedded_thumbnail_present detects JFIF APP0 thumbnail, silent w
     defer report.deinit(allocator);
     try std.testing.expect(reportHasCode(report, .embedded_thumbnail_present));
 }
+
+// ── Zero-dimension SOF (T.81 §B.2.2) ────────────────────────────────
+// A SOF declaring width (X) = 0 or height (Y) = 0 is not a decodable
+// image: X must be > 0, and Y = 0 is defined only with a DNL segment
+// (which libjpeg rejects outright as "Empty JPEG image"). The marker
+// walker reads the SOF dimensions, so it must reject the zero case too —
+// independently of the cleanroom codec path (which never runs for
+// variants it doesn't own, and which crashed in color.fancyUpsample on
+// an empty component plane before this guard).
+
+/// Duplicate `src` and overwrite the 16-bit big-endian field at `off`
+/// (in the copy) with `value`. Caller owns the returned slice.
+fn patchU16BE(allocator: std.mem.Allocator, src: []const u8, off: usize, value: u16) ![]u8 {
+    const buf = try allocator.dupe(u8, src);
+    buf[off] = @intCast(value >> 8);
+    buf[off + 1] = @intCast(value & 0xFF);
+    return buf;
+}
+
+/// Offset of the SOF0 segment length (the byte just past `0xFF 0xC0`).
+/// baseline_2x2_rgb is encoded as SOF0 (marker 0xC0).
+fn findSof0Body(data: []const u8) ?usize {
+    var i: usize = 2;
+    while (i + 1 < data.len) : (i += 1) {
+        if (data[i] == 0xFF and data[i + 1] == 0xC0) return i + 2;
+    }
+    return null;
+}
+
+test "validate SOF with zero height → FAIL, invalid_dimensions" {
+    const allocator = std.testing.allocator;
+    // SOF body: length(2) precision(1) height(2) width(2)…; height @ +3.
+    const body = findSof0Body(fixture_baseline_2x2_rgb).?;
+    const patched = try patchU16BE(allocator, fixture_baseline_2x2_rgb, body + 3, 0);
+    defer allocator.free(patched);
+    var report = try jpegz.validate(allocator, patched);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
+    try std.testing.expect(reportHasCode(report, .invalid_dimensions));
+}
+
+test "validate SOF with zero width → FAIL, invalid_dimensions" {
+    const allocator = std.testing.allocator;
+    // width @ +5 in the SOF body.
+    const body = findSof0Body(fixture_baseline_2x2_rgb).?;
+    const patched = try patchU16BE(allocator, fixture_baseline_2x2_rgb, body + 5, 0);
+    defer allocator.free(patched);
+    var report = try jpegz.validate(allocator, patched);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
+    try std.testing.expect(reportHasCode(report, .invalid_dimensions));
+}

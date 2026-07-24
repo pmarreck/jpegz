@@ -95,6 +95,11 @@ pub const FindingCode = enum(u32) {
     // ColorTransform != 1 disagrees). Decoder honors APP14 (libjpeg
     // parity) but surfaces the conflict for strict validators.
     adobe_app14_conflicts_jfif  = 60,
+    // SOF declares X (width) = 0 or Y (height) = 0. T.81 §B.2.2: X must
+    // be > 0; Y = 0 is defined only alongside a DNL segment, which this
+    // decoder (like libjpeg without DNL support) rejects. Fires at the
+    // marker walk for every variant, before the codec decode-through.
+    invalid_dimensions          = 61,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────
     lossless_predictor_invalid       = 100,

@@ -54,6 +54,26 @@ test "decode rejects non-JPEG input" {
     );
 }
 
+test "decode rejects SOF with zero height (no OOB crash)" {
+    // A SOF declaring a zero dimension is not a decodable image (T.81
+    // §B.2.2: X must be > 0; Y = 0 needs a DNL segment this decoder does
+    // not support). The decoder must reject it, not run downstream MCU
+    // assembly / chroma upsampling over an empty component plane — that
+    // was an out-of-bounds crash in color.fancyUpsample.
+    const allocator = std.testing.allocator;
+    const buf = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
+    defer allocator.free(buf);
+    // SOF0 = 0xFF 0xC0; body = len(2) precision(1) height(2)…; the 16-bit
+    // height field is 5 bytes past the 0xFF marker start.
+    var i: usize = 2;
+    const sof = while (i + 1 < buf.len) : (i += 1) {
+        if (buf[i] == 0xFF and buf[i + 1] == 0xC0) break i;
+    } else unreachable;
+    buf[sof + 5] = 0;
+    buf[sof + 6] = 0;
+    try std.testing.expectError(error.InvalidMarker, jpegz.decode(allocator, buf));
+}
+
 /// 8×8 RGB progressive JPEG (SOF2). libjpeg-turbo decodes both
 /// baseline and progressive through the same `decode` entry point —
 /// this test confirms our wrapper doesn't accidentally restrict by SOF.
