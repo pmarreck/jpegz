@@ -26,6 +26,162 @@ Date format: tick boxes with `_(YYYY-MM-DD EST)_`. Keep the last few
 completed items for continuity; prune older ones when context is no
 longer load-bearing.
 
+## 🎯 ARCHITECTURE INTENT — jpegz is the WHOLE-FAMILY FACADE (Peter, 2026-07-30)
+
+**Stated goal:** jpegz is *all-encompassing*. `validate` depends on **jpegz
+only** and gets T.81 + T.87 + T.800 + **ISO/IEC 18181 (JPEG XL)** coverage "for
+free", behind **one** corruption-detection + error-reporting structure
+(`ValidationReport` / `FindingCode`).
+
+**This contradicts what the repo currently says in writing.**
+`FUTURE_DIRECTIONS.md:33` asserts *"JXL is `libjxlz`'s territory, not
+jpegz's"* and `:38` *"Folding into jpegz would dilute the JPEG-family ABI."*
+That conflates two separate questions — **where the codec source lives**
+(correctly: sibling repos) vs **what surface `validate` consumes**
+(should be: jpegz alone). Correct the doc when the shape below is settled,
+otherwise every future session re-derives the wrong answer (one already did).
+
+**Measured gap (2026-07-30):**
+- [ ] **T.800 — reachable but inert.** `jpegz.jpeg2000.validate()` is a STUB
+      (`src/jpegz.zig:502`) returning `.pass` + empty findings: a shredded JP2
+      reports PASS through jpegz — a false negative by construction. The
+      FindingCode vocabulary already exists (`jp2_*` 140–144, info 207/208);
+      only the plumbing is missing. jp2z meanwhile has REAL strict validation
+      shipped (`36e7620` PTERM over-read cap, `0ad5bb8` c145 WARN lock) and its
+      own parallel `ValidationReport` + `FindingCode` registry
+      (`../jp2z/src/core/errors.zig:50`) — two registries for one domain.
+      jpegz does not even depend on jp2z (`build.zig.zon` has only vendored
+      openjpeg).
+- [ ] **18181 (JXL) — absent everywhere.** No dep, no namespace, no
+      FindingCode band in jpegz; and `libjxlz` exposes **no** structured
+      `validate()` / `ValidationReport` at all (it has corpus + mutation
+      gates, not a consumer API). This leg is the expensive one.
+- [ ] **validate already routes around us.** `../validate/build.zig.zon`
+      vendors its OWN `deps/openjpeg` **and** `deps/libjxl` — precisely the
+      three-vocabulary fragmentation this facade is meant to end.
+
+**DECIDED — facade-by-delegation** (Peter, 2026-07-31). jpegz depends on
+jp2z + libjxlz and translates their reports into jpegz's registry; the codec
+source stays in the sibling repos. Preserves each sibling's build/test/CI and
+mirrors how tiffz already re-exports jpegz.
+
+### FFI discipline for the facade (Peter's ruling, 2026-07-31) — READ THIS
+
+The global brief's Zig-core → C-FFI → C-CLI rule is **modified** for the
+facade, and a post-compaction agent WILL get this wrong by default:
+
+1. **jpegz consumes jp2z and libjxlz as plain Zig modules — NOT through their
+   C ABIs.** Both are Zig libraries; routing sibling-Zig calls through a C
+   round-trip sacrifices type safety and comptime for ceremony. Do NOT build
+   or dogfood a Zig→C→Zig path to a sibling.
+2. **The "a library's FFI must have at least one consumer" requirement is
+   WAIVED for jp2z and libjxlz.** If they lack C CLIs dogfooding their own C
+   FFIs, that is fine and is explicitly not jpegz's problem to solve —
+   **jpegz is the outward-facing interface to all of them.** Do not file work
+   against siblings to add dogfooding CLIs on this basis.
+3. **jpegz itself DOES keep the full discipline** — precisely because it is
+   the outward face. jpegz's own C FFI must be dogfooded by a real `jpegz`
+   C CLI (see U5). This is where the rule earns its keep for the whole family.
+
+**Constraint to respect:** validate consumes jpegz *through* tiffz
+(`tiffz.jpegz`) because two jpegz module instances break Zig 0.16
+("file exists in modules 'jpegz' and 'jpegz0'"). Any new dep edge must not
+create a second instance of jp2z/libjxlz either.
+
+**Registry work needs Einstein sign-off** — FindingCode is append-only wire
+format; wind-down note ¶3 already reserves jp2z 250–253 pending his approval.
+A JXL band must be allocated the same way.
+
+- [~] **U1 — Un-stub `jpeg2000.validate`** by delegating to jp2z; map jp2z
+      findings onto jpegz's existing `jp2_*` codes. **RED IS WRITTEN AND
+      WITNESSED; BLOCKED ON jp2z.** _(started 2026-07-31 EDT)_
+
+      **State: 3 tests intentionally RED in `tests/unit/validate.zig`**
+      (sensitivity mutation set / specificity corpus / finding-code
+      specificity). Witnessed failure: `expected .fail, found .pass` +
+      `jp2 mutation not detected: JP2 signature box magic smashed`.
+      231/233 pass. **DO NOT COMMIT until green.** The specificity test
+      passes *vacuously* today (the stub passes everything) — that is
+      correct; it is the anti-over-firing guard for after the fix.
+
+      **jp2z's walker was measured and is excellent** (throwaway probe,
+      calling `jp2z.validate` directly on our 5 fixtures + 4 mutations):
+      specificity 5/5 `.info` with zero false positives; sensitivity 4/4
+      `.fail` — `missing_soi` (signature smash), `missing_soi` (SOC smash),
+      `bad_marker_length` (SIZ smash), `truncated_stream` (truncation).
+      Delegation is unambiguously the right call — do NOT write a second
+      walker in jpegz.
+
+      **BLOCKER — `@import("jp2z")` drags openjpeg in, two causes:**
+      1. `jp2z/src/jp2z.zig:241` — `comptime { _ = @import("ffi/c_api.zig"); }`
+         in the *importable module root* force-analyzes the exported C ABI →
+         `jp2z_decode` → `doDecodeWithOptions` → `decodeWithOptions` →
+         `openjpeg_wrapper.decode` → `detectCodec` → `@cImport(<openjpeg.h>)`.
+         (Full trace via `zig build-exe -freference-trace=10`.) Lazy analysis
+         would otherwise spare a validate-only caller.
+      2. `jp2z/build.zig:30-32` — include path, library path and
+         `linkSystemLibrary("openjp2")` are attached to **`jp2z_mod`**, so
+         every consumer inherits `-lopenjp2`. Survives fixing (1).
+
+      **Why it actually breaks us:** native Nix could forward
+      `-Dopenjpeg-lib` (at the cost of double-linking openjp2), but the
+      **`cross-windows` check vendors `deps/openjpeg`** and jp2z has no
+      vendoring path — that check breaks the moment the dep edge lands.
+
+      **Handed to jp2z** (live session) via
+      `../jp2z/inbox/2026-07-31-from-jpegz-module-importable-without-openjpeg.md`
+      — proposed: move the c_api force-link into a `src/lib_root.zig` used
+      only by the static-lib artifact, and move openjpeg linkage off the
+      module onto the artifacts that need it. Awaiting a SHA to pin.
+
+      **⚠ jpegz has the IDENTICAL latent pattern** — `src/jpegz.zig` force-links
+      its own `c_api`, so tiffz/validate importing jpegz are likewise forced to
+      have libjpeg/openjpeg/charls headers. Almost certainly why validate ended
+      up vendoring its own `deps/openjpeg` AND `deps/libjxl`. Fix here too —
+      it is what makes U4 cheap.
+
+      **On landing the jp2z SHA:** add the dep edge, translate codes at the
+      facade boundary (jpegz knows the container shape, so `missing_soi` →
+      `jp2_invalid_signature` for box-format JP2 vs `jp2_invalid_codestream`
+      for raw J2K — jpegz's 140/141 are more precise than jp2z's generic 1),
+      regen `zigDepsHash`, run the full suite. Registries already agree
+      byte-for-byte on 1-5 and the 140+/200+ bands (Einstein's reconciliation),
+      so the rest of the map is identity.
+
+      **⚠ This adds a jpegz → jp2z PIN EDGE** — wind-down ¶ records the pin
+      chain as Einstein's to drive. Flagged to jp2z in the note.
+- [ ] **U2 — `jpegz.validateAny(data)`** container sniffer (SOI / `FF4F FF51`
+      J2K / `jP  ` JP2 box / `FF0A` JXL codestream / `ftypjxl` ISOBMFF) →
+      one report type, one call for validate.
+- [ ] **U3 — libjxlz structured `validate()`** + reserved FindingCode band.
+- [ ] **U4 — validate drops `deps/openjpeg` + `deps/libjxl`**, consumes jpegz
+      only. This is the "done" criterion for the whole intent.
+- [ ] **U5 — `jpegz` C CLI dogfooding jpegz's C FFI** (Peter, 2026-07-31).
+      **Scope for now: VALIDATION WITH RICH ERROR REPORTING ONLY.** No decode
+      / convert / encode subcommands — resist the scope creep; the point is
+      to exercise the FFI that the whole family's outward face depends on,
+      and to make jpegz's unified error vocabulary visible from a terminal.
+
+      Nothing exists today: `tests/cli/smoke.c` is a test, `scratch/*.c` is
+      throwaway instrumentation. `include/jpegz_core.h` + `src/ffi/c_api.zig`
+      are the surface to dogfood. Written in C (not Zig) — per the control-file
+      reasoning in the global brief, C *cannot* `@import` the Zig module, so
+      the bypass is inexpressible rather than merely forbidden.
+
+      Must honor the standard CLI conventions: `-h`/`--help`, `--about`
+      (one line: version + platform + arch), `-`/`@stdin` for input paths,
+      `-`/`@stdout`/`@stderr` for output, metadata + progress to stderr,
+      `--json` structured output (findings are inherently tabular — this is
+      how validate/tooling should consume it), ANSI + color with `--no-color`
+      / `--no-ansi` / `--simple`, later args override earlier, non-positional
+      args in any order, `--` terminator, paths with spaces (quoted AND
+      escaped) covered by the Bash CLI suite in `tests/cli/`, UTF-8 clean,
+      i18n groundwork (`--lang` + `JPEGZ_LANG`, English fallback while the
+      UI is unstable — see the `i18n` skill before touching this).
+
+      Debug builds must print `DEBUG BUILD` in yellow to stderr, suppressible
+      via `MUTE_DEBUG_STATUS`.
+
 ## ⏸ WIND-DOWN STATE (2026-07-07, fleet migration to Thelio)
 
 **Current state: GREEN. Nothing in flight.** `yolo @ cc844e27`, pushed, ALL
