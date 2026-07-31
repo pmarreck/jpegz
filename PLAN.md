@@ -181,11 +181,16 @@ A JXL band must be allocated the same way.
       libs. Carries a **negative control** (a `jpeg2000.decode` consumer must
       still fail without openjpeg) so it cannot pass vacuously.
 
-      **Gotcha worth remembering:** the first `./test` failed with
-      `failed to check cache: 'src/lib_root.zig' file_hash FileNotFound` —
-      Nix flake source snapshots include **git-tracked files only**, so a new
-      untracked source file is invisible inside the sandbox even though
-      `zig build test` passes locally. `git add` new sources before `./test`.
+      **Not a new gotcha — a RECALL failure.** The first `./test` died on
+      `failed to check cache: 'src/lib_root.zig' file_hash FileNotFound`
+      (untracked file invisible to the Nix sandbox). This is the **4th**
+      recorded occurrence across the fleet and was already a shared memory;
+      I re-derived it instead of recalling it. Canonical source of truth is
+      `~/MEMORIES/Nix flakes ignore untracked files - git add every new file
+      before any nix build, develop, or check.frontmatter.md` — retitled
+      2026-07-31 because its old title ("...on a new project") made it read
+      as inapplicable to an established repo. **Do not re-document the lesson
+      here; consult memories first.**
 - [ ] **U2 — `jpegz.validateAny(data)`** container sniffer (SOI / `FF4F FF51`
       J2K / `jP  ` JP2 box / `FF0A` JXL codestream / `ftypjxl` ISOBMFF) →
       one report type, one call for validate.
