@@ -156,10 +156,24 @@ pub fn build(b: *std.Build) void {
         jpegz_mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{path}) });
     }
 
+    // The static library is rooted at src/lib_root.zig, NOT src/jpegz.zig.
+    // lib_root's only job is to reference `jpegz.c_abi_force_link`, which
+    // pulls the C ABI's `export fn`s past dead-code elimination. Keeping that
+    // reference out of the importable module root is what lets a pure-Zig
+    // consumer (tiffz / validate) import `jpegz` and call `validate()` without
+    // openjpeg headers in scope — see src/lib_root.zig for the full rationale,
+    // and tests/cli/no_c_consumer.bash for the gate that keeps it true.
+    const lib_root_mod = b.createModule(.{
+        .root_source_file = b.path("src/lib_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    lib_root_mod.addImport("jpegz", jpegz_mod);
+
     const lib = b.addLibrary(.{
         .name = "jpegz",
         .linkage = .static,
-        .root_module = jpegz_mod,
+        .root_module = lib_root_mod,
     });
     b.installArtifact(lib);
 

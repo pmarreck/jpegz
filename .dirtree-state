@@ -36,8 +36,11 @@ annotate=[
 	src/ffi/charls_wrapper.zig = charls (BSD) wrapper for JPEG-LS decode
 	src/ffi/libjpeg_wrapper.zig = libjpeg-turbo wrapper: fallback decode + byte-perfect oracle; setjmp/longjmp error bridge
 	src/ffi/openjpeg_wrapper.zig = openjpeg wrapper for jpeg2000.decode (JP2 box vs raw J2K)
-	src/jpegz.zig = Public Zig core API + decode/validate dispatch: cleanroom decoders with libjpeg/openjpeg/charls wrapper fallback; C ABI re-exports
+	src/jpegz.zig = Public Zig core API + decode/validate dispatch: cleanroom-only at runtime (libjpeg/charls live under internal.* as build-time oracles); jpeg2000 is the lone openjpeg runtime path
+	src/lib_root.zig = Static-library-only root; force-links the C ABI so the importable module root stays free of C deps
 	test = Bash wrapper: nix build .#checks.*.{test,build}, accumulates sub-check failures (no set -e)
+	tests/cli/lib/capture.bash = Vendored capture() helper (Peter, MIT) — stdout/stderr/rc capture; vendored so CLI tests are hermetic in the Nix sandbox
+	tests/cli/no_c_consumer.bash = Gate: pure-Zig consumer must import jpegz + call validate() with zero C deps (has negative control)
 	tests/unit/fixtures/baseline_16x16_rgb_marked.jpg = RGB-marked baseline JPEG (Adobe APP14 transform=0) — gap-D cleanroom RGB-passthrough test fixture
 	tools/gen_c_header.zig = Comptime walker over core/errors.zig; emits include/jpegz_errno.h at build
 ]

@@ -150,6 +150,42 @@ A JXL band must be allocated the same way.
 
       **⚠ This adds a jpegz → jp2z PIN EDGE** — wind-down ¶ records the pin
       chain as Einstein's to drive. Flagged to jp2z in the note.
+
+      **Priority bumped 2026-07-31** — Peter directed "fix U1, then proceed
+      with U5", so the jp2z unblock moved onto jpegz's critical path. Second
+      note sent (`../jp2z/inbox/2026-07-31-from-jpegz-priority-bump-u1-unblock.md`)
+      correcting my earlier "no rush" and telling them the FFI waiver removes
+      the jp2z-C-CLI obligation from their plate. Awaiting SHA or a "can't".
+- [x] **U0 — jpegz's own C-ABI force-link no longer poisons Zig consumers.**
+      _(2026-07-31 EDT)_ Prerequisite for U4, found while diagnosing U1's
+      blocker; same bug class as jp2z's.
+
+      **Witnessed red:** a validate-only Zig consumer could not compile —
+      `src/jpegz.zig:522` `comptime { _ = @import("ffi/c_api.zig"); }` →
+      exported `jpegz_jp2_decode` → `jpeg2000.decodeWithOptions` →
+      `openjpeg_wrapper.decode` → `@cImport(<openjpeg.h>)`. Failed **even with
+      `with_charls=false` and `with_libjpeg_oracle=false`**, so the existing
+      gates could not shed it. Near-certainly why validate vendors its own
+      `deps/openjpeg`.
+
+      **Fix:** the force-link became a lazily-analyzed
+      `pub const c_abi_force_link`, referenced ONLY by a new static-library
+      root `src/lib_root.zig`; `build.zig`'s `addLibrary` roots at
+      `lib_root_mod` instead of `jpegz_mod`. Zig analyzes a declaration only
+      when referenced, so C consumers keep every export and Zig consumers pay
+      only for paths they call. C FFI smoke still passes all 30 assertions.
+
+      **Gate:** `tests/cli/no_c_consumer.bash`, wired into `./test`. Compiles
+      a validate-only consumer **out-of-graph with C withheld** — jpegz's own
+      tests can never catch this regression because they always link the C
+      libs. Carries a **negative control** (a `jpeg2000.decode` consumer must
+      still fail without openjpeg) so it cannot pass vacuously.
+
+      **Gotcha worth remembering:** the first `./test` failed with
+      `failed to check cache: 'src/lib_root.zig' file_hash FileNotFound` —
+      Nix flake source snapshots include **git-tracked files only**, so a new
+      untracked source file is invisible inside the sandbox even though
+      `zig build test` passes locally. `git add` new sources before `./test`.
 - [ ] **U2 — `jpegz.validateAny(data)`** container sniffer (SOI / `FF4F FF51`
       J2K / `jP  ` JP2 box / `FF0A` JXL codestream / `ftypjxl` ISOBMFF) →
       one report type, one call for validate.

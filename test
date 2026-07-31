@@ -32,6 +32,14 @@ run_check "zig unit tests (nix flake check .#test)" \
 run_check "package builds (nix flake check .#build)" \
 	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".build --print-build-logs
 
+# Consumer-facing invariant that jpegz's own build CANNOT catch: every jpegz
+# test links the C libs, so a regression that re-forces libjpeg/openjpeg/charls
+# onto pure-Zig importers is silent in-tree. This compiles a validate-only
+# consumer out-of-graph with C deliberately withheld. Carries its own negative
+# control, so it cannot pass vacuously.
+run_check "zero-C-dependency Zig consumer (tests/cli/no_c_consumer.bash)" \
+	nix develop -c bash tests/cli/no_c_consumer.bash
+
 echo
 if [ "$failures" -eq 0 ]; then
 	echo "All checks passed."

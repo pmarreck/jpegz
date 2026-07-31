@@ -515,12 +515,28 @@ pub const jpeg2000 = struct {
     }
 };
 
-// Reference the C API so the linker pulls its `export fn`s into the
-// static library. Without this, dead-code elimination strips them
-// because nothing in the Zig source side calls them.
-comptime {
-    _ = @import("ffi/c_api.zig");
-}
+/// Force-link handle for the C ABI. Referencing this pulls every
+/// `export fn` in `ffi/c_api.zig` past dead-code elimination and into
+/// the static library.
+///
+/// It is a lazily-analyzed `pub const` — NOT a top-level `comptime`
+/// block — and that distinction is the whole point. A `comptime`
+/// force-link here is unconditional, so it dragged the exported
+/// `jpegz_jp2_decode` → `jpeg2000.decodeWithOptions` →
+/// `openjpeg_wrapper.decode` → `@cImport(<openjpeg.h>)` chain into the
+/// analysis of EVERY consumer, including pure-Zig ones that only ever
+/// call `validate()`. That forced tiffz / validate to have openjpeg
+/// headers available merely to import this module (and is almost
+/// certainly why validate ended up vendoring its own `deps/openjpeg`).
+///
+/// Zig analyzes a declaration only when something references it, so the
+/// static-library root (`src/lib_root.zig`) references this and nobody
+/// else does. Consumers importing `jpegz` as a Zig module pay for only
+/// the code paths they actually call.
+///
+/// Guarded by `tests/cli/no_c_consumer.bash`, which compiles a
+/// validate-only consumer with no C headers or libraries in scope.
+pub const c_abi_force_link = @import("ffi/c_api.zig");
 
 /// Internal test-only entry points. Not part of the public ABI; meant
 /// for analysis tools (e.g., scratch/cleanroom_diff.zig) that need to
