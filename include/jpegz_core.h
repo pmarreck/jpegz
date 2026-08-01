@@ -44,6 +44,18 @@ extern "C" {
  * Pointer is valid for the lifetime of the loaded library. */
 const char *jpegz_version(void);
 
+/* Name of a finding code, e.g. JPEGZ_FINDING_TRUNCATED_STREAM ->
+ * "truncated_stream". Statically allocated and NUL-terminated; do NOT
+ * free. Valid for the lifetime of the loaded library.
+ *
+ * Use this instead of maintaining your own code->name table: the table
+ * here is generated from the Zig enum at comptime, so it cannot drift as
+ * codes are appended (and the registry is append-only, so they will be).
+ *
+ * Unknown / future codes return "unknown_finding_code" rather than NULL.
+ * That is a normal case, not misuse: a newer jpegz can report a code an
+ * older consumer predates. */
+const char *jpegz_finding_code_name(jpegz_finding_code_t code);
 /* ── Diagnostics ───────────────────────────────────────────────── */
 
 /* Thread-local human-readable detail for the most recent error.

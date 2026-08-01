@@ -9,6 +9,7 @@ annotate=[
 	docs/superpowers/specs = Frozen design specs (public API, 12-bit precision, arithmetic, JPEG-LS, etc.)
 	flake.nix = Nix flake: pins Zig 0.16.0 + libjpeg-turbo/openjpeg/charls; packages/checks/devShell; Garnix CI
 	include/jpegz_core.h = Hand-curated public C ABI header (jpegz_decode/validate/free/version)
+	src/cli/jpegz.c = jpegz C CLI — validation-only dogfooding consumer of the C FFI; human + --json output, container sniffing, exit 0/1/2
 	src/core/errors.zig = Source of truth for DecodeError/Severity/Variant/FindingCode; numeric values are stable wire format
 	src/core/last_error.zig = Thread-local last-error message buffer backing the C ABI
 	src/core/types.zig = Core public types: Image, ImageMetadata, ColorSpace, PixelLayout
@@ -41,6 +42,7 @@ annotate=[
 	test = Bash wrapper: nix build .#checks.*.{test,build}, accumulates sub-check failures (no set -e)
 	tests/cli/lib/capture.bash = Vendored capture() helper (Peter, MIT) — stdout/stderr/rc capture; vendored so CLI tests are hermetic in the Nix sandbox
 	tests/cli/no_c_consumer.bash = Gate: pure-Zig consumer must import jpegz + call validate() with zero C deps (has negative control)
+	tests/cli/validate_cli.bash = Bash CLI surface suite (22 assertions): arg discipline, exit codes, rich errors, JSON, stdin, spaced paths, ANSI suppression
 	tests/unit/fixtures/baseline_16x16_rgb_marked.jpg = RGB-marked baseline JPEG (Adobe APP14 transform=0) — gap-D cleanroom RGB-passthrough test fixture
 	tools/gen_c_header.zig = Comptime walker over core/errors.zig; emits include/jpegz_errno.h at build
 ]

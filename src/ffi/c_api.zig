@@ -66,6 +66,32 @@ export fn jpegz_version() [*:0]const u8 {
     return jpegz.version.ptr;
 }
 
+/// Human-readable name for a `jpegz_finding_code_t`, e.g. 3 →
+/// `"truncated_stream"`. Returns a statically-allocated, NUL-terminated
+/// string the caller must NOT free.
+///
+/// Exists so consumers can report a *specific cause* rather than a bare
+/// integer or a generic phrase. Without it every consumer that renders
+/// findings (the jpegz CLI, validate) would hand-maintain its own
+/// code→name table, which silently drifts from `core/errors.zig` the
+/// moment a code is appended — and appending codes is routine, since the
+/// registry is append-only wire format.
+///
+/// The table is generated from the enum by `inline for` over
+/// `@typeInfo(...).fields`, so drift is not merely discouraged but
+/// inexpressible: a new `FindingCode` variant is nameable the instant it
+/// is declared, with no second edit site.
+///
+/// Unknown codes return `"unknown_finding_code"` rather than null or a
+/// garbage pointer. That case is reachable in normal operation, not just
+/// from misuse: findings cross an ABI boundary, so a newer jpegz can hand
+/// an older consumer a code it predates.
+export fn jpegz_finding_code_name(code: c_int) [*:0]const u8 {
+    inline for (@typeInfo(errors.FindingCode).@"enum".fields) |f| {
+        if (code == f.value) return f.name.ptr;
+    }
+    return "unknown_finding_code";
+}
 // ─────────────────────────────────────────────────────────────────────
 // Image — C representation
 // ─────────────────────────────────────────────────────────────────────

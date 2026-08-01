@@ -470,6 +470,45 @@ pub fn build(b: *std.Build) void {
     test_build_step.dependOn(&c_smoke.step);
 
     // ============================================================
+    // `jpegz` C CLI — the dogfooding consumer of include/jpegz_core.h.
+    //
+    // Written in C on purpose: C cannot `@import` the Zig module, so
+    // bypassing the FFI is inexpressible here rather than merely
+    // forbidden. Scope is validation only (U5).
+    // ============================================================
+    const cli_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    if (with_libjpeg_oracle) cli_mod.linkSystemLibrary("jpeg", .{});
+    if (opt_openjpeg_lib != null) cli_mod.linkSystemLibrary("openjp2", .{});
+    cli_mod.link_libcpp = true; // libjpegz.a pulls in vendored charls (C++)
+    if (opt_libjpeg_lib) |p| cli_mod.addLibraryPath(.{ .cwd_relative = p });
+    if (opt_openjpeg_lib) |p| cli_mod.addLibraryPath(.{ .cwd_relative = p });
+    cli_mod.addCSourceFile(.{
+        .file = b.path("src/cli/jpegz.c"),
+        .flags = &.{ "-std=c23", "-Wall", "-Wextra", "-Wpedantic" },
+    });
+    cli_mod.addIncludePath(b.path("include"));
+    cli_mod.addIncludePath(generated_errno_h.dirname());
+    cli_mod.linkLibrary(lib);
+
+    const cli_exe = b.addExecutable(.{
+        .name = "jpegz",
+        .root_module = cli_mod,
+    });
+    b.installArtifact(cli_exe);
+    test_build_step.dependOn(&cli_exe.step);
+
+    // The CLI surface suite is Bash-driven (argument discipline, exit codes,
+    // stdin, spaced paths, ANSI suppression) — things only reachable by
+    // running the built binary as a black box.
+    const cli_tests = b.addSystemCommand(&.{ "bash", "tests/cli/validate_cli.bash" });
+    cli_tests.addFileArg(cli_exe.getEmittedBin());
+    cli_tests.step.dependOn(&cli_exe.step);
+    test_step.dependOn(&cli_tests.step);
+    // ============================================================
     // `zig build cleanroom-diff` — non-committed analysis tool that
     // walks a directory of JPEGs and diffs cleanroom vs. wrapper
     // output per-file. Source lives in scratch/ (gitignored). Skip

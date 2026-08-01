@@ -20,7 +20,13 @@ static const unsigned char baseline_2x2_rgb[] = {
 };
 static const size_t baseline_2x2_rgb_len = sizeof(baseline_2x2_rgb);
 
+/* Counted by the macro rather than hand-tallied in the PASS line: the
+ * literal "30 assertions" had already drifted once. A number a human has
+ * to remember to bump is a number that lies. */
+static int assertions_run = 0;
+
 #define ASSERT(cond, msg) do { \
+    assertions_run++; \
     if (!(cond)) { \
         fprintf(stderr, "FAIL: %s (line %d): %s\n", \
             msg, __LINE__, jpegz_last_error_message()); \
@@ -56,6 +62,29 @@ int main(void) {
     const char *v = jpegz_version();
     ASSERT(v != NULL && v[0] != '\0', "jpegz_version() returns non-empty");
 
+    /* Finding codes are nameable through the ABI. Without this, every
+     * consumer wanting to report a cause (the jpegz CLI, validate) has to
+     * hand-maintain its own code->name table, which silently drifts from
+     * src/core/errors.zig the moment a code is appended. */
+    {
+        const char *n = jpegz_finding_code_name(JPEGZ_FINDING_TRUNCATED_STREAM);
+        ASSERT(n != NULL && n[0] != '\0', "finding_code_name returns non-empty");
+        ASSERT(strcmp(n, "truncated_stream") == 0,
+               "finding_code_name matches the Zig enum tag");
+
+        /* Distinct codes must not collapse onto one string — a table that
+         * returns the same label for everything would pass a single-value
+         * check while being useless. */
+        const char *a = jpegz_finding_code_name(JPEGZ_FINDING_MISSING_SOI);
+        const char *b = jpegz_finding_code_name(JPEGZ_FINDING_MISSING_EOI);
+        ASSERT(strcmp(a, b) != 0, "distinct finding codes yield distinct names");
+
+        /* A code outside the enum must be handled, not crash or return
+         * garbage — findings cross an ABI boundary and a newer library can
+         * hand an older consumer a code it has never heard of. */
+        const char *u = jpegz_finding_code_name((jpegz_finding_code_t)999999);
+        ASSERT(u != NULL && u[0] != '\0', "unknown finding code yields a safe label");
+    }
     /* Decode the embedded baseline JPEG. */
     jpegz_image_t img = {0};
     int rc = jpegz_decode(baseline_2x2_rgb, baseline_2x2_rgb_len, &img);
@@ -225,6 +254,7 @@ int main(void) {
         jpegz_findings_sink_free(sink);
     }
 
-    printf("PASS: jpegz C FFI smoke (30 assertions, decode + streaming + validate + findings)\n");
+    printf("PASS: jpegz C FFI smoke (%d assertions, decode + streaming + validate + findings)\n",
+           assertions_run);
     return 0;
 }

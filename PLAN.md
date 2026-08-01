@@ -197,7 +197,50 @@ A JXL band must be allocated the same way.
 - [ ] **U3 — libjxlz structured `validate()`** + reserved FindingCode band.
 - [ ] **U4 — validate drops `deps/openjpeg` + `deps/libjxl`**, consumes jpegz
       only. This is the "done" criterion for the whole intent.
-- [ ] **U5 — `jpegz` C CLI dogfooding jpegz's C FFI** (Peter, 2026-07-31).
+- [x] **U5a — `jpegz` C CLI shipped, validation-only.** _(2026-07-31 EDT)_
+      `src/cli/jpegz.c` + `zig build` target + `tests/cli/validate_cli.bash`
+      (22 assertions, wired into `zig build test` → `./test`). Human output
+      (severity color, dim offsets, variant, detail) and `--json`
+      (RFC-8259-escaped, `code` + `code_number` + `offset` + `detail`).
+      Container sniffing routes JP2 signature box / raw J2K SOC+SIZ to
+      `jpegz_jp2_validate`, everything else to `jpegz_validate`.
+      Exit 0 pass/info/warn, 1 FAIL, 2 usage/IO.
+
+      **ABI addition: `jpegz_finding_code_name()`.** Rich reporting needs
+      code→name, and every consumer hand-maintaining that table would drift
+      from `core/errors.zig` (append-only registry ⇒ it *will* grow). Built
+      by `inline for` over `@typeInfo(FindingCode).@"enum".fields`, so drift
+      is inexpressible, not merely discouraged. Unknown codes return
+      `"unknown_finding_code"` — reachable in normal operation, since a newer
+      jpegz can hand an older consumer a code it predates. **validate should
+      use this instead of its own mapping.**
+
+      **Two drift bugs found and structurally fixed, not just patched:**
+      - `smoke.c` advertised "30 assertions"; the real count was **51**. The
+        macro now counts. A number a human must remember to bump is a number
+        that lies.
+      - The `DEBUG BUILD` banner hardcoded ANSI, so it violated
+        `--no-color`/`--no-ansi`/`--simple`. Now pre-scans argv and gates
+        color on **stderr** being a tty (not stdout — `jpegz f > out.txt` on
+        a terminal should still colorize the warning).
+
+      **`./test` caught what `zig build test` could not:** the banner bug was
+      invisible locally (ReleaseFast defines NDEBUG) and only fired in the
+      sandboxed check, which builds without it. The suite's failure message
+      said only "found escape sequences"; it now dumps the offending bytes
+      via `cat -v`. A failure you cannot diagnose from its own message costs
+      a full debug cycle.
+
+      **⚠ The CLI now makes U1's stub VISIBLE — a truncated `.jp2` prints
+      `PASS`**, and a clean one prints `PASS` with no dimensions or variant
+      while a JPEG prints `2x2  baseline (huffman)`. Add JP2-corruption cases
+      to `validate_cli.bash` the moment U1 lands; they would fail today.
+- [ ] **U5b — remaining CLI conventions.** Deferred, not forgotten:
+      i18n groundwork (`--lang` + `JPEGZ_LANG`; invoke the `i18n` skill
+      first), a force-`--color` switch (currently only suppression exists, so
+      colored output cannot be captured or piped to a pager), and progress
+      indication for large multi-file runs.
+- [ ] **U5 (original scope note) — `jpegz` C CLI dogfooding jpegz's C FFI** (Peter, 2026-07-31).
       **Scope for now: VALIDATION WITH RICH ERROR REPORTING ONLY.** No decode
       / convert / encode subcommands — resist the scope creep; the point is
       to exercise the FFI that the whole family's outward face depends on,
