@@ -1,6 +1,19 @@
 # Mechatron Prime CI — Nix flake attributes the Thelio worker (x86_64-linux,
 # thelio-nixos / mechatron-prime) builds on each signed push to yolo. Real
-# attrs verified via `nix flake show`; these are exactly what `./test` runs —
-# the unit+CLI test check and the package-build check.
+# attrs verified via `nix flake show`.
+#
+# The first two are exactly what `./test` runs: the unit+CLI test check and
+# the package-build check.
 checks.x86_64-linux.test
 checks.x86_64-linux.build
+
+# cross-windows added 2026-08-02. It is NOT run by `./test`, so before this it
+# ran nowhere automatic — yet it is the check that catches vendored-openjpeg /
+# musl / mingw linkage breakage, the exact class of failure that made adding
+# the jpegz→jp2z dependency risky (jpegz vendors deps/openjpeg for this target
+# and a sibling module with a hard `linkSystemLibrary` would have broken it).
+#
+# It is the slowest check in the repo and, unlike the other two, will not be a
+# no-op when the developer has already run `./test` on the worker host. That
+# cost is the point: a target that is always a cache hit verifies nothing new.
+checks.x86_64-linux.cross-windows
