@@ -115,7 +115,17 @@ pub const FindingCode = enum(u32) {
     jp2_bad_progression_order    = 142,
     jp2_tile_decode_failed       = 143,
     jp2_codeblock_decode_failed  = 144,
-
+    // Mirrored from jp2z's registry (2026-08-01) when `jpeg2000.validate`
+    // began delegating to jp2z's cleanroom walker. These are NOT new
+    // numbers: Einstein already assigned them on the jp2z side (including
+    // renumbering 6→146 to clear a collision with jpegz's duplicate_sof),
+    // so declaring them here records an existing decision rather than
+    // making one. Without them, translation degraded every unknown code to
+    // `jp2_invalid_codestream` — which made a HEALTHY JP2 report an
+    // invalid codestream, since jp2z's success signal
+    // `jp2_packets_walked_to_end` had no jpegz equivalent.
+    jp2_unsupported_marker_ignored = 145,
+    jp2_invalid_siz                = 146,
     // ── Informational (severity = .info) (200..249) ──────────────
     arithmetic_coding_used     = 200,
     twelve_bit_precision       = 201,
@@ -133,4 +143,16 @@ pub const FindingCode = enum(u32) {
     xmp_metadata_present       = 210,
     photoshop_irb_present      = 211,
     trailing_data_after_eoi    = 212,
+
+    // ── JPEG 2000 tier-2 / packet integrity (250..299) ───────────
+    // Also mirrored from jp2z (2026-08-01), same rationale as 145/146.
+    // `jp2_packets_walked_to_end` is INFORMATIONAL and positive — it means
+    // the walker consumed every tile-part body byte. It sits in this band
+    // rather than the 200s because Einstein renumbered it 209→254 after
+    // 209 collided with jpegz's `jfif_metadata_present`.
+    jp2_packets_under_read    = 250,
+    entropy_over_read         = 251,
+    entropy_under_read        = 252,
+    coding_pass_overflow      = 253,
+    jp2_packets_walked_to_end = 254,
 };

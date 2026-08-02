@@ -104,13 +104,20 @@
         # openjpeg source (`deps/openjpeg/build.zig.zon` → uclouvain v2.5.4),
         # pulled when the build links openjpeg from source rather than the
         # system lib — i.e. the windows cross-check below, which has no
-        # `-Dopenjpeg-lib` to short-circuit it. The native build/test checks
-        # pass `-Dopenjpeg-lib` and never touch this. Single hash covers the
-        # whole tree; bump it when `build.zig.zon` (or deps/) changes:
+        # `-Dopenjpeg-lib` to short-circuit it.
+        #
+        # As of 2026-08-01 the NATIVE checks need this tree too: `jpeg2000.
+        # validate` delegates to the sibling `jp2z` module, which is an eager
+        # URL dependency in build.zig.zon. The sandbox has no network, so
+        # every build phase seeds ZIG_GLOBAL_CACHE_DIR from here. (The older
+        # note claiming the native checks "never touch this" was already
+        # inaccurate — all three phases have always copied it — and jp2z makes
+        # it plainly wrong.) Single hash covers the whole tree; bump it when
+        # `build.zig.zon` (or deps/) changes:
         #   1. set zigDepsHash = pkgs.lib.fakeHash
         #   2. nix build .#checks.<system>.cross-windows  → prints real hash
         #   3. paste it back here.
-        zigDepsHash = "sha256-3PE/qYD4gEHF4COMwfxsNp7cMIMcTXtyt0Pq5DSmi/8=";
+        zigDepsHash = "sha256-jfR18FbuxfmRyq4qlTMn2L69C9uEv0nNbAqK+bd32fg=";
         zigDeps = pkgs.stdenv.mkDerivation {
           pname = "jpegz-zig-deps";
           version = "0.1.0";

@@ -20,5 +20,9 @@
         // on the native system-openjpeg path, breaking the sandboxed Linux
         // build (no network). Pairs with b.lazyDependency in build.zig.
         .openjpeg = .{ .path = "deps/openjpeg", .lazy = true },
+        .jp2z = .{
+            .url = "https://github.com/pmarreck/jp2z/archive/a9e43422c4a861e49f25052564876304de2b9021.tar.gz",
+            .hash = "jp2z-0.0.1-yLLHxbvqQAAP_0gY6YfM1I3f6LX28etBJQdffnP0tvrs",
+        },
     },
 }

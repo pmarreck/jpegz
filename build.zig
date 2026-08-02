@@ -59,6 +59,26 @@ pub fn build(b: *std.Build) void {
     const build_options_mod = build_options.createModule();
     jpegz_mod.addImport("jpegz_build_options", build_options_mod);
 
+    // jp2z supplies the cleanroom T.800 codestream walker behind
+    // `jpegz.jpeg2000.validate`. Consumed as a plain Zig module, never
+    // through jp2z's C ABI, per Peter's 2026-07-31 facade ruling: routing
+    // sibling-Zig calls through a C round-trip sacrifices type safety and
+    // comptime for ceremony, and jpegz is the outward-facing C surface for
+    // the whole family.
+    //
+    // Eager (`dependency`, not `lazyDependency`) because jpeg2000.validate
+    // always needs it — a lazy dep would force every call site to handle a
+    // missing module. Safe in the sandboxed Nix build because the zigDeps
+    // fixed-output derivation pre-fetches the entire tree with
+    // `zig build --fetch=all`, and all three build phases seed
+    // ZIG_GLOBAL_CACHE_DIR from it.
+    //
+    // We reference ONLY jp2z.validate. jp2z's decode path still routes to
+    // openjpeg (their Phase 1), and Zig's lazy analysis is what keeps that
+    // C dependency off our graph — see tests/cli/no_c_consumer.bash, which
+    // fails if it ever creeps back on.
+    const jp2z_dep = b.dependency("jp2z", .{ .target = target, .optimize = optimize });
+    jpegz_mod.addImport("jp2z", jp2z_dep.module("jp2z"));
     // Link C deps (system; provided by Nix flake's buildInputs):
     //   - libjpeg-turbo (jpeglib.h, used by src/ffi/libjpeg_wrapper.zig)
     //                   — DEV/TEST ORACLE ONLY, gated on -Dwith-libjpeg-oracle.

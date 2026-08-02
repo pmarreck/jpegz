@@ -530,3 +530,172 @@ test "validate SOF with zero width → FAIL, invalid_dimensions" {
     try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
     try std.testing.expect(reportHasCode(report, .invalid_dimensions));
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// U1 — `jpeg2000.validate` must actually validate (facade milestone).
+//
+// jpegz is the whole-JPEG-family facade: `validate` consumes jpegz and
+// must get T.800 corruption detection through it, in jpegz's own
+// `FindingCode` vocabulary. `jpeg2000.validate` was a stub returning
+// `.pass` + empty findings — a false negative BY CONSTRUCTION (a
+// shredded JP2 reported PASS), while jp2z had real strict validation
+// that jpegz simply never called.
+//
+// Tested as a CLASSIFIER OVER SETS, not a single example:
+//   - sensitivity corpus: structural mutations that MUST be detected
+//   - specificity corpus: every known-good fixture must NOT fail
+// Without the specificity half a reject-everything stub scores 100%.
+//
+// Scope note: only STRUCTURAL corruption is in the must-detect bucket.
+// Damage confined to packet/entropy bodies is legitimately may-ignore
+// for a codestream walker — asserting on it would encode a promise the
+// tier-1 layer doesn't make yet.
+
+const fixture_jp2_rgb = @embedFile("fixtures/jp2_8x8_rgb.jp2");
+const fixture_jp2_lossless = @embedFile("fixtures/jp2_8x8_lossless_5x3.jp2");
+const fixture_jp2_lossy97 = @embedFile("fixtures/jp2_8x8_lossy_9x7.jp2");
+const fixture_jp2_subsampled = @embedFile("fixtures/jp2_8x8_subsampled.jp2");
+const fixture_jp2_yuv420 = @embedFile("fixtures/jp2_8x8_yuv420_asym.jp2");
+
+const jp2_specificity_corpus = [_][]const u8{
+    fixture_jp2_rgb,
+    fixture_jp2_lossless,
+    fixture_jp2_lossy97,
+    fixture_jp2_subsampled,
+    fixture_jp2_yuv420,
+};
+
+/// Offset of the JPEG 2000 SOC+SIZ marker pair (`FF4F FF51`) — the start
+/// of the codestream inside the `jp2c` box. T.800 §A.4.1.
+fn findSoc(data: []const u8) ?usize {
+    var i: usize = 0;
+    while (i + 3 < data.len) : (i += 1) {
+        if (data[i] == 0xFF and data[i + 1] == 0x4F and
+            data[i + 2] == 0xFF and data[i + 3] == 0x51) return i;
+    }
+    return null;
+}
+
+test "jpeg2000.validate: structural corruption set is detected (sensitivity)" {
+    const allocator = std.testing.allocator;
+    const src = fixture_jp2_rgb;
+    const soc = findSoc(src).?;
+
+    const Mutation = struct { name: []const u8, apply: *const fn ([]u8, usize) void };
+    const mutations = [_]Mutation{
+        .{
+            .name = "JP2 signature box magic smashed ('jP  ' → 'XXXX')",
+            .apply = struct {
+                fn f(buf: []u8, _: usize) void {
+                    @memset(buf[4..8], 'X');
+                }
+            }.f,
+        },
+        .{
+            .name = "SOC marker smashed (codestream start destroyed)",
+            .apply = struct {
+                fn f(buf: []u8, soc_off: usize) void {
+                    buf[soc_off] = 0x00;
+                    buf[soc_off + 1] = 0x00;
+                }
+            }.f,
+        },
+        .{
+            .name = "SIZ marker smashed (frame geometry unreadable)",
+            .apply = struct {
+                fn f(buf: []u8, soc_off: usize) void {
+                    buf[soc_off + 2] = 0x00;
+                    buf[soc_off + 3] = 0x00;
+                }
+            }.f,
+        },
+    };
+
+    for (mutations) |m| {
+        const buf = try allocator.dupe(u8, src);
+        defer allocator.free(buf);
+        m.apply(buf, soc);
+
+        var report = try jpegz.jpeg2000.validate(allocator, buf);
+        defer report.deinit(allocator);
+
+        std.testing.expectEqual(jpegz.Severity.fail, report.overall) catch |e| {
+            std.debug.print("jp2 mutation not detected: {s}\n", .{m.name});
+            return e;
+        };
+    }
+
+    // Truncation is its own shape (shorter buffer, not an in-place edit).
+    // Cut to the first third — signature + ftyp survive, the codestream
+    // does not.
+    var report = try jpegz.jpeg2000.validate(allocator, src[0 .. src.len / 3]);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
+}
+
+test "jpeg2000.validate: every known-good JP2 fixture does not fail (specificity)" {
+    const allocator = std.testing.allocator;
+    for (jp2_specificity_corpus, 0..) |fixture, idx| {
+        var report = try jpegz.jpeg2000.validate(allocator, fixture);
+        defer report.deinit(allocator);
+        std.testing.expect(report.overall != .fail) catch |e| {
+            std.debug.print("false positive on known-good JP2 fixture #{d}\n", .{idx});
+            return e;
+        };
+    }
+}
+
+test "jpeg2000.validate: reports a JP2-specific finding code, not a bare severity" {
+    const allocator = std.testing.allocator;
+    const src = fixture_jp2_rgb;
+    const buf = try allocator.dupe(u8, src);
+    defer allocator.free(buf);
+    @memset(buf[4..8], 'X'); // smash the signature box magic
+
+    var report = try jpegz.jpeg2000.validate(allocator, buf);
+    defer report.deinit(allocator);
+
+    // The whole point of the facade is ONE error vocabulary: consumers
+    // must get an actionable jpegz FindingCode, not just `.fail`.
+    try std.testing.expect(report.findings.items.len > 0);
+    try std.testing.expect(reportHasCode(report, .jp2_invalid_signature) or
+        reportHasCode(report, .jp2_invalid_codestream));
+}
+
+// A finding code that jpegz does not declare must not be renamed into an
+// ALARMING one. Delegation translates jp2z's registry into jpegz's, and any
+// code jpegz lacks previously degraded to `jp2_invalid_codestream` — so a
+// perfectly healthy JP2 reported "invalid codestream" purely because
+// `jp2_packets_walked_to_end` (254, a success signal meaning the walker
+// consumed every tile-part byte) had no jpegz equivalent. A false alarm on a
+// clean file is worse than a missing detail: it trains consumers to ignore
+// the code.
+test "jpeg2000.validate: clean JP2 reports no failure-flavored code" {
+    const allocator = std.testing.allocator;
+    for (jp2_specificity_corpus, 0..) |fixture, idx| {
+        var report = try jpegz.jpeg2000.validate(allocator, fixture);
+        defer report.deinit(allocator);
+
+        std.testing.expect(!reportHasCode(report, .jp2_invalid_codestream)) catch |e| {
+            std.debug.print("clean JP2 fixture #{d} reported jp2_invalid_codestream\n", .{idx});
+            return e;
+        };
+        std.testing.expect(!reportHasCode(report, .jp2_invalid_signature)) catch |e| {
+            std.debug.print("clean JP2 fixture #{d} reported jp2_invalid_signature\n", .{idx});
+            return e;
+        };
+    }
+}
+
+// The success signal itself must survive translation intact, not merely
+// avoid being renamed to something scary. jp2z emits
+// `jp2_packets_walked_to_end` when the walker consumed every tile-part body
+// byte; that is exactly the kind of positive evidence `validate` wants.
+test "jpeg2000.validate: preserves jp2z's informational codes verbatim" {
+    const allocator = std.testing.allocator;
+    var report = try jpegz.jpeg2000.validate(allocator, fixture_jp2_rgb);
+    defer report.deinit(allocator);
+
+    try std.testing.expect(reportHasCode(report, .jp2_uses_5x3_wavelet));
+    try std.testing.expect(reportHasCode(report, .jp2_packets_walked_to_end));
+}

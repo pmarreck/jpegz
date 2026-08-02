@@ -88,6 +88,43 @@ trunc="$TMPDIR/jpegz_cli_trunc_$$.jpg"
 head -c 40 "$fixtures/baseline_2x2_rgb.jpg" >"$trunc"
 assert_rc 1 "truncated JPEG is rejected" -- "$jpegz_cli" "$trunc"
 
+# T.800 coverage through the facade (U1). Until 2026-08-01 this whole block
+# would have failed: jpeg2000.validate was a stub returning PASS, so a
+# shredded JP2 validated clean through the CLI.
+#
+# NOTE the fixture is 238 bytes. An earlier version of this suite "truncated"
+# it with `head -c 300`, which copies the whole file — the test passed while
+# measuring nothing. Derive the cut from the actual size instead of a literal.
+jp2_src="$fixtures/jp2_8x8_rgb.jp2"
+jp2_size=$(wc -c <"$jp2_src")
+jp2_trunc="$TMPDIR/jpegz_cli_trunc_$$.jp2"
+head -c $((jp2_size / 2)) "$jp2_src" >"$jp2_trunc"
+[ "$(wc -c <"$jp2_trunc")" -lt "$jp2_size" ] \
+	&& pass "JP2 truncation fixture is actually shorter than the source" \
+	|| fail "JP2 truncation fixture is actually shorter than the source" \
+		"cut=$(wc -c <"$jp2_trunc") source=$jp2_size"
+
+assert_rc 1 "truncated JP2 is rejected" -- "$jpegz_cli" "$jp2_trunc"
+
+out=; err=; rc=
+capture "$jpegz_cli" "$jp2_trunc"
+assert_contains "$out$err" "truncated_stream" "truncated JP2 names a specific T.800 cause"
+
+# A clean JP2 must not carry a failure-flavored code. Translating jp2z's
+# registry into jpegz's previously degraded every unrecognized code to
+# jp2_invalid_codestream, so a HEALTHY file reported an invalid codestream.
+out=; err=; rc=
+capture "$jpegz_cli" "$jp2_src"
+case "$out$err" in
+*jp2_invalid_codestream* | *jp2_invalid_signature*)
+	fail "clean JP2 carries no failure-flavored code" "got: $out$err" ;;
+*) pass "clean JP2 carries no failure-flavored code" ;;
+esac
+# ...and the positive evidence survives translation.
+assert_contains "$out$err" "jp2_packets_walked_to_end" \
+	"clean JP2 keeps jp2z's walked-to-end success signal"
+assert_contains "$out$err" "JPEG 2000" "clean JP2 reports its variant"
+
 # ── 3. Rich error reporting — the whole point of the slice ───────────
 # A verdict alone is useless to a human or to validate. The CLI must
 # name the SPECIFIC cause, not just say "invalid".

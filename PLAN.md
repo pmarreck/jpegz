@@ -92,9 +92,53 @@ create a second instance of jp2z/libjxlz either.
 format; wind-down note ¶3 already reserves jp2z 250–253 pending his approval.
 A JXL band must be allocated the same way.
 
-- [~] **U1 — Un-stub `jpeg2000.validate`** by delegating to jp2z; map jp2z
-      findings onto jpegz's existing `jp2_*` codes. **RED IS WRITTEN AND
-      WITNESSED; BLOCKED ON jp2z.** _(started 2026-07-31 EDT)_
+- [x] **U1 — `jpeg2000.validate` delegates to jp2z. SHIPPED.**
+      _(2026-08-01 EDT)_ Pinned `jp2z a9e4342` (URL dep in `build.zig.zon`),
+      `zigDepsHash` regenerated. `./test` green (28 CLI + unit + package)
+      **and** `checks.cross-windows` green — the breakage risk that motivated
+      the whole jp2z ask.
+
+      A shredded JP2 no longer reports PASS through the facade. Observed
+      through the CLI:
+
+          jp2_8x8_rgb.jp2:  INFO  8x8  JPEG 2000
+            INFO jp2_uses_5x3_wavelet @62
+            INFO jp2_packets_walked_to_end @130
+          really_trunc.jp2: FAIL  8x8  JPEG 2000
+            FAIL truncated_stream @77
+
+      **Code translation.** Registries were pre-reconciled by Einstein, so
+      the map is identity by numeric value, with one deliberate exception:
+      jp2z's `missing_soi` becomes `jp2_invalid_signature` when the 12-byte
+      JP2 signature box is absent/corrupt and `jp2_invalid_codestream` when
+      the container parsed. jp2z emits one code for both because at its layer
+      they are the same event; jpegz has already looked at the container and
+      owns precise codes, and handing a T.800 consumer a code named "missing
+      **SOI**" (a JPEG marker absent from T.800) is a worse answer.
+
+      **⚠ REGISTRY ADDITION — Einstein FYI owed.** Mirrored 7 codes from
+      jp2z into `core/errors.zig`: 145, 146, and 250–254. These are **not new
+      numbers** — Einstein already assigned them on the jp2z side (incl.
+      6→146 and 209→254 collision renumbers), so this records an existing
+      decision. Needed because the unknown-code fallback degraded everything
+      to `jp2_invalid_codestream`, which made a **healthy** JP2 report an
+      invalid codestream: `jp2_packets_walked_to_end` (254) is a *success*
+      signal with no jpegz equivalent. Caught by eyeballing real CLI output,
+      not by a test — now covered by two.
+
+      **Test-quality bug found in my own suite.** The original CLI JP2 case
+      built its "truncated" fixture with `head -c 300` against a **238-byte**
+      file, so it copied the whole thing and asserted nothing. The suite now
+      derives the cut from `wc -c` and asserts the fixture is genuinely
+      shorter before using it. This also produced a false bug report toward
+      jp2z, retracted after measuring (their walker detects **238/238**
+      truncation lengths, 0 missed).
+
+      Remaining rough edge (→ U2): the CLI's own container sniffer sends a
+      JP2 with a smashed signature box down the JPEG path, so it reports
+      `missing_soi — JPEG must start with SOI marker`. Correct-ish but
+      jpegz-centric; `validateAny` should own format detection.
+- [~] **U1 (historical record) — original blocked-state notes.**
 
       **State: 3 tests intentionally RED in `tests/unit/validate.zig`**
       (sensitivity mutation set / specificity corpus / finding-code

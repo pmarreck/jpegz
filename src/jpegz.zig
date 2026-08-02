@@ -16,6 +16,13 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const build_options = @import("jpegz_build_options");
 
+/// Sibling Zig project supplying the cleanroom T.800 codestream walker
+/// behind `jpeg2000.validate`. Imported as a plain Zig module, NOT through
+/// jp2z's C ABI, per Peter's 2026-07-31 facade ruling. Only `jp2z.validate`
+/// is referenced: jp2z's decode path links openjpeg, and Zig's lazy
+/// analysis is what keeps that C dependency off every jpegz consumer's
+/// graph (guarded by `tests/cli/no_c_consumer.bash`).
+const jp2z = @import("jp2z");
 // ── Re-exports from canonical core modules ──────────────────────
 const errors = @import("core/errors.zig");
 pub const DecodeError = errors.DecodeError;
@@ -499,19 +506,97 @@ pub const jpeg2000 = struct {
         return @import("ffi/openjpeg_wrapper.zig").decode(allocator, data);
     }
 
+    /// The 12-byte JP2 file-format signature box (T.800 §I.5.1). Its
+    /// presence tells us the *container* parsed, which is what lets us
+    /// report a more precise cause than jp2z's generic `missing_soi`.
+    const jp2_signature_box = [_]u8{
+        0x00, 0x00, 0x00, 0x0C, 'j', 'P', ' ', ' ', 0x0D, 0x0A, 0x87, 0x0A,
+    };
+
+    /// Translate a jp2z finding code into jpegz's vocabulary.
+    ///
+    /// The two registries were deliberately reconciled by Einstein — both
+    /// agree byte-for-byte on the structural band (1..5) and the `jp2_*`
+    /// 140+ / informational 200+ bands — so the mapping is identity
+    /// wherever jpegz declares the same value.
+    ///
+    /// The one deliberate exception is `missing_soi`. jp2z emits it for
+    /// *both* "JP2 signature box is wrong" and "raw J2K SOC marker is
+    /// wrong", because at its layer those are the same event. jpegz owns
+    /// more precise codes for exactly this (`jp2_invalid_signature` 140,
+    /// `jp2_invalid_codestream` 141) and, unlike jp2z, has already looked
+    /// at the container shape. Handing a JP2 consumer a code literally
+    /// named "missing **SOI**" — a JPEG marker that does not exist in
+    /// T.800 — would be a worse answer than the one we can give.
+    ///
+    /// Codes jpegz does not declare (jp2z's 145/146 and the 250..254
+    /// tier-2 packet band) degrade to `jp2_invalid_codestream` rather
+    /// than being dropped: a consumer must never see a `.fail` report
+    /// with no finding explaining it.
+    fn translateCode(code: jp2z.FindingCode, container_ok: bool) FindingCode {
+        if (code == .missing_soi) {
+            return if (container_ok) .jp2_invalid_codestream else .jp2_invalid_signature;
+        }
+        const raw = @intFromEnum(code);
+        inline for (@typeInfo(FindingCode).@"enum".fields) |f| {
+            if (raw == f.value) return @field(FindingCode, f.name);
+        }
+        return .jp2_invalid_codestream;
+    }
+
+    /// Validate a JP2 (file format) or raw J2K codestream and return a
+    /// report in jpegz's own vocabulary.
+    ///
+    /// Delegates to jp2z's cleanroom codestream walker rather than
+    /// reimplementing it. This entry point was a stub returning `.pass`
+    /// with zero findings until 2026-08-01, which meant a shredded JP2
+    /// reported PASS through the facade — a false negative by
+    /// construction, and the reason `validate` could not rely on jpegz
+    /// for T.800 coverage.
+    ///
+    /// Note this calls ONLY `jp2z.validate`. jp2z's decode path still
+    /// links openjpeg; Zig's lazy analysis is what keeps that off our
+    /// dependency graph, and `tests/cli/no_c_consumer.bash` fails if it
+    /// ever creeps back on.
     pub fn validate(
         allocator: Allocator,
         data: []const u8,
     ) error{OutOfMemory}!ValidationReport {
-        _ = allocator;
-        _ = data;
-        return ValidationReport{
-            .overall = .pass,
-            .variant = .unknown,
-            .width = null,
-            .height = null,
+        const container_ok = data.len >= jp2_signature_box.len and
+            std.mem.eql(u8, data[0..jp2_signature_box.len], &jp2_signature_box);
+
+        var src = try jp2z.validate(allocator, data);
+        defer src.deinit(allocator);
+
+        var report = ValidationReport{
+            .overall = @enumFromInt(@intFromEnum(src.overall)),
+            .variant = if (src.overall == .fail and src.findings.items.len == 0)
+                .unknown
+            else
+                .jpeg2000,
+            .width = src.width,
+            .height = src.height,
             .findings = .empty,
         };
+        errdefer report.deinit(allocator);
+
+        try report.findings.ensureTotalCapacity(allocator, src.findings.items.len);
+        for (src.findings.items) |f| {
+            // Detail strings belong to jp2z's report and are freed by its
+            // deinit above, so each one has to be copied into ours.
+            const detail: ?[]const u8 = if (f.detail) |d|
+                try allocator.dupe(u8, d)
+            else
+                null;
+            report.findings.appendAssumeCapacity(.{
+                .severity = @enumFromInt(@intFromEnum(f.severity)),
+                .code = translateCode(f.code, container_ok),
+                .offset = f.offset,
+                .detail = detail,
+            });
+        }
+
+        return report;
     }
 };
 
