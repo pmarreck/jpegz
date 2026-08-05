@@ -30,12 +30,12 @@ JPEG-XT is an HDR extension layer that *might* fold in later).
 
 JPEG XL is **strictly better** than classic JPEG on most practical axes — ~15–20% smaller at equal quality, lossless mode that beats PNG by ~50%, HDR + wide-gamut support, ANS entropy coding instead of Huffman, variable block sizes up to 256×256, plus the unique trick of losslessly transcoding existing JPEGs to a smaller JXL representation that decodes back byte-identical. **For a greenfield image, JXL wins.**
 
-But classic JPEG isn't going away because (a) decoder ubiquity (every device decodes it; JXL is Apple-yes / Chrome-no / Firefox-flag), (b) petabytes of existing files plus long legacy-system tails, (c) JPEG-LS and JPEG 2000 own specific niches (DICOM medical, DCI cinema, GIS archival) that JXL hasn't displaced. **jpegz's mission as the JPEG-family decoder is durable; JXL is `libjxlz`'s territory, not jpegz's.**
+But classic JPEG isn't going away because (a) decoder ubiquity (every device decodes it; JXL is Apple-yes / Chrome-no / Firefox-flag), (b) petabytes of existing files plus long legacy-system tails, (c) JPEG-LS and JPEG 2000 own specific niches (DICOM medical, DCI cinema, GIS archival) that JXL hasn't displaced. **The JXL codec implementation remains in `libjxlz`; jpegz exposes its strict validator through the unified JPEG-family facade.**
 
 ### JPEG XL (ISO/IEC 18181)
 
-**Status:** sibling project `libjxlz` exists / is in flight.
-**Why separate:** different codec entirely (modular ANS + variable-block-size DCT), different ISO standard, different reference implementation (`libjxl`). Folding into jpegz would dilute the JPEG-family ABI.
+**Status:** the sibling project `libjxlz` supplies a strict four-way validator; jpegz pins it and translates the result through `jpegz.jpegxl.validate`.
+**Why separate:** different codec entirely (modular ANS + variable-block-size DCT) and a different ISO standard. The implementation remains independently testable in `libjxlz`, while jpegz owns the consumer-facing JPEG-family validation surface.
 **Profitability:** **highest of any Tier 3 candidate.** JXL is widely viewed as the eventual successor to baseline JPEG: better compression than WebP/AVIF on photographic content, the only modern lossless mode that beats PNG (~50% smaller), Apple ships native support in Safari 17+ / macOS Sonoma / iOS 17. Adobe DNG 1.7 added optional JXL compression. If/when Chrome reverses its 2022 decision, JXL becomes the default web JPEG replacement overnight.
 **Backwards-compatible bridge:** JXL has lossless JPEG re-encoding ("JPEG transcoding") — given a baseline JPEG, you can losslessly re-encode into a ~20% smaller JXL container and decode back to a bit-identical baseline JPEG. Useful for archives migrating off legacy JPEG.
 

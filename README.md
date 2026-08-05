@@ -13,6 +13,8 @@ covering:
 - **JPEG-LS** (ISO/IEC 14495-1, T.87) — eventually
 - **JPEG 2000** (ISO/IEC 15444, T.800) — wavelet codec, separate ABI namespace
   in the same project (different math, but same problem domain)
+- **JPEG XL** (ISO/IEC 18181) — strict validation delegated to exact-pinned
+  `libjxlz`, with valid/corrupt/unsupported/indeterminate kept distinct
 
 This is a sibling project to [`validate`](../validate),
 [`tiffz`](../tiffz), [`bzip2z`](../bzip2z), [`rarz`](../rarz),
@@ -32,11 +34,16 @@ a unified, focused JPEG home.
 ## Architecture
 
 ```
-Any consumer (validate / tiffz / image tools) ──► C FFI ──► jpegz Zig core
+Zig consumers (validate / tiffz) ──► jpegz Zig facade ──► jp2z / libjxlz
+External consumers                 ──► C FFI ───────────► jpegz Zig core
 ```
 
-The Zig core is the single source of truth. The C FFI is the public API.
-External consumers — including any C CLI on top — go through the C FFI.
+Sibling Zig libraries are consumed as Zig modules, preserving type safety and
+avoiding a Zig-to-C-to-Zig round trip. jpegz remains the outward-facing C ABI.
+The validation-only production target is closure-tested to exclude libjpeg,
+OpenJPEG, CharLS, upstream libjxl, and djxl; libjxlz uses Brotli only for JXL
+container metadata. See `docs/VALIDATION_FACADE_EVIDENCE.md` for the exact pins,
+classifier matrix, and closure gate.
 
 ## Phasing
 
@@ -80,7 +87,8 @@ JPEG 2000 wavelet pipeline).
 
 ## Status
 
-🚧 **Greenfield.** No code yet beyond this scaffold. See `SPEC.md`.
+The JPEG-family validators and C CLI are implemented. Decoder coverage remains
+in progress; see `PLAN.md` for the measured state and remaining milestones.
 
 ## License
 

@@ -20,6 +20,23 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const brotli_include_dir = b.graph.environ_map.get("BROTLI_INCLUDE_DIR");
+    const brotli_lib_dir = b.graph.environ_map.get("BROTLI_LIB_DIR");
+
+    const addBrotliIncludes = struct {
+        fn apply(mod: *std.Build.Module, include_dir: ?[]const u8) void {
+            if (include_dir) |path| mod.addIncludePath(.{ .cwd_relative = path });
+        }
+    }.apply;
+    const linkBrotli = struct {
+        fn apply(mod: *std.Build.Module, lib_dir: ?[]const u8) void {
+            if (lib_dir) |path| mod.addLibraryPath(.{ .cwd_relative = path });
+            mod.linkSystemLibrary("brotlienc", .{});
+            mod.linkSystemLibrary("brotlidec", .{});
+            mod.linkSystemLibrary("brotlicommon", .{});
+        }
+    }.apply;
+
     // -Dwith-charls=false lets consumers that don't need JPEG-LS
     // (e.g. tiffz, which only needs baseline/progressive/lossless
     // for Compression=7 and DNG raw) skip the charls compile + link
@@ -73,12 +90,38 @@ pub fn build(b: *std.Build) void {
     // `zig build --fetch=all`, and all three build phases seed
     // ZIG_GLOBAL_CACHE_DIR from it.
     //
-    // We reference ONLY jp2z.validate. jp2z's decode path still routes to
-    // openjpeg (their Phase 1), and Zig's lazy analysis is what keeps that
-    // C dependency off our graph — see tests/cli/no_c_consumer.bash, which
-    // fails if it ever creeps back on.
+    // We reference ONLY jp2z's public validate/deepValidate functions. Its
+    // decode path still routes to OpenJPEG, and Zig's lazy analysis keeps
+    // that C dependency off the validation graph. The Nix validator-closure
+    // check fails if it ever creeps back on.
     const jp2z_dep = b.dependency("jp2z", .{ .target = target, .optimize = optimize });
     jpegz_mod.addImport("jp2z", jp2z_dep.module("jp2z"));
+    const libjxlz_dep = b.dependency("libjxlz", .{ .target = target, .optimize = optimize });
+    const libjxlz_mod = b.createModule(.{
+        .root_source_file = libjxlz_dep.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    addBrotliIncludes(libjxlz_mod, brotli_include_dir);
+    jpegz_mod.addImport("libjxlz", libjxlz_mod);
+
+    // A separately rooted facade module makes the production validation graph
+    // mechanically incapable of inheriting jpegz's libjpeg/OpenJPEG/CharLS
+    // decode links. Brotli remains because libjxlz reads Brotli-compressed JXL
+    // container metadata; it is not an external JPEG-family validator.
+    const validation_build_options = b.addOptions();
+    validation_build_options.addOption(bool, "with_charls", false);
+    validation_build_options.addOption(bool, "with_libjpeg_oracle", false);
+    const jpegz_validation_mod = b.createModule(.{
+        .root_source_file = b.path("src/jpegz.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    jpegz_validation_mod.addImport("jpegz_build_options", validation_build_options.createModule());
+    jpegz_validation_mod.addImport("jp2z", jp2z_dep.module("jp2z"));
+    jpegz_validation_mod.addImport("libjxlz", libjxlz_mod);
     // Link C deps (system; provided by Nix flake's buildInputs):
     //   - libjpeg-turbo (jpeglib.h, used by src/ffi/libjpeg_wrapper.zig)
     //                   — DEV/TEST ORACLE ONLY, gated on -Dwith-libjpeg-oracle.
@@ -118,7 +161,6 @@ pub fn build(b: *std.Build) void {
         jpegz_mod.linkLibrary(openjpeg_dep.artifact("openjp2"));
     }
 
-
     // ── charls — vendored, compiled by Zig (gated on -Dwith-charls) ──
     //
     // We tried two paths through nixpkgs binaries first; both broke
@@ -131,15 +173,16 @@ pub fn build(b: *std.Build) void {
     // Source path comes from `-Dcharls-src=...` (set by flake) or
     // `CHARLS_SRC` env var (set by dev shell).
     const charls_src_path: ?[]const u8 = b.option(
-        []const u8, "charls-src",
+        []const u8,
+        "charls-src",
         "Path to vendored charls source tree (with src/ + include/charls/)",
     ) orelse b.graph.environ_map.get("CHARLS_SRC");
 
     if (with_charls) {
         const path = charls_src_path orelse @panic(
             "charls source path required: pass -Dcharls-src=PATH or set CHARLS_SRC env. " ++
-            "Inside the nix devShell or nix build, both are configured automatically. " ++
-            "Consumers that don't need JPEG-LS can pass -Dwith-charls=false.",
+                "Inside the nix devShell or nix build, both are configured automatically. " ++
+                "Consumers that don't need JPEG-LS can pass -Dwith-charls=false.",
         );
         const charls_mod = b.createModule(.{
             .target = target,
@@ -390,6 +433,55 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(validate_tests).step);
     test_build_step.dependOn(&validate_tests.step);
 
+    // Honest four-way JPEG 2000 / JPEG XL validation facade. This suite uses
+    // the validation-only module above, so its link graph cannot inherit the
+    // decode/oracle libraries attached to `jpegz_mod`.
+    const facade_validation_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/unit/facade_validation.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    linkBrotli(facade_validation_test_mod, brotli_lib_dir);
+    facade_validation_test_mod.addImport("jpegz", jpegz_validation_mod);
+    const facade_validation_tests = b.addTest(.{
+        .name = "facade_validation",
+        .root_module = facade_validation_test_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(facade_validation_tests).step);
+    const facade_validation_step = b.step("test-facade", "Run the JPEG-family facade validation tests");
+    facade_validation_step.dependOn(&b.addRunArtifact(facade_validation_tests).step);
+    // Native Brotli is intentionally not smuggled into a Windows artifact.
+    // A dedicated cross-Brotli facade target can be added once the flake owns
+    // the corresponding mingw library; the existing all-tests cross gate must
+    // remain honest and green in the meantime.
+    if (target.result.os.tag != .windows) {
+        test_build_step.dependOn(&facade_validation_tests.step);
+    }
+
+    // A runnable production-shaped proof artifact. Its root imports only the
+    // validation module, which has no decode/oracle library edges. Nix checks
+    // its symbols and complete store closure for forbidden JPEG validators.
+    const validation_probe_mod = b.createModule(.{
+        .root_source_file = b.path("tools/facade_validator_probe.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    validation_probe_mod.addImport("jpegz", jpegz_validation_mod);
+    validation_probe_mod.addAnonymousImport("jp2_fixture", .{
+        .root_source_file = b.path("tests/unit/fixtures/jp2_8x8_rgb.jp2"),
+    });
+    validation_probe_mod.addAnonymousImport("jxl_fixture", .{
+        .root_source_file = b.path("tests/unit/fixtures/jxl_delta_palette_valid.jxl"),
+    });
+    linkBrotli(validation_probe_mod, brotli_lib_dir);
+    const validation_probe = b.addExecutable(.{
+        .name = "jpegz-validator-proof",
+        .root_module = validation_probe_mod,
+    });
+    const install_validation_probe = b.addInstallArtifact(validation_probe, .{});
+    const install_validation_step = b.step("install-validator", "Install the validation-only closure proof executable");
+    install_validation_step.dependOn(&install_validation_probe.step);
+
     // (5) JPEG 2000 decode test suite (M1.6 — openjpeg wrap).
     const decode_jp2_mod = b.createModule(.{
         .root_source_file = b.path("tests/unit/decode_jp2.zig"),
@@ -534,7 +626,7 @@ pub fn build(b: *std.Build) void {
     // output per-file. Source lives in scratch/ (gitignored). Skip
     // if the file isn't present (so a fresh checkout doesn't fail).
     // ============================================================
-    if (std.Io.Dir.cwd().access(b.graph.io,"scratch/cleanroom_diff.zig", .{})) {
+    if (std.Io.Dir.cwd().access(b.graph.io, "scratch/cleanroom_diff.zig", .{})) {
         // The diff binary lives in scratch/ (gitignored) and consumes
         // jpegz's public test surface (jpegz.internal.cleanroomDecode +
         // jpegz.internal.wrapperDecode) so it doesn't need to load
@@ -554,7 +646,7 @@ pub fn build(b: *std.Build) void {
         diff_step.dependOn(&b.addInstallArtifact(diff_exe, .{}).step);
     } else |_| {}
 
-    if (std.Io.Dir.cwd().access(b.graph.io,"scratch/diag_one.zig", .{})) {
+    if (std.Io.Dir.cwd().access(b.graph.io, "scratch/diag_one.zig", .{})) {
         const diag_mod = b.createModule(.{
             .root_source_file = b.path("scratch/diag_one.zig"),
             .target = target,
@@ -569,7 +661,7 @@ pub fn build(b: *std.Build) void {
         diag_step.dependOn(&b.addInstallArtifact(diag_exe, .{}).step);
     } else |_| {}
 
-    if (std.Io.Dir.cwd().access(b.graph.io,"scratch/pixel_diff.zig", .{})) {
+    if (std.Io.Dir.cwd().access(b.graph.io, "scratch/pixel_diff.zig", .{})) {
         const pd_mod = b.createModule(.{
             .root_source_file = b.path("scratch/pixel_diff.zig"),
             .target = target,
@@ -584,7 +676,7 @@ pub fn build(b: *std.Build) void {
         pd_step.dependOn(&b.addInstallArtifact(pd_exe, .{}).step);
     } else |_| {}
 
-    if (std.Io.Dir.cwd().access(b.graph.io,"scratch/dump_coefs_jpegz.zig", .{})) {
+    if (std.Io.Dir.cwd().access(b.graph.io, "scratch/dump_coefs_jpegz.zig", .{})) {
         const dc_mod = b.createModule(.{
             .root_source_file = b.path("scratch/dump_coefs_jpegz.zig"),
             .target = target,
@@ -599,7 +691,7 @@ pub fn build(b: *std.Build) void {
         dc_step.dependOn(&b.addInstallArtifact(dc_exe, .{}).step);
     } else |_| {}
 
-    if (std.Io.Dir.cwd().access(b.graph.io,"scratch/bench_one.zig", .{})) {
+    if (std.Io.Dir.cwd().access(b.graph.io, "scratch/bench_one.zig", .{})) {
         const b1_mod = b.createModule(.{
             .root_source_file = b.path("scratch/bench_one.zig"),
             .target = target,

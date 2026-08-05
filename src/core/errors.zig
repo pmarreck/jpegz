@@ -11,15 +11,15 @@
 /// `jpeg2000.decode`, and the C ABI mapper. The C side gets the
 /// negative-coded mirror in `jpegz_status_t`.
 pub const DecodeError = error{
-    NotImplemented,          // C: -1
-    InvalidMarker,           // C: -2
-    UnsupportedPrecision,    // C: -3
-    TruncatedStream,         // C: -4
-    NotRowStreamable,        // C: -5
-    BackendError,            // C: -6
-    InvalidJp2Codestream,    // C: -7
-    OutOfMemory,             // C: -8
-    CallbackAborted,         // C: -9
+    NotImplemented, // C: -1
+    InvalidMarker, // C: -2
+    UnsupportedPrecision, // C: -3
+    TruncatedStream, // C: -4
+    NotRowStreamable, // C: -5
+    BackendError, // C: -6
+    InvalidJp2Codestream, // C: -7
+    OutOfMemory, // C: -8
+    CallbackAborted, // C: -9
 };
 
 /// Severity tier for `Finding`s in a `ValidationReport`. Mirrors the
@@ -40,16 +40,16 @@ pub const Severity = enum(u8) {
 /// JPEG storage variant detected during validation. Useful even when
 /// `overall == .fail` — caller knows what was being attempted.
 pub const Variant = enum(u8) {
-    unknown                = 0,
-    baseline_huffman       = 1,  // SOF0
-    extended_huffman       = 2,  // SOF1
-    progressive_huffman    = 3,  // SOF2
-    lossless_huffman       = 4,  // SOF3
-    baseline_arithmetic    = 5,  // SOF9
-    progressive_arithmetic = 6,  // SOF10
-    lossless_arithmetic    = 7,  // SOF11
-    jpegls                 = 8,  // SOF55 (T.87)
-    jpeg2000               = 9,  // JP2 / J2K
+    unknown = 0,
+    baseline_huffman = 1, // SOF0
+    extended_huffman = 2, // SOF1
+    progressive_huffman = 3, // SOF2
+    lossless_huffman = 4, // SOF3
+    baseline_arithmetic = 5, // SOF9
+    progressive_arithmetic = 6, // SOF10
+    lossless_arithmetic = 7, // SOF11
+    jpegls = 8, // SOF55 (T.87)
+    jpeg2000 = 9, // JP2 / J2K
 };
 
 /// Symbolic codes for a `Finding` in a `ValidationReport`. The numeric
@@ -57,18 +57,18 @@ pub const Variant = enum(u8) {
 /// `JPEGZ_FINDING_*` enum in the auto-generated `jpegz_errno.h`.
 pub const FindingCode = enum(u32) {
     // ── Structural (1..49) ───────────────────────────────────────
-    missing_soi                  = 1,
-    missing_eoi                  = 2,
-    truncated_stream             = 3,
-    bad_marker_length            = 4,
-    unknown_marker               = 5,
-    duplicate_sof                = 6,
+    missing_soi = 1,
+    missing_eoi = 2,
+    truncated_stream = 3,
+    bad_marker_length = 4,
+    unknown_marker = 5,
+    duplicate_sof = 6,
     // libjpeg-style entropy-data exhaustion the decoder zero-pads
     // through (JWRN_HIT_MARKER / JWRN_JPEG_EOF). File is structurally
     // complete but a block could not be filled — usually emitted at
     // severity=warn by validate(...). See NEXT_STEPS.md §"Validation-
     // strictness: warns over silent tolerance".
-    insufficient_data            = 7,
+    insufficient_data = 7,
     // libjpeg JWRN_EXTRANEOUS_DATA: "Corrupt JPEG data: N extraneous
     // bytes before marker 0xXX". The decoder skips them and resumes,
     // but the bytes are spec violations worth flagging.
@@ -77,44 +77,44 @@ pub const FindingCode = enum(u32) {
     // of 0xFF bytes preceding a marker byte is legal "fill"). libjpeg
     // silently absorbs; jpegz emits warn so deviations from canonical
     // encoding are visible to strict validators.
-    entropy_fill_bytes             = 9,
+    entropy_fill_bytes = 9,
 
     // ── T.81 codec-specific (50..99) ─────────────────────────────
-    invalid_sof_precision       = 50,
-    huffman_table_corrupt       = 51,
-    quantization_table_corrupt  = 52,
-    arithmetic_table_corrupt    = 53,
+    invalid_sof_precision = 50,
+    huffman_table_corrupt = 51,
+    quantization_table_corrupt = 52,
+    arithmetic_table_corrupt = 53,
     sof_component_count_invalid = 54,
-    sos_component_mismatch      = 55,
-    restart_marker_missing      = 56,
-    restart_marker_unexpected   = 57,
-    dct_coefficient_overflow    = 58,
-    progressive_scan_invalid    = 59,
+    sos_component_mismatch = 55,
+    restart_marker_missing = 56,
+    restart_marker_unexpected = 57,
+    dct_coefficient_overflow = 58,
+    progressive_scan_invalid = 59,
     // Both APP0 JFIF and APP14 Adobe present with conflicting color-
     // space implications (JFIF implies YCbCr for 3-component; APP14
     // ColorTransform != 1 disagrees). Decoder honors APP14 (libjpeg
     // parity) but surfaces the conflict for strict validators.
-    adobe_app14_conflicts_jfif  = 60,
+    adobe_app14_conflicts_jfif = 60,
     // SOF declares X (width) = 0 or Y (height) = 0. T.81 §B.2.2: X must
     // be > 0; Y = 0 is defined only alongside a DNL segment, which this
     // decoder (like libjpeg without DNL support) rejects. Fires at the
     // marker walk for every variant, before the codec decode-through.
-    invalid_dimensions          = 61,
+    invalid_dimensions = 61,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────
-    lossless_predictor_invalid       = 100,
-    lossless_pointtransform_invalid  = 101,
+    lossless_predictor_invalid = 100,
+    lossless_pointtransform_invalid = 101,
 
     // ── JPEG-LS (T.87) (120..139) ────────────────────────────────
-    jpegls_invalid_run_mode      = 120,
+    jpegls_invalid_run_mode = 120,
     jpegls_context_table_invalid = 121,
 
     // ── JPEG 2000 (140..179) ─────────────────────────────────────
-    jp2_invalid_signature        = 140,
-    jp2_invalid_codestream       = 141,
-    jp2_bad_progression_order    = 142,
-    jp2_tile_decode_failed       = 143,
-    jp2_codeblock_decode_failed  = 144,
+    jp2_invalid_signature = 140,
+    jp2_invalid_codestream = 141,
+    jp2_bad_progression_order = 142,
+    jp2_tile_decode_failed = 143,
+    jp2_codeblock_decode_failed = 144,
     // Mirrored from jp2z's registry (2026-08-01) when `jpeg2000.validate`
     // began delegating to jp2z's cleanroom walker. These are NOT new
     // numbers: Einstein already assigned them on the jp2z side (including
@@ -125,24 +125,38 @@ pub const FindingCode = enum(u32) {
     // invalid codestream, since jp2z's success signal
     // `jp2_packets_walked_to_end` had no jpegz equivalent.
     jp2_unsupported_marker_ignored = 145,
-    jp2_invalid_siz                = 146,
+    jp2_invalid_siz = 146,
+
+    // ── JPEG XL (ISO/IEC 18181) facade (180..199) ───────────────
+    // Reserved by Einstein on 2026-08-05. These stable wire values mirror
+    // libjxlz's strict result codes while leaving its raw code intact in the
+    // facade finding. Append only; never renumber or reuse.
+    jxl_invalid_signature = 180,
+    jxl_truncated = 181,
+    jxl_malformed = 182,
+    jxl_unsupported_feature = 183,
+    jxl_resource_limit = 184,
+    jxl_out_of_memory = 185,
+    jxl_invalid_argument = 186,
+    jxl_unclassified_decoder_error = 187,
+
     // ── Informational (severity = .info) (200..249) ──────────────
-    arithmetic_coding_used     = 200,
-    twelve_bit_precision       = 201,
-    sixteen_bit_lossless       = 202,
-    progressive_scan_count     = 203,
+    arithmetic_coding_used = 200,
+    twelve_bit_precision = 201,
+    sixteen_bit_lossless = 202,
+    progressive_scan_count = 203,
     embedded_thumbnail_present = 204,
-    exif_metadata_present      = 205,
-    icc_profile_present        = 206,
-    jp2_uses_9x7_wavelet       = 207,
-    jp2_uses_5x3_wavelet       = 208,
+    exif_metadata_present = 205,
+    icc_profile_present = 206,
+    jp2_uses_9x7_wavelet = 207,
+    jp2_uses_5x3_wavelet = 208,
     // Added per validate handoff (2026-05-06): APPn presence flags
     // and trailing-data signal. validate's PDF / metadata pipeline
     // consumes these. See validator.zig's APPn signature scan.
-    jfif_metadata_present      = 209,
-    xmp_metadata_present       = 210,
-    photoshop_irb_present      = 211,
-    trailing_data_after_eoi    = 212,
+    jfif_metadata_present = 209,
+    xmp_metadata_present = 210,
+    photoshop_irb_present = 211,
+    trailing_data_after_eoi = 212,
 
     // ── JPEG 2000 tier-2 / packet integrity (250..299) ───────────
     // Also mirrored from jp2z (2026-08-01), same rationale as 145/146.
@@ -150,9 +164,9 @@ pub const FindingCode = enum(u32) {
     // the walker consumed every tile-part body byte. It sits in this band
     // rather than the 200s because Einstein renumbered it 209→254 after
     // 209 collided with jpegz's `jfif_metadata_present`.
-    jp2_packets_under_read    = 250,
-    entropy_over_read         = 251,
-    entropy_under_read        = 252,
-    coding_pass_overflow      = 253,
+    jp2_packets_under_read = 250,
+    entropy_over_read = 251,
+    entropy_under_read = 252,
+    coding_pass_overflow = 253,
     jp2_packets_walked_to_end = 254,
 };

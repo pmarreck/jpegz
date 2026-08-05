@@ -18,8 +18,9 @@ const build_options = @import("jpegz_build_options");
 
 /// Sibling Zig project supplying the cleanroom T.800 codestream walker
 /// behind `jpeg2000.validate`. Imported as a plain Zig module, NOT through
-/// jp2z's C ABI, per Peter's 2026-07-31 facade ruling. Only `jp2z.validate`
-/// is referenced: jp2z's decode path links openjpeg, and Zig's lazy
+/// jp2z's C ABI, per Peter's 2026-07-31 facade ruling. Validation references
+/// only `jp2z.validate` and `jp2z.deepValidate`; jp2z's decode path links
+/// openjpeg, and Zig's lazy
 /// analysis is what keeps that C dependency off every jpegz consumer's
 /// graph (guarded by `tests/cli/no_c_consumer.bash`).
 const jp2z = @import("jp2z");
@@ -29,6 +30,12 @@ pub const DecodeError = errors.DecodeError;
 pub const Severity = errors.Severity;
 pub const Variant = errors.Variant;
 pub const FindingCode = errors.FindingCode;
+pub const facade = @import("facade_validation.zig");
+pub const StrictVerdict = facade.StrictVerdict;
+pub const ValidatorSource = facade.ValidatorSource;
+pub const ValidationFormat = facade.ValidationFormat;
+pub const StrictFinding = facade.StrictFinding;
+pub const StrictValidationResult = facade.StrictValidationResult;
 
 const core_types = @import("core/types.zig");
 pub const ColorSpace = core_types.ColorSpace;
@@ -437,8 +444,7 @@ fn peekIsProgressive(data: []const u8) bool {
         switch (marker) {
             0xC2, 0xCA => return true, // progressive Huffman / arithmetic
             // Any other SOFn or SOS: this is not a progressive image.
-            0xC0, 0xC1, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCB, 0xCD, 0xCE, 0xCF,
-            0xF7, 0xDA => return false,
+            0xC0, 0xC1, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCB, 0xCD, 0xCE, 0xCF, 0xF7, 0xDA => return false,
             // Standalone markers we can skip safely.
             0x01, 0xD0...0xD7, 0xD8, 0xD9 => continue,
             // Length-prefixed marker — skip its payload.
@@ -513,6 +519,18 @@ pub const jpeg2000 = struct {
         0x00, 0x00, 0x00, 0x0C, 'j', 'P', ' ', ' ', 0x0D, 0x0A, 0x87, 0x0A,
     };
 
+    /// Strict pure-Zig validation with an honest four-way result. Unlike the
+    /// legacy severity report, unsupported features and internal uncertainty
+    /// cannot be mistaken for a valid codestream.
+    pub fn strictValidate(
+        allocator: Allocator,
+        data: []const u8,
+    ) error{OutOfMemory}!StrictValidationResult {
+        const container_ok = data.len >= jp2_signature_box.len and
+            std.mem.eql(u8, data[0..jp2_signature_box.len], &jp2_signature_box);
+        return facade.validateJp2(allocator, data, container_ok);
+    }
+
     /// Translate a jp2z finding code into jpegz's vocabulary.
     ///
     /// The two registries were deliberately reconciled by Einstein — both
@@ -554,7 +572,7 @@ pub const jpeg2000 = struct {
     /// construction, and the reason `validate` could not rely on jpegz
     /// for T.800 coverage.
     ///
-    /// Note this calls ONLY `jp2z.validate`. jp2z's decode path still
+    /// Note this legacy report calls ONLY `jp2z.validate`. jp2z's decode path still
     /// links openjpeg; Zig's lazy analysis is what keeps that off our
     /// dependency graph, and `tests/cli/no_c_consumer.bash` fails if it
     /// ever creeps back on.
@@ -597,6 +615,20 @@ pub const jpeg2000 = struct {
         }
 
         return report;
+    }
+};
+
+/// JPEG XL strict validation delegated to the exact-pinned libjxlz leaf.
+pub const jpegxl = struct {
+    pub const Options = facade.JxlOptions;
+    pub const default_options = facade.default_jxl_options;
+
+    pub fn validate(
+        allocator: Allocator,
+        data: []const u8,
+        options: Options,
+    ) error{OutOfMemory}!StrictValidationResult {
+        return facade.validateJxl(allocator, data, options);
     }
 };
 

@@ -1,5 +1,16 @@
 # jpegz — work plan
 
+## Mecha Validate v1 bounded JPEG-family facade promotion (2026-08-05 overnight)
+
+- [x] Pin exact pure-Zig validator leaves `jp2z@d3754cfcfe3980daecb90de12d82ef4bdf100ce6` and `libjxlz@5e8f9d68152ae8a70cb823061f4b6c733eb09166`. _(2026-08-05 01:24 EDT)_
+- [x] TDD an honest facade result mapping for JPEG 2000 and JPEG XL; unsupported and indeterminate remain distinct from valid and corrupt. _(2026-08-05 01:24 EDT)_
+- [x] Prove the selected production validation target's import/runtime closure excludes OpenJPEG, upstream libjxl/djxl, and other external validators/decoders. The musl proof ELF is static and the Nix closure/symbol gate is green. _(2026-08-05 01:24 EDT)_
+- [x] Add bounded independently labeled known-good/known-bad plus sniper/bolter/shotgun facade classification evidence: 7 facade suites pass, including all three four-way JXL controls and 3/3 mutations per format. _(2026-08-05 01:24 EDT)_
+- [ ] Run `./test`, `./build`, exact Nix manifest targets, push only a green unit, and obtain terminal exact-SHA Mechatron evidence. Local `./test`, `./build`, `cross-windows`, and `validator-closure` are green; commit/push and exact-SHA terminal CI remain.
+- [ ] Send immutable facade pin notes to tiffz and Validate, plus final evidence to the global inbox.
+
+Curiosity pokes: preserve both leaves as one Zig-module instance per build graph; prove format mappings as classifiers over sets; reject vacuous corruption scores; keep test/dev oracles outside the selected production target by construction and closure inspection.
+
 **Mission recap.** jpegz is the spec-complete JPEG family decoder for
 the Zig ecosystem. Zig stdlib has no native JPEG support; zigimg's
 `src/formats/jpeg.zig` is 322 lines, baseline-only, not spec-complete.

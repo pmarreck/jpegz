@@ -17,3 +17,4 @@ checks.x86_64-linux.build
 # no-op when the developer has already run `./test` on the worker host. That
 # cost is the point: a target that is always a cache hit verifies nothing new.
 checks.x86_64-linux.cross-windows
+checks.x86_64-linux.validator-closure

@@ -51,6 +51,7 @@
         # built against musl + statically linkable.
         libjpegTurbo = if isLinux then pkgs.pkgsStatic.libjpeg else pkgs.libjpeg;
         openjpegPkg  = if isLinux then pkgs.pkgsStatic.openjpeg else pkgs.openjpeg;
+        brotliPkg = if isLinux then pkgs.pkgsStatic.brotli else pkgs.brotli;
         # charls — BSD-3, JPEG-LS (T.87) reference codec. We vendor the
         # source (not a binary package) and compile it via Zig's own
         # bundled clang + libc++. Two attempts at consuming the binary
@@ -97,7 +98,7 @@
         ];
 
         commonNativeBuildInputs = [ zigPkg pkgs.git pkgs.cacert ];
-        commonBuildInputs = [ libjpegTurbo openjpegPkg ];
+        commonBuildInputs = [ libjpegTurbo openjpegPkg brotliPkg ];
 
         # Fixed-output derivation pre-fetching every Zig dependency tarball
         # (CLAUDE.md Strategy 1). The only network dep is the vendored
@@ -117,7 +118,7 @@
         #   1. set zigDepsHash = pkgs.lib.fakeHash
         #   2. nix build .#checks.<system>.cross-windows  → prints real hash
         #   3. paste it back here.
-        zigDepsHash = "sha256-jfR18FbuxfmRyq4qlTMn2L69C9uEv0nNbAqK+bd32fg=";
+        zigDepsHash = "sha256-7g4sJ0GsJIu2s6Y6iNJVGG8FL7RnTxba2HIZ78JxQR8=";
         zigDeps = pkgs.stdenv.mkDerivation {
           pname = "jpegz-zig-deps";
           version = "0.1.0";
@@ -149,6 +150,8 @@
             dontConfigure = true;
             buildPhase = ''
               export HOME=$TMPDIR
+              export BROTLI_INCLUDE_DIR=${brotliPkg.dev}/include
+              export BROTLI_LIB_DIR=${brotliPkg.lib}/lib
               export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
               mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
               # Seed the cache with the pre-fetched vendored deps (openjpeg
@@ -177,6 +180,8 @@
           dontConfigure = true;
           buildPhase = ''
             export HOME=$TMPDIR
+            export BROTLI_INCLUDE_DIR=${brotliPkg.dev}/include
+            export BROTLI_LIB_DIR=${brotliPkg.lib}/lib
             export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
             mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
             # Seed the cache with pre-fetched vendored deps (see mkJpegzPackage
@@ -229,14 +234,64 @@
             echo "windows cross-link ok" > $out/result
           '';
         };
+
+        validatorPackage = pkgs.stdenv.mkDerivation {
+          pname = "jpegz-validator-proof";
+          version = "0.1.0";
+          src = ./.;
+          nativeBuildInputs = commonNativeBuildInputs;
+          buildInputs = [ brotliPkg ];
+          dontConfigure = true;
+          buildPhase = ''
+            export HOME=$TMPDIR
+            export BROTLI_INCLUDE_DIR=${brotliPkg.dev}/include
+            export BROTLI_LIB_DIR=${brotliPkg.lib}/lib
+            export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
+            mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
+            cp -r ${zigDeps}/* "$ZIG_GLOBAL_CACHE_DIR/"
+            chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
+            zig build install-validator -Doptimize=ReleaseFast ${zigTargetFlag} \
+              -Dwith-charls=false -Dwith-libjpeg-oracle=false --prefix $out
+          '';
+          installPhase = "true";
+        };
+
+        validatorRuntimeClosure = pkgs.closureInfo {
+          rootPaths = [ validatorPackage ];
+        };
+
+        validatorClosureCheck = pkgs.runCommand "jpegz-validator-closure" {
+          nativeBuildInputs = [ pkgs.binutils ];
+        } ''
+          probe=${validatorPackage}/bin/jpegz-validator-proof
+          "$probe"
+          ${pkgs.binutils}/bin/nm -u "$probe" > undefined-symbols.txt
+          ${pkgs.binutils}/bin/readelf -d "$probe" > dynamic-section.txt
+          if ${pkgs.gnugrep}/bin/grep -Eqi 'opj_|openjp2|jpeg_|charls|JxlDecoder|JxlSignature|djxl' undefined-symbols.txt dynamic-section.txt; then
+            echo "forbidden external JPEG-family validator symbol or library" >&2
+            cat undefined-symbols.txt dynamic-section.txt >&2
+            exit 1
+          fi
+          cp ${validatorRuntimeClosure}/store-paths closure.txt
+          if ${pkgs.gnugrep}/bin/grep -Eqi '/(openjpeg|libjpeg|charls|libjxl-[0-9]|djxl)' closure.txt; then
+            echo "forbidden external JPEG-family validator in Nix closure" >&2
+            cat closure.txt >&2
+            exit 1
+          fi
+          mkdir -p $out
+          cp undefined-symbols.txt dynamic-section.txt closure.txt $out/
+          echo "validation-only closure excludes external JPEG-family validators" > $out/result
+        '';
       in {
         packages.default = mkJpegzPackage {};
         packages.jpegz = self.packages.${system}.default;
+        packages.validator = validatorPackage;
 
         checks = {
           build = self.packages.${system}.default;
           test = jpegzTestCheck;
           cross-windows = crossWindowsCheck;
+          validator-closure = validatorClosureCheck;
         };
 
         devShells.default = pkgs.mkShell {
@@ -245,8 +300,10 @@
           # — interactive dev doesn't need it. charls is built from
           # vendored source (Zig compiles 8 .cpp files); CHARLS_SRC tells
           # build.zig where the source tree is.
-          packages = [ zigPkg pkgs.git pkgs.cacert pkgs.libjpeg pkgs.openjpeg pkgs.hyperfine pkgs.pkg-config ];
+          packages = [ zigPkg pkgs.git pkgs.cacert pkgs.libjpeg pkgs.openjpeg pkgs.brotli pkgs.hyperfine pkgs.pkg-config ];
           CHARLS_SRC = charlsSrc;
+          BROTLI_INCLUDE_DIR = "${pkgs.brotli.dev}/include";
+          BROTLI_LIB_DIR = "${pkgs.brotli.lib}/lib";
           shellHook = ''
             echo "jpegz devShell — zig $(zig version), libjpeg-turbo ${pkgs.libjpeg.version}, openjpeg ${pkgs.openjpeg.version}, charls 2.4.3 (vendored)"
           '';
