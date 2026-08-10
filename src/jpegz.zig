@@ -31,6 +31,11 @@ pub const Severity = errors.Severity;
 pub const Variant = errors.Variant;
 pub const FindingCode = errors.FindingCode;
 pub const facade = @import("facade_validation.zig");
+
+/// Locale identification and resolution. Pure computation — deciding which
+/// language a user asked for is a decision, and decisions belong where they
+/// can be tested without a process environment. Rendering stays in the CLI.
+pub const i18n = @import("i18n/locale.zig");
 pub const StrictVerdict = facade.StrictVerdict;
 pub const ValidatorSource = facade.ValidatorSource;
 pub const ValidationFormat = facade.ValidationFormat;

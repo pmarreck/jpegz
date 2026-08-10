@@ -346,9 +346,13 @@ static void print_help(void) {
         "      --about       One-line version / platform summary and exit.\n"
         "      --json        Emit one JSON object per input on stdout.\n"
         "      --no-json     Disable JSON (default).\n"
+        "      --color       Force ANSI color on, even when piped.\n"
+        "      --ansi        Alias for --color.\n"
         "      --no-color    Suppress ANSI color.\n"
         "      --no-ansi     Suppress all ANSI sequences.\n"
         "      --simple      Plain ASCII, no color or decoration.\n"
+        "      --lang CODE   UI language, e.g. --lang fr. Overrides JPEGZ_LANG,\n"
+        "                    which overrides the system locale.\n"
         "  -q, --quiet       Suppress per-file output; exit code only.\n"
         "\n"
         "  Later options override earlier ones. Non-positional options may\n"
@@ -395,6 +399,9 @@ int main(int argc, char **argv) {
                 strcmp(argv[i], "--no-ansi") == 0 ||
                 strcmp(argv[i], "--simple") == 0) {
                 banner_color = false;
+            } else if (strcmp(argv[i], "--color") == 0 ||
+                       strcmp(argv[i], "--ansi") == 0) {
+                banner_color = true; /* later-wins, same as the real parser */
             }
         }
         if (banner_color) fputs("\033[33mDEBUG BUILD\033[0m\n", stderr);
@@ -417,6 +424,9 @@ int main(int argc, char **argv) {
     }
     size_t npaths = 0;
     bool only_paths = false;
+    /* Collected during parsing, resolved once afterwards so that later
+     * arguments override earlier ones like every other switch. */
+    const char *lang_arg = NULL;
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -438,12 +448,28 @@ int main(int argc, char **argv) {
             opt.json = true;
         } else if (strcmp(a, "--no-json") == 0) {
             opt.json = false;
+        } else if (strcmp(a, "--color") == 0 || strcmp(a, "--ansi") == 0) {
+            /* Force decoration on. Needed because the default is "on only if
+             * stdout is a terminal", which is right for pipes but leaves no
+             * way to colorize output headed for a pager or a captured log.
+             * Color implies ANSI — it is delivered as escape sequences. */
+            opt.color = true;
+            opt.ansi = true;
         } else if (strcmp(a, "--no-color") == 0) {
             opt.color = false;
         } else if (strcmp(a, "--no-ansi") == 0) {
             opt.color = false; opt.ansi = false;
         } else if (strcmp(a, "--simple") == 0) {
             opt.color = false; opt.ansi = false;
+        } else if (strcmp(a, "--lang") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "jpegz: --lang needs a locale code (e.g. --lang fr)\n");
+                free(paths);
+                return EXIT_USAGE;
+            }
+            lang_arg = argv[++i];
+        } else if (strncmp(a, "--lang=", 7) == 0) {
+            lang_arg = a + 7;
         } else if (strcmp(a, "-q") == 0 || strcmp(a, "--quiet") == 0) {
             opt.quiet = true;
         } else {
@@ -451,6 +477,28 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Try 'jpegz --help'.\n");
             free(paths);
             return EXIT_USAGE;
+        }
+    }
+
+    /* Locale resolution. The library owns the precedence rule; this only
+     * gathers the signals and reports what it could not honor.
+     *
+     * i18n prepare phase (RULES.md): only English has a catalog, so a
+     * recognized locale still renders in English — but it says so. Warning is
+     * the point; a silent fallback is how a missing catalog survives for a
+     * year unnoticed. Goes to stderr so it never pollutes --json on stdout. */
+    {
+        jpegz_locale_resolution_t loc = {0};
+        jpegz_locale_resolve(lang_arg, getenv("JPEGZ_LANG"), getenv("LC_ALL"),
+                             getenv("LC_MESSAGES"), getenv("LANG"), &loc);
+        if (loc.unsupported_request) {
+            const char *asked = lang_arg ? lang_arg : getenv("JPEGZ_LANG");
+            fprintf(stderr, "jpegz: unsupported locale '%s'; using English\n",
+                    asked ? asked : "?");
+        } else if (!loc.has_catalog) {
+            fprintf(stderr,
+                    "jpegz: no '%s' translation yet; using English\n",
+                    jpegz_locale_code(loc.locale));
         }
     }
 

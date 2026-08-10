@@ -27,10 +27,13 @@
  *   libjpegz.a           The above PLUS decode (pixels), which requires
  *                        libjpeg-turbo, OpenJPEG and CharLS at link time.
  *
- * The archives never define the same symbol twice, so link whichever one
- * matches your needs — not both. A validator, an integrity checker or a
- * file-triage tool wants the small one; only something that needs actual
- * pixels needs the large one.
+ * Link exactly ONE. libjpegz.a is a strict superset, so it is the only one a
+ * decoding consumer needs. They are alternatives, not companions: each carries
+ * its own copy of the thread-local last-error slot, so linking both would let
+ * an error set through one archive be read as empty through the other.
+ *
+ * A validator, integrity checker or file-triage tool wants the small one; only
+ * something that needs actual pixels needs the large one.
  *
  * License: MIT. See LICENSE.
  */
@@ -434,6 +437,43 @@ void jpegz_strict_result_free(jpegz_strict_result_t *result);
  * "indeterminate" / "jpeg", "jpeg2000", "jpeg_xl", "unknown"). Never NULL. */
 const char *jpegz_verdict_name(int verdict);
 const char *jpegz_validation_format_name(int format);
+
+/* ── Locale resolution ─────────────────────────────────────────────
+ *
+ * The caller reads argv and the environment; jpegz decides. Precedence is
+ * --lang > <APP>_LANG > LC_ALL > LC_MESSAGES > LANG, with English as the
+ * floor. Any argument may be NULL for "not set".
+ *
+ * The asymmetry is deliberate: an unparseable explicit request (the first two)
+ * sets unsupported_request, because the user asked jpegz for something it
+ * cannot do. An unparseable system locale does not — that would warn on every
+ * machine whose LANG happens not to be translated. */
+
+typedef struct {
+    /* Index into the canonical 50 locales; always valid. */
+    int locale;
+    /* The user explicitly asked for an unsupported locale. */
+    int unsupported_request;
+    /* A translated catalog exists. During the prepare phase only English
+     * does, so a caller warns rather than failing. */
+    int has_catalog;
+    /* Right-to-left script — needs bidi marks when an error message carries
+     * its English original alongside the translation. */
+    int is_rtl;
+} jpegz_locale_resolution_t;
+
+void jpegz_locale_resolve(
+    const char                *lang_arg,
+    const char                *app_env,
+    const char                *lc_all,
+    const char                *lc_messages,
+    const char                *lang,
+    jpegz_locale_resolution_t *out
+);
+
+/* Canonical code for a locale index, e.g. "pt_br". Statically allocated,
+ * never NULL; an out-of-range index yields "en". */
+const char *jpegz_locale_code(int locale);
 
 /* ── FindingsSink: tolerant-decode warning collector ───────────────
  *

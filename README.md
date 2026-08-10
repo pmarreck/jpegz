@@ -72,8 +72,10 @@ reportable verbatim against jp2z or libjxlz.
 
 ### Two archives, one header
 
-C consumers link whichever matches their needs — never both, since the symbol
-sets do not overlap:
+C consumers link exactly one. `libjpegz.a` is a strict superset, so a decoding
+consumer needs only that. They are alternatives rather than companions: each
+carries its own thread-local last-error slot, so linking both would let an
+error set through one be read as empty through the other.
 
 | Archive | Provides | C dependencies |
 |---|---|---|

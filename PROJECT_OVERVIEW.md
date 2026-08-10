@@ -76,3 +76,7 @@ is a ways out. Canonical provenance: `LICENSING_NOTES.md`.
 
 Phase 1 milestone 1 complete (scaffold). Phase 1 milestone 2
 (brainstorm SPEC §9 design questions) is the next entry point.
+
+**i18n phase: prepare.** The resolver handles all 50 canonical locales;
+only English has a catalog, and a recognized locale with none warns rather
+than failing. See `docs/I18N.md` and `RULES.md` § Internationalization.

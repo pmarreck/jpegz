@@ -147,6 +147,11 @@ pub const FindingCode = enum(u32) {
     jxl_out_of_memory = 185,
     jxl_invalid_argument = 186,
     jxl_unclassified_decoder_error = 187,
+    // This BUILD has no JPEG XL validator linked in (`-Dwith-jxl=false`, used
+    // where Brotli is unavailable for the target — currently mingw-w64). The
+    // file was recognized as JXL and then not checked, which is
+    // `.indeterminate`, never `.valid` and never `.corrupt`.
+    jxl_validator_unavailable = 188,
 
     // ── Informational (severity = .info) (200..249) ──────────────
     arithmetic_coding_used = 200,

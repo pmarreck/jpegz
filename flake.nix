@@ -52,6 +52,12 @@
         libjpegTurbo = if isLinux then pkgs.pkgsStatic.libjpeg else pkgs.libjpeg;
         openjpegPkg  = if isLinux then pkgs.pkgsStatic.openjpeg else pkgs.openjpeg;
         brotliPkg = if isLinux then pkgs.pkgsStatic.brotli else pkgs.brotli;
+        # NOTE: there is deliberately no mingw-w64 Brotli here. Both nixpkgs
+        # candidates were tried and neither works: `pkgsCross.mingwW64.brotli`
+        # ships only `.dll.a` import libraries (Zig searches for
+        # `brotli*.dll` / `brotli*.lib` / `libbrotli*.a` and finds none), and
+        # `pkgsCross.mingwW64.pkgsStatic.brotli` fails to build. The Windows
+        # cross check therefore passes `-Dwith-jxl=false`; see build.zig.
         # charls — BSD-3, JPEG-LS (T.87) reference codec. We vendor the
         # source (not a binary package) and compile it via Zig's own
         # bundled clang + libc++. Two attempts at consuming the binary
@@ -226,8 +232,20 @@
             mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
             cp -r ${zigDeps}/* "$ZIG_GLOBAL_CACHE_DIR/"
             chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
+            # No Brotli is exported on purpose, and -Dwith-jxl=false is the
+            # honest consequence: nixpkgs has no usable mingw-w64 Brotli
+            # (the dynamic build ships only `.dll.a` import libraries, which
+            # Zig does not search for, and the static build fails to compile).
+            # Smuggling the NATIVE Brotli into a Windows artifact would make
+            # this gate pass while producing something that could never run,
+            # which is precisely the dishonesty it exists to catch.
+            #
+            # Consequence for users: a Windows build reports JPEG XL files as
+            # `indeterminate` / `jxl_validator_unavailable` rather than
+            # pretending to validate them. Removing this needs Brotli vendored
+            # and compiled by Zig, the way charls already is.
             zig build test-build -Dtarget=x86_64-windows-gnu \
-              -Dwith-charls=false -Dwith-libjpeg-oracle=false
+              -Dwith-charls=false -Dwith-libjpeg-oracle=false -Dwith-jxl=false
           '';
           installPhase = ''
             mkdir -p $out

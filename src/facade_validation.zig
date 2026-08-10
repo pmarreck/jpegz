@@ -8,6 +8,12 @@ const std = @import("std");
 const jp2z = @import("jp2z");
 const libjxlz = @import("libjxlz");
 const errors = @import("core/errors.zig");
+const build_options = @import("jpegz_build_options");
+
+/// Whether this build linked the JPEG XL validator. False only where Brotli is
+/// unavailable for the target (currently mingw-w64); see `-Dwith-jxl` in
+/// build.zig for why, and what it would take to remove the option.
+pub const with_jxl = build_options.with_jxl;
 
 pub const Severity = errors.Severity;
 pub const FindingCode = errors.FindingCode;
@@ -231,8 +237,14 @@ pub fn validateJp2(
     return result;
 }
 
-pub const JxlOptions = libjxlz.validation.Options;
-pub const default_jxl_options = libjxlz.validation.default_options;
+// The alias itself has to branch: naming `libjxlz.validation.Options` in a
+// signature forces analysis of libjxlz, which is what reaches Brotli. The
+// stand-in keeps the call shape identical so consumers compile either way.
+pub const JxlOptions = if (with_jxl) libjxlz.validation.Options else struct {
+    host_byte_offset: u64 = 0,
+};
+pub const default_jxl_options: JxlOptions =
+    if (with_jxl) libjxlz.validation.default_options else .{};
 
 /// Runs libjxlz strict validation and preserves its verdict, code, and offsets.
 pub fn validateJxl(
@@ -240,6 +252,23 @@ pub fn validateJxl(
     data: []const u8,
     options: JxlOptions,
 ) error{OutOfMemory}!StrictValidationResult {
+    // Comptime-known, so the disabled build never analyzes the libjxlz call
+    // below — which is the whole point: analyzing it is what pulls in Brotli.
+    if (!with_jxl) {
+        var stub = StrictValidationResult{
+            .verdict = .indeterminate,
+            .format = .jpeg_xl,
+            .variant = .jpeg_xl,
+        };
+        errdefer stub.deinit(allocator);
+        try stub.findings.append(allocator, .{
+            .source = .jpegz,
+            .leaf_code = @intFromEnum(FindingCode.jxl_validator_unavailable),
+            .code = .jxl_validator_unavailable,
+            .severity = .warn,
+        });
+        return stub;
+    }
     const leaf = libjxlz.validation.validate(data, options);
     const raw_verdict: i32 = @intCast(@intFromEnum(leaf.verdict));
     const raw_code: i32 = @intCast(@intFromEnum(leaf.code));

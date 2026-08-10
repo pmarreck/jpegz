@@ -217,6 +217,65 @@ export fn jpegz_validate_any(data: [*c]const u8, len: usize, out_result: ?*CStri
     return 0;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Locale resolution
+// ─────────────────────────────────────────────────────────────────────
+//
+// The CLI reads argv and the environment; this decides. Keeping the decision
+// on the Zig side means the precedence rule is unit-tested against explicit
+// inputs rather than by mutating a process environment, and every consumer of
+// the ABI inherits the same rule instead of re-deriving it.
+
+const CLocaleResolution = extern struct {
+    /// Index into the canonical 50. Always valid — English is the floor.
+    locale: c_int,
+    /// The user explicitly asked for a locale jpegz does not support.
+    unsupported_request: c_int,
+    /// A translated catalog exists for `locale`. During prepare phase only
+    /// English does, so the caller warns rather than failing.
+    has_catalog: c_int,
+    /// Right-to-left script; the caller needs bidi marks when mixing in the
+    /// English original of an error message.
+    is_rtl: c_int,
+};
+
+fn optSlice(s: [*c]const u8) ?[]const u8 {
+    if (s == null) return null;
+    return std.mem.span(s);
+}
+
+export fn jpegz_locale_resolve(
+    lang_arg: [*c]const u8,
+    app_env: [*c]const u8,
+    lc_all: [*c]const u8,
+    lc_messages: [*c]const u8,
+    lang: [*c]const u8,
+    out: ?*CLocaleResolution,
+) void {
+    const o = out orelse return;
+    const r = jpegz.i18n.resolve(.{
+        .lang_arg = optSlice(lang_arg),
+        .app_env = optSlice(app_env),
+        .lc_all = optSlice(lc_all),
+        .lc_messages = optSlice(lc_messages),
+        .lang = optSlice(lang),
+    });
+    o.* = .{
+        .locale = @intFromEnum(r.locale),
+        .unsupported_request = @intFromBool(r.unsupported_request),
+        .has_catalog = @intFromBool(r.locale.hasCatalog()),
+        .is_rtl = @intFromBool(r.locale.isRtl()),
+    };
+}
+
+/// Canonical code for a locale index, e.g. `"pt_br"`. Never NULL.
+export fn jpegz_locale_code(locale: c_int) [*:0]const u8 {
+    inline for (@typeInfo(jpegz.i18n.Locale).@"enum".fields) |f| {
+        if (locale == f.value) return f.name.ptr;
+    }
+    return "en";
+}
+
 export fn jpegz_verdict_name(verdict: c_int) [*:0]const u8 {
     inline for (@typeInfo(jpegz.StrictVerdict).@"enum".fields) |f| {
         if (verdict == f.value) return f.name.ptr;

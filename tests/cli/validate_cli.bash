@@ -272,6 +272,83 @@ assert_contains "$out" '"format":"jpeg_xl"' "JSON names the format that answered
 
 rm -f "$smashed" "$foreign" 2>/dev/null
 
+# ── 10b. Locale selection (i18n prepare phase) ───────────────────────
+#
+# Prepare phase: the resolver is complete, the catalogs are not. So a
+# recognized locale must resolve and say its catalog is missing, and an
+# unrecognized one must be reported — never silently answered in English,
+# which is how a missing locale goes unnoticed for a year.
+
+out=; err=; rc=
+capture "$jpegz_cli" --simple --lang fr "$fixtures/baseline_2x2_rgb.jpg"
+[ "$rc" -eq 0 ] && pass "--lang with a known locale still validates" || fail "--lang with a known locale still validates" "rc=$rc"
+assert_contains "$err" "fr" "--lang fr warns that its catalog is missing"
+
+# An unsupported explicit request is a user error worth naming.
+out=; err=; rc=
+capture "$jpegz_cli" --simple --lang klingon "$fixtures/baseline_2x2_rgb.jpg"
+assert_contains "$err" "klingon" "unsupported --lang names what was asked for"
+
+# The app-specific env var works, and --lang outranks it.
+out=; err=; rc=
+JPEGZ_LANG=de capture "$jpegz_cli" --simple "$fixtures/baseline_2x2_rgb.jpg"
+assert_contains "$err" "de" "JPEGZ_LANG selects a locale"
+
+out=; err=; rc=
+JPEGZ_LANG=de capture "$jpegz_cli" --simple --lang fr "$fixtures/baseline_2x2_rgb.jpg"
+case "$err" in
+*fr*) pass "--lang outranks JPEGZ_LANG" ;;
+*) fail "--lang outranks JPEGZ_LANG" "expected fr in: $err" ;;
+esac
+
+# An unusable SYSTEM locale is not the user's doing and must stay quiet, or
+# the warning fires on every machine we do not translate.
+out=; err=; rc=
+LANG=xx_XX.UTF-8 capture "$jpegz_cli" --simple "$fixtures/baseline_2x2_rgb.jpg"
+case "$err" in
+*xx*) fail "an unusable system locale does not warn" "got: $err" ;;
+*) pass "an unusable system locale does not warn" ;;
+esac
+
+# English is the floor and must not warn on the common path. Asserting stderr
+# is EMPTY would be wrong: a debug build legitimately prints its DEBUG banner
+# there. Assert the absence of the locale complaints specifically.
+out=; err=; rc=
+capture "$jpegz_cli" --simple --lang en "$fixtures/baseline_2x2_rgb.jpg"
+case "$err" in
+*"translation"* | *"unsupported locale"*) fail "--lang en warns about nothing" "stderr: $err" ;;
+*) pass "--lang en warns about nothing" ;;
+esac
+
+# ── 10. Forcing decoration on ─────────────────────────────────────────
+#
+# Suppression already existed; forcing did not. Without `--color` there is no
+# way to get colored output into a pager or a captured log, because stdout is
+# not a terminal in either case and jpegz correctly defaults decoration off.
+
+out=; err=; rc=
+capture "$jpegz_cli" --color "$fixtures/baseline_2x2_rgb.jpg"
+case "$out" in
+*"$esc["*) pass "--color forces ANSI when stdout is not a terminal" ;;
+*) fail "--color forces ANSI when stdout is not a terminal" "no escapes in: $out" ;;
+esac
+
+# Later wins, in both directions — the general argument rule, applied to a
+# switch that now has a real opposite.
+out=; err=; rc=
+capture "$jpegz_cli" --color --no-color "$fixtures/baseline_2x2_rgb.jpg"
+case "$out" in
+*"$esc["*) fail "later --no-color beats earlier --color" "got: $(show_ansi_failure "$out")" ;;
+*) pass "later --no-color beats earlier --color" ;;
+esac
+
+out=; err=; rc=
+capture "$jpegz_cli" --simple --color "$fixtures/baseline_2x2_rgb.jpg"
+case "$out" in
+*"$esc["*) pass "later --color beats earlier --simple" ;;
+*) fail "later --color beats earlier --simple" "no escapes in: $out" ;;
+esac
+
 rm -f "$trunc" "$spaced" 2>/dev/null
 rmdir "$spacedir" 2>/dev/null
 

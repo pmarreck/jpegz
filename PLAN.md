@@ -319,11 +319,61 @@ A JXL band must be allocated the same way.
       `PASS`**, and a clean one prints `PASS` with no dimensions or variant
       while a JPEG prints `2x2  baseline (huffman)`. Add JP2-corruption cases
       to `validate_cli.bash` the moment U1 lands; they would fail today.
-- [ ] **U5b — remaining CLI conventions.** Deferred, not forgotten:
-      i18n groundwork (`--lang` + `JPEGZ_LANG`; invoke the `i18n` skill
-      first), a force-`--color` switch (currently only suppression exists, so
-      colored output cannot be captured or piped to a pager), and progress
-      indication for large multi-file runs.
+- [x] **U5b (partial) — force-`--color` and i18n groundwork.** _(2026-08-10 EDT)_
+      `--color` / `--ansi` force decoration on, so colored output can reach a
+      pager or a captured log; previously only suppression existed. The DEBUG
+      banner's argv pre-scan honors it too, later-wins in both directions.
+
+      i18n is **prepare phase**, recorded in `RULES.md` per the skill's scope
+      gate, with the locale set and rationale in `docs/I18N.md`. All 50 locales
+      parse (`src/i18n/locale.zig`); only English has a catalog, and a
+      recognized locale without one warns on stderr rather than failing.
+      `--lang` > `JPEGZ_LANG` > `LC_ALL` > `LC_MESSAGES` > `LANG`, English the
+      floor, exposed as `jpegz_locale_resolve`.
+
+      Two decisions worth keeping: resolution takes its signals as *arguments*
+      rather than reading `getenv` itself, so precedence is unit-tested without
+      mutating process-global state; and an unparseable **system** locale stays
+      silent while an unparseable **explicit** request is named, because the
+      former would warn on every machine we do not translate.
+- [ ] **U5b (rest) — progress indication** for large multi-file runs (live
+      count, elapsed, ETA, `--no-progress`, only when stderr is a terminal).
+      Per CLAUDE.md the renderer must be a pure function taking `now` as a
+      parameter; the natural home is the Zig core behind the FFI, so it is
+      testable without a clock or a terminal.
+- [x] **Root-caused the nested-archive link failure.** _(2026-08-10 EDT)_
+      Symptom: `ld.lld: warning: libjpegz.a: archive member '.../libjpeg.a' is
+      neither ET_REL nor LLVM bitcode`, which Zig escalates to a hard error.
+      Cause: linking a system STATIC library onto `jpegz_mod` made Zig bundle
+      that `.a` as a *member* of `libjpegz.a`, and LLD cannot use an archive
+      nested inside an archive. It only fires when a link needs a symbol that
+      makes LLD try to load the member, so the archive got more unlinkable the
+      more of it a consumer used — the JXL leg tripped it, then merely adding
+      the locale exports tripped it again after a green build. Fix: headers
+      stay on the shared module, linking moves to each consuming artifact
+      (`linkJpegSystemDeps`). Every consumer already linked these libraries
+      itself, so the bundled copies were never load-bearing.
+
+      This had been failing `nix develop -c zig build install` on the clean
+      tree for some time (verified via `git stash`, and dismissed then as
+      "pre-existing devShell breakage"). The root fix repaired that too. A
+      symptom you have already labelled pre-existing is still a bug.
+
+      Related: the two archives are ALTERNATIVES, never linked together —
+      each carries its own thread-local last-error slot, so linking both makes
+      an error set through one read as empty through the other. `smoke.c`
+      caught exactly that ("abort preserves return code in
+      last_error_message") when an intermediate attempt linked both.
+- [ ] **Vendor Brotli and re-enable JXL on Windows.** `-Dwith-jxl=false` is
+      currently forced for `x86_64-windows-gnu` because nixpkgs has no usable
+      mingw-w64 Brotli: `pkgsCross.mingwW64.brotli` ships only `.dll.a` import
+      libraries (Zig searches `brotli*.dll` / `brotli*.lib` / `libbrotli*.a`)
+      and `pkgsCross.mingwW64.pkgsStatic.brotli` fails to build. Windows
+      therefore reports JXL as `indeterminate` /
+      `jxl_validator_unavailable` — honest, and not a regression, since
+      Windows compiled no JXL path at all before the facade. The fix is to
+      vendor Brotli's source and compile it with Zig exactly as charls already
+      is, which also keeps the Windows artifact a single static binary.
 - [ ] **U5 (original scope note) — `jpegz` C CLI dogfooding jpegz's C FFI** (Peter, 2026-07-31).
       **Scope for now: VALIDATION WITH RICH ERROR REPORTING ONLY.** No decode
       / convert / encode subcommands — resist the scope creep; the point is

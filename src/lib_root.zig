@@ -22,9 +22,16 @@
 
 comptime {
     _ = @import("jpegz").c_abi_force_link;
-    // The validation exports live in their own file so that a second archive
-    // can ship them WITHOUT libjpeg / openjpeg / CharLS (see
-    // `src/validation_lib_root.zig` and `src/ffi/c_common.zig`). The full
-    // library must still export both halves, so force-link both here.
+    // The validation exports live in their own file so a second archive can
+    // ship them WITHOUT libjpeg / openjpeg / CharLS (see
+    // `src/validation_lib_root.zig`). This archive is the SUPERSET and must
+    // export both halves.
+    //
+    // The two archives are alternatives, never linked together. Each carries
+    // its own copy of the thread-local last-error slot, so linking both gives
+    // a decode error set in one archive and read from the other — which the
+    // C smoke suite catches as "abort preserves return code in
+    // last_error_message". Shared mutable state cannot be duplicated across
+    // archives, so consumers pick exactly one.
     _ = @import("jpegz").c_abi_validate_force_link;
 }
