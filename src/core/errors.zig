@@ -50,6 +50,9 @@ pub const Variant = enum(u8) {
     lossless_arithmetic = 7, // SOF11
     jpegls = 8, // SOF55 (T.87)
     jpeg2000 = 9, // JP2 / J2K
+    // Appended 2026-08-06 with the JXL facade leg, so JPEG XL prints like its
+    // siblings instead of falling back to the machine-shaped format name.
+    jpeg_xl = 10, // ISO/IEC 18181
 };
 
 /// Symbolic codes for a `Finding` in a `ValidationReport`. The numeric
@@ -78,6 +81,11 @@ pub const FindingCode = enum(u32) {
     // silently absorbs; jpegz emits warn so deviations from canonical
     // encoding are visible to strict validators.
     entropy_fill_bytes = 9,
+    // `validateAny` recognized no JPEG-family signature, so no validator ran.
+    // Deliberately NOT `missing_soi`: that code asserts the input was meant to
+    // be a T.81 stream, which is exactly the guess the sniffer refuses to make.
+    // Always paired with verdict `.indeterminate` — never `.corrupt`.
+    unrecognized_container = 10,
 
     // ── T.81 codec-specific (50..99) ─────────────────────────────
     invalid_sof_precision = 50,

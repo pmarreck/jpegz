@@ -12,9 +12,11 @@
  * vocabulary.
  *
  * Exit codes:
- *   0  every input validated (pass / info / warn)
- *   1  at least one input FAILED validation
+ *   0  every input was valid
+ *   1  at least one input was CORRUPT
  *   2  usage or I/O error (could not even attempt validation)
+ *   3  nothing corrupt, but at least one input was unsupported or
+ *      indeterminate — "I could not check this" must not read as "fine"
  *
  * Verdicts go to stdout; diagnostics about the run go to stderr.
  */
@@ -46,6 +48,12 @@
 #define EXIT_OK 0
 #define EXIT_INVALID 1
 #define EXIT_USAGE 2
+/* Nothing was found damaged, but at least one input could not be given a
+ * clean bill of health either — an unsupported feature or an unrecognized
+ * container. Distinct from 0 so a script does not read "I could not check
+ * this" as "this is fine", and distinct from 1 so it is not reported to a
+ * user as corruption. */
+#define EXIT_INCONCLUSIVE 3
 
 /* Largest input we will buffer. jpegz borrows the buffer for the call only,
  * so this bounds memory, not correctness. */
@@ -99,6 +107,7 @@ static const char *variant_name(jpegz_variant_t v) {
     case JPEGZ_VARIANT_LOSSLESS_ARITHMETIC:    return "lossless (arithmetic)";
     case JPEGZ_VARIANT_JPEGLS:                 return "JPEG-LS";
     case JPEGZ_VARIANT_JPEG2000:               return "JPEG 2000";
+    case JPEGZ_VARIANT_JPEG_XL:                return "JPEG XL";
     }
     return "unknown";
 }
@@ -192,39 +201,53 @@ static uint8_t *read_all(const char *path, size_t *out_len) {
     return buf;
 }
 
-/* ── Container sniffing ───────────────────────────────────────────── */
+/* ── Verdict presentation ─────────────────────────────────────────── */
 
-/* JPEG 2000 lives behind a separate ABI entry point because the codec shares
- * nothing with T.81. Sniff so the user does not have to say which they have.
- * Two shapes: the JP2 file-format signature box, and a raw J2K codestream. */
-static bool looks_like_jp2(const uint8_t *d, size_t n) {
-    static const uint8_t jp2_sig[] = {
-        0x00, 0x00, 0x00, 0x0C, 'j', 'P', ' ', ' ', 0x0D, 0x0A, 0x87, 0x0A
-    };
-    if (n >= sizeof(jp2_sig) && memcmp(d, jp2_sig, sizeof(jp2_sig)) == 0) return true;
-    /* Raw J2K codestream: SOC followed by SIZ. */
-    if (n >= 4 && d[0] == 0xFF && d[1] == 0x4F && d[2] == 0xFF && d[3] == 0x51) return true;
-    return false;
+/* Container sniffing used to live here, in C, and knew only JPEG and JPEG
+ * 2000 — so a JPEG XL file was unreachable and anything unrecognized fell
+ * through to the T.81 path and got described in T.81 vocabulary. Routing is
+ * now `jpegz_validate_any`, which keeps one answer for the whole family and
+ * lets every consumer of the FFI inherit it instead of re-deriving it. */
+
+static const char *verdict_label(int verdict) {
+    return jpegz_verdict_name(verdict);
+}
+
+static const char *verdict_color(int verdict, const options_t *o) {
+    if (!o->color) return "";
+    switch (verdict) {
+    case JPEGZ_VERDICT_VALID:         return "\033[32m"; /* green  */
+    case JPEGZ_VERDICT_CORRUPT:       return "\033[31m"; /* red    */
+    case JPEGZ_VERDICT_UNSUPPORTED:   return "\033[36m"; /* cyan   */
+    case JPEGZ_VERDICT_INDETERMINATE: return "\033[33m"; /* yellow */
+    default:                          return "";
+    }
 }
 
 /* ── Reporting ────────────────────────────────────────────────────── */
 
-static void print_human(const char *path, const jpegz_validation_report_t *r,
+static void print_human(const char *path, const jpegz_strict_result_t *r,
                         const options_t *o) {
     printf("%s%s%s: %s%s%s",
            color_bold(o), path, color_reset(o),
-           sev_color(r->overall, o), sev_label(r->overall), color_reset(o));
+           verdict_color(r->verdict, o), verdict_label(r->verdict), color_reset(o));
 
     if (r->width && r->height) {
         printf("  %ux%u", r->width, r->height);
     }
+    /* Prefer the variant: "baseline (Huffman)" tells the user more than
+     * "jpeg". Fall back to the format when no variant was detected, so a JXL
+     * or an unparseable file still says which validator answered. */
     if (r->variant != JPEGZ_VARIANT_UNKNOWN) {
         printf("  %s%s%s", color_dim(o), variant_name(r->variant), color_reset(o));
+    } else if (r->format != JPEGZ_FORMAT_UNKNOWN) {
+        printf("  %s%s%s", color_dim(o),
+               jpegz_validation_format_name(r->format), color_reset(o));
     }
     printf("\n");
 
     for (size_t i = 0; i < r->findings_len; i++) {
-        const jpegz_finding_t *f = &r->findings[i];
+        const jpegz_strict_finding_t *f = &r->findings[i];
         /* INT64_MIN is the library's "not applicable" sentinel — printing it
          * as a byte offset would be worse than printing nothing. */
         bool has_offset = f->offset != INT64_MIN;
@@ -233,6 +256,11 @@ static void print_human(const char *path, const jpegz_validation_report_t *r,
                sev_color(f->severity, o), sev_label(f->severity), color_reset(o),
                jpegz_finding_code_name(f->code));
 
+        /* A code jpegz has no name for still has the leaf's own number, which
+         * is what makes a bug report against jp2z or libjxlz actionable. */
+        if (f->code == JPEGZ_FINDING_UNMAPPED) {
+            printf(" %s(leaf %u)%s", color_dim(o), f->leaf_code, color_reset(o));
+        }
         if (has_offset) {
             printf(" %s@%lld%s", color_dim(o), (long long)f->offset, color_reset(o));
         }
@@ -243,24 +271,30 @@ static void print_human(const char *path, const jpegz_validation_report_t *r,
     }
 }
 
-static void print_json(const char *path, const jpegz_validation_report_t *r) {
+static void print_json(const char *path, const jpegz_strict_result_t *r) {
     printf("{");
     printf("\"file\":");        json_puts(stdout, path);
-    printf(",\"overall\":");    json_puts(stdout, sev_label(r->overall));
+    printf(",\"verdict\":");    json_puts(stdout, verdict_label(r->verdict));
+    printf(",\"format\":");     json_puts(stdout, jpegz_validation_format_name(r->format));
     printf(",\"variant\":");    json_puts(stdout, variant_name(r->variant));
     printf(",\"width\":%u", r->width);
     printf(",\"height\":%u", r->height);
+    printf(",\"frames_validated\":%u", r->frames_validated);
     printf(",\"findings\":[");
     for (size_t i = 0; i < r->findings_len; i++) {
-        const jpegz_finding_t *f = &r->findings[i];
+        const jpegz_strict_finding_t *f = &r->findings[i];
         if (i) printf(",");
         printf("{\"severity\":");
         json_puts(stdout, sev_label(f->severity));
         printf(",\"code\":");
         json_puts(stdout, jpegz_finding_code_name(f->code));
         printf(",\"code_number\":%d", (int)f->code);
+        printf(",\"leaf_code\":%u", f->leaf_code);
         if (f->offset != INT64_MIN) printf(",\"offset\":%lld", (long long)f->offset);
         else printf(",\"offset\":null");
+        if (f->host_offset != INT64_MIN) printf(",\"host_offset\":%lld", (long long)f->host_offset);
+        else printf(",\"host_offset\":null");
+        printf(",\"offset_is_exact\":%s", f->offset_is_exact ? "true" : "false");
         printf(",\"detail\":");
         if (f->detail) json_puts(stdout, f->detail); else printf("null");
         printf("}");
@@ -320,10 +354,24 @@ static void print_help(void) {
         "  Later options override earlier ones. Non-positional options may\n"
         "  appear in any order.\n"
         "\n"
+        "VERDICTS:\n"
+        "  valid          no problems found\n"
+        "  corrupt        the file is damaged\n"
+        "  unsupported    well-formed, but uses a feature jpegz cannot check\n"
+        "  indeterminate  no conclusion reached (unrecognized container,\n"
+        "                 resource limit, or an untyped validator error)\n"
+        "\n"
         "EXIT CODES:\n"
-        "  0  every input validated (pass / info / warn)\n"
-        "  1  at least one input FAILED validation\n"
+        "  0  every input was valid\n"
+        "  1  at least one input was CORRUPT\n"
         "  2  usage or I/O error\n"
+        "  3  nothing corrupt, but at least one input was unsupported or\n"
+        "     indeterminate\n"
+        "\n"
+        "FORMATS:\n"
+        "  JPEG and JPEG-LS (T.81 / T.87), JPEG 2000 (T.800, via jp2z), and\n"
+        "  JPEG XL (ISO/IEC 18181, via libjxlz). The container is detected\n"
+        "  from its signature; you do not have to say which you have.\n"
         "\n"
         "Validation only by design; jpegz does not decode or convert here.\n");
 }
@@ -421,10 +469,8 @@ int main(int argc, char **argv) {
         uint8_t *data = read_all(path, &len);
         if (!data) { exit_code = EXIT_USAGE; continue; }
 
-        jpegz_validation_report_t report = {0};
-        jpegz_status_t rc = looks_like_jp2(data, len)
-            ? jpegz_jp2_validate(data, len, &report)
-            : jpegz_validate(data, len, &report);
+        jpegz_strict_result_t report = {0};
+        jpegz_status_t rc = jpegz_validate_any(data, len, &report);
 
         if (rc != JPEGZ_OK) {
             fprintf(stderr, "jpegz: validation could not run on '%s': %s\n",
@@ -439,11 +485,19 @@ int main(int argc, char **argv) {
             else print_human(path, &report, &opt);
         }
 
-        if (report.overall == JPEGZ_SEVERITY_FAIL && exit_code == EXIT_OK) {
-            exit_code = EXIT_INVALID;
+        /* Corruption is the strongest verdict and must survive being mixed
+         * with inconclusive inputs in one invocation — otherwise a batch run
+         * over a directory could hide a damaged file behind an unsupported
+         * one. EXIT_USAGE, once set by an I/O failure, still wins. */
+        if (report.verdict == JPEGZ_VERDICT_CORRUPT) {
+            if (exit_code == EXIT_OK || exit_code == EXIT_INCONCLUSIVE) {
+                exit_code = EXIT_INVALID;
+            }
+        } else if (report.verdict != JPEGZ_VERDICT_VALID && exit_code == EXIT_OK) {
+            exit_code = EXIT_INCONCLUSIVE;
         }
 
-        jpegz_validation_report_free(&report);
+        jpegz_strict_result_free(&report);
         free(data);
     }
 

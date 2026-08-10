@@ -536,7 +536,9 @@ fn shouldRunCodecCheck(variant: Variant) bool {
         .progressive_arithmetic,
         .lossless_arithmetic,
         => true,
-        .unknown, .jpegls, .jpeg2000 => false,
+        // jpeg_xl never reaches this walker either — `validateAny` routes it
+        // to libjxlz before any T.81 marker parsing happens.
+        .unknown, .jpegls, .jpeg2000, .jpeg_xl => false,
     };
 }
 

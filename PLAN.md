@@ -246,12 +246,41 @@ A JXL band must be allocated the same way.
       2026-07-31 because its old title ("...on a new project") made it read
       as inapplicable to an established repo. **Do not re-document the lesson
       here; consult memories first.**
-- [ ] **U2 — `jpegz.validateAny(data)`** container sniffer (SOI / `FF4F FF51`
-      J2K / `jP  ` JP2 box / `FF0A` JXL codestream / `ftypjxl` ISOBMFF) →
-      one report type, one call for validate.
-- [ ] **U3 — libjxlz structured `validate()`** + reserved FindingCode band.
+- [x] **U2 — `jpegz.sniff()` + `jpegz.validateAny()`.** _(2026-08-10 EDT)_
+      One call for the whole family: SOI → jpegz's cleanroom walker, `jP  `
+      box / `FF4F` SOC → jp2z, `JXL ` box / `FF0A` → libjxlz. All legs answer
+      in one `StrictValidationResult`.
+
+      **The JP2 and JXL signature boxes differ ONLY at bytes 4..8** (`jP  ` vs
+      `JXL `) — same length prefix, same `0D 0A 87 0A` tail. A sniffer keyed on
+      anything else routes every JXL file into the JP2 validator and still
+      passes a single-fixture test, so `sniff` is tested as a classifier over a
+      labeled corpus (6 family members + 8 foreign/degenerate inputs).
+
+      Unrecognized input is `.indeterminate` + `unrecognized_container` (new
+      code 10), never `.valid` (a false negative for every foreign byte string)
+      and never `.corrupt` (unrecognized bytes are not evidence of damage).
+      This retires the CLI's ad-hoc C sniffer, which described a smashed JP2 as
+      `missing_soi` — a T.81 marker that does not exist in T.800.
+
+      Curiosity poke deferred: an optional caller-supplied format *hint*
+      (validate knows the file extension) would let a JP2 with a destroyed
+      signature still route to jp2z for a precise marker-level finding instead
+      of "unrecognized". Not built — no present requirement.
+- [x] **U3 — JPEG XL reachable through the facade.** _(2026-08-10 EDT)_
+      libjxlz's strict validator was already wired at the Zig level by the
+      overnight dispatch; this makes it reachable from `validateAny` and from
+      C. `Variant.jpeg_xl` (10) added so JXL prints like its siblings.
 - [ ] **U4 — validate drops `deps/openjpeg` + `deps/libjxl`**, consumes jpegz
       only. This is the "done" criterion for the whole intent.
+      **It is a 3-repo chain, not a one-repo edit:** validate consumes jpegz
+      *through tiffz* (`../validate/build.zig.zon:126` — tiffz owns the jpegz
+      pin and re-exports it as `tiffz.jpegz`, because two jpegz module
+      instances sharing one root file are rejected by Zig 0.16 with
+      "file exists in modules 'jpegz' and 'jpegz0'"). So: jpegz lands
+      `validateAny` → tiffz bumps its jpegz pin → validate drops both deps and
+      calls `tiffz.jpegz.validateAny`. Note validate consumes the Zig module,
+      NOT the C ABI, so the Zig-level API is what actually unblocks it.
 - [x] **U5a — `jpegz` C CLI shipped, validation-only.** _(2026-07-31 EDT)_
       `src/cli/jpegz.c` + `zig build` target + `tests/cli/validate_cli.bash`
       (22 assertions, wired into `zig build test` → `./test`). Human output

@@ -40,6 +40,50 @@ External consumers                 ──► C FFI ─────────�
 
 Sibling Zig libraries are consumed as Zig modules, preserving type safety and
 avoiding a Zig-to-C-to-Zig round trip. jpegz remains the outward-facing C ABI.
+
+### One call for the whole family
+
+`validateAny` sniffs the container and routes to the validator that owns it, so
+a consumer gets JPEG, JPEG-LS, JPEG 2000 and JPEG XL coverage without linking
+three libraries or reconciling three finding registries:
+
+```zig
+var result = try jpegz.validateAny(allocator, bytes);
+defer result.deinit(allocator);
+switch (result.verdict) { .valid, .corrupt, .unsupported, .indeterminate => ... }
+```
+
+```c
+jpegz_strict_result_t r = {0};
+if (jpegz_validate_any(data, len, &r) == JPEGZ_OK) { /* r.verdict, r.findings */ }
+jpegz_strict_result_free(&r);
+```
+
+The verdict is deliberately four-way. `unsupported` (well-formed, uses a feature
+the validator does not cover) and `indeterminate` (no conclusion reached) are
+real answers — collapsing either into pass/fail turns a feature jpegz cannot
+check into either a false clean bill of health or a false accusation of damage.
+Unrecognized input is `indeterminate`, never `corrupt`: bytes that match no
+JPEG-family signature are not evidence of damage.
+
+Each finding keeps the originating validator's own code in `leaf_code`
+alongside jpegz's mapped `code`, so a code jpegz has no name for is still
+reportable verbatim against jp2z or libjxlz.
+
+### Two archives, one header
+
+C consumers link whichever matches their needs — never both, since the symbol
+sets do not overlap:
+
+| Archive | Provides | C dependencies |
+|---|---|---|
+| `libjpegz-validate.a` | validation + the strict facade | Brotli only |
+| `libjpegz.a` | the above **plus** decode (pixels) | libjpeg-turbo, OpenJPEG, CharLS |
+
+A validator, integrity checker, or triage tool wants the small one; only
+something that needs actual pixels needs the large one. The `jpegz` CLI links
+the small one, so it carries no external JPEG-family decoder at all — the same
+guarantee `checks.validator-closure` enforces for the closure proof binary.
 The validation-only production target is closure-tested to exclude libjpeg,
 OpenJPEG, CharLS, upstream libjxl, and djxl; libjxlz uses Brotli only for JXL
 container metadata. See `docs/VALIDATION_FACADE_EVIDENCE.md` for the exact pins,

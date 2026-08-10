@@ -12,7 +12,28 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <assert.h>
+
 #include "jpegz_core.h"
+
+/* The strict-result structs are declared TWICE — once as a Zig `extern struct`
+ * in src/ffi/c_api.zig, once as a C struct here in the header. Nothing makes
+ * the compiler compare them, so a field added on one side only would not be a
+ * compile error: it would be silent memory corruption at the ABI boundary,
+ * showing up as garbage offsets or a wild `detail` pointer. Pin the layout
+ * mechanically. Update these ONLY alongside a deliberate ABI change. */
+/* 4x int/uint32 (16) + 2x int64 (16) + int (4) + 4 pad + pointer (8) = 48. */
+static_assert(sizeof(jpegz_strict_finding_t) == 48,
+              "jpegz_strict_finding_t layout changed — sync src/ffi/c_api_validate.zig");
+static_assert(offsetof(jpegz_strict_finding_t, offset) == 16,
+              "jpegz_strict_finding_t.offset moved — sync src/ffi/c_api_validate.zig");
+static_assert(offsetof(jpegz_strict_finding_t, detail) == 40,
+              "jpegz_strict_finding_t.detail moved — sync src/ffi/c_api_validate.zig");
+/* 6x 4-byte scalars (24) + pointer (8) + size_t (8) = 40. */
+static_assert(sizeof(jpegz_strict_result_t) == 40,
+              "jpegz_strict_result_t layout changed — sync src/ffi/c_api_validate.zig");
+static_assert(offsetof(jpegz_strict_result_t, findings) == 24,
+              "jpegz_strict_result_t.findings moved — sync src/ffi/c_api_validate.zig");
 
 /* baseline_2x2_rgb.jpg, hand-converted from the binary file via xxd. */
 static const unsigned char baseline_2x2_rgb[] = {
@@ -252,6 +273,75 @@ int main(void) {
         ASSERT(rc != JPEGZ_OK, "findings_sink_get rejects out-of-range idx");
 
         jpegz_findings_sink_free(sink);
+    }
+
+    /* ── Strict JPEG-family facade through the ABI ─────────────────
+     *
+     * The Zig core gained a four-way verdict and family-wide routing; this
+     * asserts a C consumer can actually reach them. Without these, `validate`
+     * would have to link jp2z and libjxlz itself, which is the fragmentation
+     * the facade exists to end. */
+    {
+        static const uint8_t jp2_sig[] = {
+            0x00, 0x00, 0x00, 0x0C, 'j', 'P', ' ', ' ', 0x0D, 0x0A, 0x87, 0x0A
+        };
+        static const uint8_t jxl_sig[] = {
+            0x00, 0x00, 0x00, 0x0C, 'J', 'X', 'L', ' ', 0x0D, 0x0A, 0x87, 0x0A
+        };
+        static const uint8_t png_sig[] = { 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
+
+        /* Sniffing is a classifier, so assert over a set. The JP2 and JXL
+         * boxes differ only at bytes 4..8 — a sniffer that keys on anything
+         * else still passes a single-format check. */
+        ASSERT(jpegz_sniff(baseline_2x2_rgb, baseline_2x2_rgb_len) == JPEGZ_FORMAT_JPEG,
+               "sniff: T.81 stream is JPEG");
+        ASSERT(jpegz_sniff(jp2_sig, sizeof jp2_sig) == JPEGZ_FORMAT_JPEG2000,
+               "sniff: JP2 signature box is JPEG 2000");
+        ASSERT(jpegz_sniff(jxl_sig, sizeof jxl_sig) == JPEGZ_FORMAT_JPEG_XL,
+               "sniff: JXL signature box is JPEG XL");
+        ASSERT(jpegz_sniff(png_sig, sizeof png_sig) == JPEGZ_FORMAT_UNKNOWN,
+               "sniff: PNG belongs to no JPEG format");
+
+        jpegz_strict_result_t sr = {0};
+        jpegz_status_t src = jpegz_validate_any(baseline_2x2_rgb, baseline_2x2_rgb_len, &sr);
+        ASSERT(src == JPEGZ_OK, "validate_any returns OK on a good JPEG");
+        ASSERT(sr.verdict == JPEGZ_VERDICT_VALID, "good JPEG is VALID");
+        ASSERT(sr.format == JPEGZ_FORMAT_JPEG, "good JPEG routed to the JPEG validator");
+        ASSERT(sr.width == 2 && sr.height == 2, "dimensions survive the strict ABI");
+        jpegz_strict_result_free(&sr);
+
+        /* Unrecognized input must not read as clean. */
+        jpegz_strict_result_t ur = {0};
+        ASSERT(jpegz_validate_any(png_sig, sizeof png_sig, &ur) == JPEGZ_OK,
+               "validate_any returns OK on foreign bytes");
+        ASSERT(ur.verdict == JPEGZ_VERDICT_INDETERMINATE,
+               "foreign bytes are INDETERMINATE, not VALID and not CORRUPT");
+        ASSERT(ur.format == JPEGZ_FORMAT_UNKNOWN, "foreign bytes have no format");
+        ASSERT(ur.findings_len == 1, "an indeterminate result still explains itself");
+        ASSERT(strcmp(jpegz_finding_code_name(ur.findings[0].code),
+                      "unrecognized_container") == 0,
+               "the explanation is unrecognized_container");
+        jpegz_strict_result_free(&ur);
+
+        /* A truncated JPEG is genuine damage — the gate must be able to fire. */
+        jpegz_strict_result_t cr = {0};
+        ASSERT(jpegz_validate_any(baseline_2x2_rgb, baseline_2x2_rgb_len / 2, &cr) == JPEGZ_OK,
+               "validate_any returns OK on a truncated JPEG");
+        ASSERT(cr.verdict == JPEGZ_VERDICT_CORRUPT, "a truncated JPEG is CORRUPT");
+        ASSERT(cr.findings_len > 0, "a corrupt verdict names at least one finding");
+        jpegz_strict_result_free(&cr);
+
+        ASSERT(strcmp(jpegz_verdict_name(JPEGZ_VERDICT_VALID), "valid") == 0,
+               "verdict names are stable strings");
+        ASSERT(strcmp(jpegz_verdict_name(JPEGZ_VERDICT_INDETERMINATE), "indeterminate") == 0,
+               "indeterminate has its own name");
+        ASSERT(strcmp(jpegz_validation_format_name(JPEGZ_FORMAT_JPEG_XL), "jpeg_xl") == 0,
+               "format names are stable strings");
+
+        /* Freeing a zero-initialized result is a no-op, not a crash. */
+        jpegz_strict_result_t zeroed = {0};
+        jpegz_strict_result_free(&zeroed);
+        ASSERT(zeroed.findings_len == 0, "freeing a zeroed strict result is safe");
     }
 
     printf("PASS: jpegz C FFI smoke (%d assertions, decode + streaming + validate + findings)\n",

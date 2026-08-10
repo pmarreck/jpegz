@@ -156,3 +156,125 @@ test "JPEG XL facade preserves leaf identity and exact host-relative offset" {
     try std.testing.expectEqual(@as(?u64, 91), finding.host_offset);
     try std.testing.expect(finding.offset_is_exact);
 }
+
+// ── U2: family-wide container sniffing + one-call validation ──────────
+//
+// A sniffer is a FILTER, so these test it as a classifier over sets
+// (sensitivity + specificity corpora) rather than as a predicate over one
+// happy example. A sniffer that answered `.jpeg` unconditionally would pass
+// any single positive case.
+
+test "sniff classifies the whole JPEG family and rejects foreign containers" {
+	const Case = struct {
+		label: []const u8,
+		bytes: []const u8,
+		expected: jpegz.ValidationFormat,
+	};
+	const zeros = [_]u8{0} ** 16;
+	const cases = [_]Case{
+		// Sensitivity — every family member jpegz claims to cover.
+		.{ .label = "T.81 baseline JPEG", .bytes = @embedFile("fixtures/baseline_4x4_rgb_444.jpg"), .expected = .jpeg },
+		.{ .label = "T.87 JPEG-LS", .bytes = @embedFile("fixtures/jpegls_4x4_gray8.jls"), .expected = .jpeg },
+		.{ .label = "T.800 JP2 container", .bytes = @embedFile("fixtures/jp2_8x8_rgb.jp2"), .expected = .jpeg2000 },
+		.{ .label = "T.800 raw J2K codestream", .bytes = &[_]u8{ 0xFF, 0x4F, 0xFF, 0x51 }, .expected = .jpeg2000 },
+		// SOC alone decides. `file(1)` keys on SOC+SIZ, but a codestream whose
+		// SIZ is damaged is exactly the case worth routing to jp2z: it answers
+		// with a precise marker-level finding, where "unrecognized container"
+		// would throw away everything the first two bytes already told us.
+		.{ .label = "J2K codestream with a smashed SIZ", .bytes = &[_]u8{ 0xFF, 0x4F, 0x00, 0x00 }, .expected = .jpeg2000 },
+		.{ .label = "18181 JXL bare codestream", .bytes = @embedFile("fixtures/jxl_delta_palette_valid.jxl"), .expected = .jpeg_xl },
+		.{ .label = "18181 JXL ISOBMFF container", .bytes = @embedFile("fixtures/jxl_patches_lossless_unsupported.jxl"), .expected = .jpeg_xl },
+		// Specificity — a classifier that claims everything is useless.
+		.{ .label = "PNG", .bytes = "\x89PNG\r\n\x1a\n", .expected = .unknown },
+		.{ .label = "GIF89a", .bytes = "GIF89a", .expected = .unknown },
+		.{ .label = "PDF", .bytes = "%PDF-1.7", .expected = .unknown },
+		.{ .label = "TIFF little-endian", .bytes = "II\x2a\x00", .expected = .unknown },
+		.{ .label = "all zeros", .bytes = &zeros, .expected = .unknown },
+		.{ .label = "empty input", .bytes = "", .expected = .unknown },
+		.{ .label = "lone 0xFF", .bytes = &[_]u8{0xFF}, .expected = .unknown },
+		.{ .label = "0xFF then a foreign second byte", .bytes = &[_]u8{ 0xFF, 0x00 }, .expected = .unknown },
+	};
+	for (cases) |case| {
+		const got = jpegz.sniff(case.bytes);
+		if (got != case.expected) {
+			std.debug.print("{s}: expected {t}, found {t}\n", .{ case.label, case.expected, got });
+			return error.TestExpectedEqual;
+		}
+	}
+}
+
+test "sniff separates the JP2 and JXL signature boxes that differ only in type" {
+	// Both containers open with a 12-byte box: length 0x0000000C, a 4-byte
+	// type, then 0D 0A 87 0A. ONLY bytes 4..8 tell them apart ("jP  " vs
+	// "JXL "), so a sniffer keyed on the length or the trailing bytes routes
+	// every JXL file into the JPEG 2000 validator and still looks correct on
+	// a single-fixture test.
+	const jp2 = @embedFile("fixtures/jp2_8x8_rgb.jp2");
+	const jxl = @embedFile("fixtures/jxl_patches_lossless_unsupported.jxl");
+	try std.testing.expect(std.mem.eql(u8, jp2[0..4], jxl[0..4]));
+	try std.testing.expect(std.mem.eql(u8, jp2[8..12], jxl[8..12]));
+	try std.testing.expect(!std.mem.eql(u8, jp2[4..8], jxl[4..8]));
+	try std.testing.expectEqual(jpegz.ValidationFormat.jpeg2000, jpegz.sniff(jp2));
+	try std.testing.expectEqual(jpegz.ValidationFormat.jpeg_xl, jpegz.sniff(jxl));
+
+	// Same frame, foreign type: belongs to neither.
+	var foreign = jp2[0..12].*;
+	@memcpy(foreign[4..8], "ftyp");
+	try std.testing.expectEqual(jpegz.ValidationFormat.unknown, jpegz.sniff(&foreign));
+}
+
+test "validateAny routes each family member to the validator that owns it" {
+	const Case = struct {
+		label: []const u8,
+		bytes: []const u8,
+		format: jpegz.ValidationFormat,
+		verdict: jpegz.StrictVerdict,
+	};
+	const cases = [_]Case{
+		.{ .label = "baseline JPEG", .bytes = @embedFile("fixtures/baseline_4x4_rgb_444.jpg"), .format = .jpeg, .verdict = .valid },
+		.{ .label = "JP2", .bytes = @embedFile("fixtures/jp2_8x8_rgb.jp2"), .format = .jpeg2000, .verdict = .valid },
+		.{ .label = "JXL known-good", .bytes = @embedFile("fixtures/jxl_delta_palette_valid.jxl"), .format = .jpeg_xl, .verdict = .valid },
+		.{ .label = "JXL known-unsupported", .bytes = @embedFile("fixtures/jxl_patches_lossless_unsupported.jxl"), .format = .jpeg_xl, .verdict = .unsupported },
+	};
+	for (cases) |case| {
+		var result = try jpegz.validateAny(std.testing.allocator, case.bytes);
+		defer result.deinit(std.testing.allocator);
+		if (result.format != case.format or result.verdict != case.verdict) {
+			std.debug.print("{s}: expected {t}/{t}, found {t}/{t}\n", .{
+				case.label, case.format, case.verdict, result.format, result.verdict,
+			});
+			return error.TestExpectedEqual;
+		}
+	}
+}
+
+test "validateAny calls an unrecognized container indeterminate, never valid" {
+	// `.valid` here would be a false negative for every non-JPEG byte string
+	// on disk; `.corrupt` would be a false positive, since unrecognized bytes
+	// are not evidence of damage. Only `.indeterminate` is honest.
+	const png = "\x89PNG\r\n\x1a\n\x00\x00\x00\x0DIHDR";
+	var result = try jpegz.validateAny(std.testing.allocator, png);
+	defer result.deinit(std.testing.allocator);
+	try std.testing.expectEqual(jpegz.ValidationFormat.unknown, result.format);
+	try std.testing.expectEqual(jpegz.StrictVerdict.indeterminate, result.verdict);
+	try std.testing.expect(!result.isValid());
+	try std.testing.expectEqual(@as(usize, 1), result.findings.items.len);
+	try std.testing.expectEqual(jpegz.FindingCode.unrecognized_container, result.findings.items[0].code.?);
+}
+
+test "a JP2 with a destroyed signature box is not misdiagnosed as a JPEG missing SOI" {
+	// The C CLI's ad-hoc sniffer fell through to the JPEG path here and
+	// reported `missing_soi — JPEG must start with SOI marker`, naming a
+	// T.81 marker that does not exist anywhere in T.800. Routing must never
+	// invent a format the bytes never claimed.
+	const good = @embedFile("fixtures/jp2_8x8_rgb.jp2");
+	var smashed = good.*;
+	@memset(smashed[0..12], 0);
+	var result = try jpegz.validateAny(std.testing.allocator, &smashed);
+	defer result.deinit(std.testing.allocator);
+	try std.testing.expect(result.format != .jpeg);
+	try std.testing.expect(!result.isValid());
+	for (result.findings.items) |finding| {
+		if (finding.code) |code| try std.testing.expect(code != .missing_soi);
+	}
+}

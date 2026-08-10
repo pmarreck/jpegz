@@ -240,6 +240,26 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
+    // Validation-only archive: same header, same validation symbols, but its
+    // module graph links NO external JPEG-family decoder — so it bundles no
+    // nested system `.a` members. That is what makes it linkable at all once
+    // the ABI reaches the JXL leg (LLD cannot use nested archive members and
+    // Zig escalates its warning to an error), and it gives any validation-only
+    // consumer the closure guarantee `checks.validator-closure` already
+    // enforces for the probe. Rationale: src/ffi/c_common.zig.
+    const validation_lib_root_mod = b.createModule(.{
+        .root_source_file = b.path("src/validation_lib_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    validation_lib_root_mod.addImport("jpegz", jpegz_validation_mod);
+    const validation_lib = b.addLibrary(.{
+        .name = "jpegz-validate",
+        .linkage = .static,
+        .root_module = validation_lib_root_mod,
+    });
+    b.installArtifact(validation_lib);
+
     // ============================================================
     // C ABI: install include/jpegz_core.h (curated) and generate
     // include/jpegz_errno.h (auto from src/core/errors.zig).
@@ -396,6 +416,11 @@ pub fn build(b: *std.Build) void {
     // test target — that would put their files in two modules and
     // Zig 0.16 rejects it).
     jpegz_mod.addImport("jpegls_bitstream", jpegls_bitstream_mod);
+    // The validation-only module needs it too: `validateAny`'s T.81/T.87 leg
+    // runs the same cleanroom walker, and the JPEG family is the largest thing
+    // the facade covers. Pure Zig, so the no-external-validator closure gate
+    // is unaffected — `tests/cli/no_c_consumer.bash` proves that mechanically.
+    jpegz_validation_mod.addImport("jpegls_bitstream", jpegls_bitstream_mod);
 
     // Cleanroom decoder modules (baseline.zig etc.) are tested
     // implicitly via the dispatch in src/jpegz.zig — when a fixture
@@ -563,6 +588,11 @@ pub fn build(b: *std.Build) void {
     if (with_libjpeg_oracle) c_smoke_mod.linkSystemLibrary("jpeg", .{});
     if (opt_openjpeg_lib != null) c_smoke_mod.linkSystemLibrary("openjp2", .{});
     c_smoke_mod.link_libcpp = true; // libjpegz.a pulls in vendored charls (C++)
+    // The full archive now also carries the validation half, whose JXL leg
+    // reaches libjxlz's Brotli calls for container metadata. This suite is the
+    // one place that exercises BOTH ABI halves against one library, so it is
+    // the gate that would catch the two archives' symbol sets diverging.
+    linkBrotli(c_smoke_mod, brotli_lib_dir);
     if (opt_libjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
     if (opt_openjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
     const c_smoke = b.addExecutable(.{
@@ -593,18 +623,19 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    if (with_libjpeg_oracle) cli_mod.linkSystemLibrary("jpeg", .{});
-    if (opt_openjpeg_lib != null) cli_mod.linkSystemLibrary("openjp2", .{});
-    cli_mod.link_libcpp = true; // libjpegz.a pulls in vendored charls (C++)
-    if (opt_libjpeg_lib) |p| cli_mod.addLibraryPath(.{ .cwd_relative = p });
-    if (opt_openjpeg_lib) |p| cli_mod.addLibraryPath(.{ .cwd_relative = p });
+    // The CLI is validation-only by design, so it links the validation-only
+    // archive: no libjpeg, no openjpeg, no CharLS, no libc++. Brotli is the
+    // one C dependency it keeps, because libjxlz reads Brotli-compressed JXL
+    // container metadata. Linking the full `lib` here instead would drag in
+    // the nested system archives that LLD refuses and Zig then fails on.
+    linkBrotli(cli_mod, brotli_lib_dir);
     cli_mod.addCSourceFile(.{
         .file = b.path("src/cli/jpegz.c"),
         .flags = &.{ "-std=c23", "-Wall", "-Wextra", "-Wpedantic" },
     });
     cli_mod.addIncludePath(b.path("include"));
     cli_mod.addIncludePath(generated_errno_h.dirname());
-    cli_mod.linkLibrary(lib);
+    cli_mod.linkLibrary(validation_lib);
 
     const cli_exe = b.addExecutable(.{
         .name = "jpegz",

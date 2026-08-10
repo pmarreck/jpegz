@@ -22,12 +22,55 @@ pub const StrictVerdict = enum(u8) {
 pub const ValidatorSource = enum(u8) {
     jp2z,
     libjxlz,
+    /// jpegz's own cleanroom T.81 / T.87 validator. Appended 2026-08-06 when
+    /// `validateAny` began routing the JPEG leg through this same result type.
+    jpegz,
 };
 
 pub const ValidationFormat = enum(u8) {
     jpeg2000,
     jpeg_xl,
+    /// T.81 and T.87 both open with SOI and are validated by the same walker,
+    /// so they share one format here; `ValidationReport.variant` is what
+    /// separates baseline from progressive from JPEG-LS.
+    jpeg,
+    /// No JPEG-family signature matched. Distinct from every verdict: this
+    /// says which validator ran (none), not whether the bytes are damaged.
+    unknown,
 };
+
+/// The 12-byte JP2 signature box (T.800 §I.5.1) and its JPEG XL counterpart
+/// (18181-2 §3.1). They are byte-identical except for the 4-byte type field,
+/// which is the only thing that may be used to tell them apart.
+const jp2_signature_box = [_]u8{
+    0x00, 0x00, 0x00, 0x0C, 'j', 'P', ' ', ' ', 0x0D, 0x0A, 0x87, 0x0A,
+};
+const jxl_signature_box = [_]u8{
+    0x00, 0x00, 0x00, 0x0C, 'J', 'X', 'L', ' ', 0x0D, 0x0A, 0x87, 0x0A,
+};
+
+/// Classify a byte string into the JPEG-family container that owns it, using
+/// magic numbers only — no parsing, no allocation, no I/O.
+///
+/// This is the routing decision `validateAny` makes, split out so it can be
+/// tested as a classifier over a labeled corpus (both sensitivity and
+/// specificity) rather than as a predicate over one happy example. Answering
+/// `.unknown` is a real answer: it keeps foreign bytes from being handed to a
+/// validator that would then describe them in a vocabulary they never claimed.
+pub fn sniff(data: []const u8) ValidationFormat {
+    if (data.len >= jp2_signature_box.len) {
+        const head = data[0..jp2_signature_box.len];
+        if (std.mem.eql(u8, head, &jp2_signature_box)) return .jpeg2000;
+        if (std.mem.eql(u8, head, &jxl_signature_box)) return .jpeg_xl;
+    }
+    if (data.len >= 2 and data[0] == 0xFF) return switch (data[1]) {
+        0xD8 => .jpeg, // SOI — T.81 §B.1.1.3, shared by T.87
+        0x4F => .jpeg2000, // SOC — T.800 §A.4.1
+        0x0A => .jpeg_xl, // bare codestream — 18181-1 §9.1
+        else => .unknown,
+    };
+    return .unknown;
+}
 
 pub const StrictFinding = struct {
     source: ValidatorSource,
@@ -43,6 +86,12 @@ pub const StrictFinding = struct {
 pub const StrictValidationResult = struct {
     verdict: StrictVerdict,
     format: ValidationFormat,
+    /// Which storage variant was detected inside `format`. `format` is the
+    /// routing answer (which validator ran); this is the codec detail beneath
+    /// it — baseline vs progressive vs arithmetic vs JPEG-LS all sniff as
+    /// `.jpeg`, and collapsing them would make the report less specific than
+    /// the severity-rated one it replaces.
+    variant: errors.Variant = .unknown,
     width: ?u32 = null,
     height: ?u32 = null,
     frames_validated: u32 = 0,
@@ -145,6 +194,7 @@ pub fn validateJp2(
     var result = StrictValidationResult{
         .verdict = .valid,
         .format = .jpeg2000,
+        .variant = .jpeg2000,
         .width = leaf.width,
         .height = leaf.height,
     };
@@ -197,6 +247,7 @@ pub fn validateJxl(
     var result = StrictValidationResult{
         .verdict = mapped.verdict,
         .format = .jpeg_xl,
+        .variant = .jpeg_xl,
         .frames_validated = leaf.frames_validated,
     };
     errdefer result.deinit(allocator);

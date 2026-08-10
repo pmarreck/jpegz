@@ -39,3 +39,32 @@ JPEG XL container metadata.
 The proof ELF is fully static on x86_64 Linux. The ordinary jpegz decode target
 still uses its documented OpenJPEG path; the closure claim applies only to the
 selected strict validation target.
+
+## Family-wide routing and the archive split (2026-08-10)
+
+`jpegz.sniff` / `jpegz.validateAny` route the whole family from one call, and
+`jpegz_validate_any` exposes it to C. Twelve facade suites now pass: the seven
+above plus family-wide sniffing as a labeled classifier (6 family members and 8
+foreign or degenerate inputs), the JP2-vs-JXL signature-box separation, routing
+per format, unrecognized input staying indeterminate, and a destroyed JP2
+signature no longer being diagnosed in T.81 vocabulary.
+
+Exposing the facade through the C ABI forced an archive split. A Zig static
+library bundles the system static archives its module graph links; LLD cannot
+use those nested members and only warns, which Zig escalates to a hard error as
+soon as anything makes the linker scan that deep. Reaching the JPEG XL leg was
+enough. jpegz therefore ships `libjpegz-validate.a` (validation only, Brotli as
+its sole C dependency) alongside the full `libjpegz.a`.
+
+The `jpegz` CLI links the validation archive, so it now carries the same
+closure guarantee as the proof ELF. Measured on the native binary: `opj_` 0,
+`jpeg_` 0, `charls` 0, `djxl` 0; dynamic dependencies are Brotli, libc, and
+libm only. Its 68 `JxlDecoder*` symbols are libjxlz's own pure-Zig code, and
+its `decode.jpegls.*` symbols are jpegz's own cleanroom T.87 walker.
+
+`tests/cli/smoke.c` links the FULL archive, exercising both ABI halves against
+one library — the gate that would catch the two archives' symbol sets
+diverging. It also pins both strict struct layouts with `static_assert`, since
+each struct is declared twice (Zig `extern struct` and C) with nothing
+otherwise comparing them; a field added on one side only would be silent memory
+corruption rather than a compile error.

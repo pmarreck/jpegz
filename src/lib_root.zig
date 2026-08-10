@@ -22,4 +22,9 @@
 
 comptime {
     _ = @import("jpegz").c_abi_force_link;
+    // The validation exports live in their own file so that a second archive
+    // can ship them WITHOUT libjpeg / openjpeg / CharLS (see
+    // `src/validation_lib_root.zig` and `src/ffi/c_common.zig`). The full
+    // library must still export both halves, so force-link both here.
+    _ = @import("jpegz").c_abi_validate_force_link;
 }

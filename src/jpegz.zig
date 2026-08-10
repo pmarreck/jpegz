@@ -470,6 +470,77 @@ pub fn validate(
     return @import("core/validator.zig").validate(allocator, data);
 }
 
+/// Classify a byte string into the JPEG-family container that owns it.
+/// Re-exported from the facade; see `facade_validation.sniff`.
+pub const sniff = facade.sniff;
+
+/// Translate the severity-rated T.81 / T.87 report into the family-wide
+/// four-way result, so a caller reading `validateAny` never has to know which
+/// leg answered. `.warn` and `.info` stay `.valid`: a spec deviation the
+/// decoder recovers from is not corruption, and collapsing the two would make
+/// every JFIF/Adobe quirk in the wild read as damage.
+fn strictFromReport(
+    allocator: Allocator,
+    data: []const u8,
+) error{OutOfMemory}!StrictValidationResult {
+    var report = try validate(allocator, data);
+    defer report.deinit(allocator);
+
+    var result = StrictValidationResult{
+        .verdict = if (report.overall == .fail) .corrupt else .valid,
+        .format = .jpeg,
+        .variant = report.variant,
+        .width = report.width,
+        .height = report.height,
+    };
+    errdefer result.deinit(allocator);
+    try result.findings.ensureTotalCapacity(allocator, report.findings.items.len);
+    for (report.findings.items) |finding| {
+        const detail = if (finding.detail) |value| try allocator.dupe(u8, value) else null;
+        result.findings.appendAssumeCapacity(.{
+            .source = .jpegz,
+            .leaf_code = @intFromEnum(finding.code),
+            .code = finding.code,
+            .severity = finding.severity,
+            .offset = finding.offset,
+            .detail = detail,
+        });
+    }
+    return result;
+}
+
+/// Validate any JPEG-family container in one call, dispatching on the magic
+/// number to the validator that owns it: T.81/T.87 to jpegz's own cleanroom
+/// walker, T.800 to jp2z, and ISO/IEC 18181 to libjxlz. Every leg answers in
+/// the same `StrictValidationResult` vocabulary, which is the entire point of
+/// the facade — a consumer gets the whole family without linking three
+/// libraries or reconciling three finding registries.
+///
+/// Unrecognized input is `.indeterminate` with `unrecognized_container`, never
+/// `.valid` (a false negative for every foreign byte string) and never
+/// `.corrupt` (unrecognized bytes are not evidence of damage).
+pub fn validateAny(
+    allocator: Allocator,
+    data: []const u8,
+) error{OutOfMemory}!StrictValidationResult {
+    return switch (facade.sniff(data)) {
+        .jpeg => strictFromReport(allocator, data),
+        .jpeg2000 => jpeg2000.strictValidate(allocator, data),
+        .jpeg_xl => jpegxl.validate(allocator, data, jpegxl.default_options),
+        .unknown => blk: {
+            var result = StrictValidationResult{ .verdict = .indeterminate, .format = .unknown };
+            errdefer result.deinit(allocator);
+            try result.findings.append(allocator, .{
+                .source = .jpegz,
+                .leaf_code = @intFromEnum(FindingCode.unrecognized_container),
+                .code = .unrecognized_container,
+                .severity = .warn,
+            });
+            break :blk result;
+        },
+    };
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // 5. JPEG 2000 sub-namespace
 // ─────────────────────────────────────────────────────────────────────
@@ -654,6 +725,15 @@ pub const jpegxl = struct {
 /// Guarded by `tests/cli/no_c_consumer.bash`, which compiles a
 /// validate-only consumer with no C headers or libraries in scope.
 pub const c_abi_force_link = @import("ffi/c_api.zig");
+
+/// Force-link handle for the VALIDATION half of the C ABI
+/// (`ffi/c_api_validate.zig`). Referenced by both static-library roots: the
+/// full `libjpegz.a` and the C-library-free `libjpegz-validate.a`, so the two
+/// agree symbol-for-symbol on the validation surface.
+///
+/// Same lazy-`pub const` discipline as above — a `comptime` block here would
+/// re-poison every Zig consumer with the JXL and JP2 leaf graphs.
+pub const c_abi_validate_force_link = @import("ffi/c_api_validate.zig");
 
 /// Internal test-only entry points. Not part of the public ABI; meant
 /// for analysis tools (e.g., scratch/cleanroom_diff.zig) that need to

@@ -151,7 +151,10 @@ assert_contains "$combined" "truncated" "diagnostic names the truncation"
 
 out=; err=; rc=
 capture "$jpegz_cli" --json "$trunc"
-assert_contains "$out" '"overall"' "--json emits an overall verdict"
+# The top-level field is `verdict`, not the old severity `overall`: the facade
+# reports four outcomes, and "unsupported"/"indeterminate" have no severity
+# that would not misrepresent them.
+assert_contains "$out" '"verdict":"corrupt"' "--json emits a top-level verdict"
 assert_contains "$out" '"findings"' "--json emits a findings array"
 assert_contains "$out" '"code"' "--json findings carry a stable code"
 
@@ -214,6 +217,60 @@ out=; err=; rc=
 capture "$jpegz_cli" "$TMPDIR/definitely-does-not-exist-$$.jpg"
 [ "$rc" -ne 0 ] && pass "missing file is rejected" || fail "missing file is rejected" "exited 0"
 [ -n "$err" ] && pass "missing-file error goes to stderr" || fail "missing-file error goes to stderr" "stderr empty"
+
+# ── 9. Whole-family facade: JPEG XL, and honest four-way verdicts ────
+#
+# The CLI used to sniff containers itself, in C, and knew only two of them.
+# Anything it did not recognize fell through to the JPEG path and was
+# described in T.81 vocabulary — a JP2 with a damaged signature box came back
+# as "missing_soi — JPEG must start with SOI marker", naming a marker that
+# does not exist anywhere in T.800. Routing now lives in the library.
+
+# JPEG XL was entirely unreachable from the CLI before the facade.
+out=; err=; rc=
+capture "$jpegz_cli" --simple "$fixtures/jxl_delta_palette_valid.jxl"
+[ "$rc" -eq 0 ] && pass "known-good JPEG XL exits 0" || fail "known-good JPEG XL exits 0" "rc=$rc; $out$err"
+assert_contains "$out" "valid" "known-good JPEG XL reports valid"
+
+# A JXL using a feature libjxlz does not cover is NOT corruption. Reporting it
+# as such would condemn a perfectly good file.
+out=; err=; rc=
+capture "$jpegz_cli" --simple "$fixtures/jxl_patches_lossless_unsupported.jxl"
+assert_contains "$out" "unsupported" "unsupported JXL says unsupported, not corrupt"
+[ "$rc" -ne 1 ] && pass "unsupported JXL does not exit as corrupt" || fail "unsupported JXL does not exit as corrupt" "rc=1"
+
+# The motivating bug: a smashed JP2 signature must not be diagnosed in JPEG terms.
+smashed="$TMPDIR/jpegz-cli-smashed-$$.jp2"
+cp "$fixtures/jp2_8x8_rgb.jp2" "$smashed"
+printf '\0\0\0\0\0\0\0\0\0\0\0\0' | dd of="$smashed" bs=1 seek=0 count=12 conv=notrunc status=none
+out=; err=; rc=
+capture "$jpegz_cli" --simple "$smashed"
+case "$out" in
+*missing_soi*) fail "smashed JP2 is not described as a JPEG missing SOI" "got: $out" ;;
+*) pass "smashed JP2 is not described as a JPEG missing SOI" ;;
+esac
+[ "$rc" -ne 0 ] && pass "smashed JP2 does not exit clean" || fail "smashed JP2 does not exit clean" "rc=0"
+
+# Foreign bytes are inconclusive, not corrupt: jpegz has no evidence of damage.
+foreign="$TMPDIR/jpegz-cli-foreign-$$.bin"
+printf '\211PNG\r\n\032\n' > "$foreign"
+out=; err=; rc=
+capture "$jpegz_cli" --simple "$foreign"
+assert_contains "$out" "indeterminate" "foreign bytes report indeterminate"
+[ "$rc" -eq 3 ] && pass "inconclusive input exits 3, distinct from corrupt" || fail "inconclusive input exits 3, distinct from corrupt" "rc=$rc"
+
+# A corrupt file must still outrank an inconclusive one in the exit code.
+out=; err=; rc=
+capture "$jpegz_cli" --simple "$foreign" "$trunc"
+[ "$rc" -eq 1 ] && pass "corrupt outranks inconclusive in the exit code" || fail "corrupt outranks inconclusive in the exit code" "rc=$rc"
+
+# JSON carries the verdict and the format that answered, for tooling.
+out=; err=; rc=
+capture "$jpegz_cli" --json "$fixtures/jxl_delta_palette_valid.jxl"
+assert_contains "$out" '"verdict":"valid"' "JSON exposes the verdict"
+assert_contains "$out" '"format":"jpeg_xl"' "JSON names the format that answered"
+
+rm -f "$smashed" "$foreign" 2>/dev/null
 
 rm -f "$trunc" "$spaced" 2>/dev/null
 rmdir "$spacedir" 2>/dev/null

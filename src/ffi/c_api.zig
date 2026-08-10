@@ -1,6 +1,12 @@
-//! C ABI surface for jpegz. Defines the `export fn` entry points
-//! consumed by `include/jpegz_core.h`. The Zig core (`src/jpegz.zig`)
-//! is the single implementation; this module is pure marshalling.
+//! Decode half of the C ABI for jpegz. Defines the `export fn` entry points
+//! consumed by `include/jpegz_core.h` for producing pixels; the Zig core
+//! (`src/jpegz.zig`) is the single implementation and this module is pure
+//! marshalling.
+//!
+//! The VALIDATION half lives in `c_api_validate.zig` and is the root of a
+//! separate, C-library-free static archive. See `c_common.zig` for why the
+//! split exists. Symbols are partitioned, never duplicated: anything exported
+//! here must not also be exported there.
 //!
 //! Layout choices documented in
 //! `docs/superpowers/specs/2026-05-04-jpegz-public-api-design.md` § 5.
@@ -8,91 +14,16 @@
 const std = @import("std");
 const errors = @import("../core/errors.zig");
 const jpegz = @import("../jpegz.zig");
+const common = @import("c_common.zig");
 
-// `c_int` is a Zig builtin for the C `int` type — no alias needed.
+// Shared marshalling state — one allocator and one thread-local error slot per
+// artifact, so a decode failure and a validation failure cannot clobber each
+// other's message.
+const c_allocator = common.c_allocator;
+const clearLastError = common.clearLastError;
+const setLastError = common.setLastError;
+const toCStatus = common.toCStatus;
 
-// ─────────────────────────────────────────────────────────────────────
-// Allocator strategy: single global allocator backing all C-allocated
-// memory (pixels, findings, detail strings). Using c_allocator keeps
-// the picture simple — caller-owned C memory uses the C heap.
-// Future: allow caller to supply a custom allocator via an opt struct.
-// ─────────────────────────────────────────────────────────────────────
-const c_allocator = std.heap.c_allocator;
-
-// ─────────────────────────────────────────────────────────────────────
-// Status / error mapping
-// ─────────────────────────────────────────────────────────────────────
-
-/// Exhaustive switch — adding a Zig variant to DecodeError without
-/// updating this is a COMPILE-TIME ERROR. That's the design point:
-/// the Zig declarations are the source of truth, the C ABI is the
-/// formal mirror.
-fn toCStatus(err: errors.DecodeError) c_int {
-    return switch (err) {
-        error.NotImplemented        => -1,
-        error.InvalidMarker         => -2,
-        error.UnsupportedPrecision  => -3,
-        error.TruncatedStream       => -4,
-        error.NotRowStreamable      => -5,
-        error.BackendError          => -6,
-        error.InvalidJp2Codestream  => -7,
-        error.OutOfMemory           => -8,
-        error.CallbackAborted       => -9,
-    };
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Thread-local last-error message
-// ─────────────────────────────────────────────────────────────────────
-//
-// The backing buffer + setter live in `src/core/last_error.zig` so the
-// public Zig API can read the same memory via `jpegz.lastErrorMessage()`
-// without duplicating storage. The two locals below are thin aliases
-// that keep existing call sites in this file unchanged.
-
-const last_error = @import("../core/last_error.zig");
-const clearLastError = last_error.clear;
-const setLastError = last_error.set;
-
-export fn jpegz_last_error_message() [*:0]const u8 {
-    return last_error.cPtr();
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Versioning
-// ─────────────────────────────────────────────────────────────────────
-
-export fn jpegz_version() [*:0]const u8 {
-    return jpegz.version.ptr;
-}
-
-/// Human-readable name for a `jpegz_finding_code_t`, e.g. 3 →
-/// `"truncated_stream"`. Returns a statically-allocated, NUL-terminated
-/// string the caller must NOT free.
-///
-/// Exists so consumers can report a *specific cause* rather than a bare
-/// integer or a generic phrase. Without it every consumer that renders
-/// findings (the jpegz CLI, validate) would hand-maintain its own
-/// code→name table, which silently drifts from `core/errors.zig` the
-/// moment a code is appended — and appending codes is routine, since the
-/// registry is append-only wire format.
-///
-/// The table is generated from the enum by `inline for` over
-/// `@typeInfo(...).fields`, so drift is not merely discouraged but
-/// inexpressible: a new `FindingCode` variant is nameable the instant it
-/// is declared, with no second edit site.
-///
-/// Unknown codes return `"unknown_finding_code"` rather than null or a
-/// garbage pointer. That case is reachable in normal operation, not just
-/// from misuse: findings cross an ABI boundary, so a newer jpegz can hand
-/// an older consumer a code it predates.
-export fn jpegz_finding_code_name(code: c_int) [*:0]const u8 {
-    inline for (@typeInfo(errors.FindingCode).@"enum".fields) |f| {
-        if (code == f.value) return f.name.ptr;
-    }
-    return "unknown_finding_code";
-}
-// ─────────────────────────────────────────────────────────────────────
 // Image — C representation
 // ─────────────────────────────────────────────────────────────────────
 
@@ -425,116 +356,9 @@ export fn jpegz_decode_streaming_rows_ex(
     return doStreamingWithOptions(data, len, options, on_row, ctx, out_metadata);
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Validation — C representation
-// ─────────────────────────────────────────────────────────────────────
-
-const CFinding = extern struct {
-    severity: c_int,
-    code: u32,
-    /// INT64_MIN for "no offset", any other for the byte offset.
-    offset: i64,
-    /// NUL-terminated, owned by the report. NULL = no detail.
-    detail: ?[*:0]const u8,
-};
-
-const OFFSET_NONE: i64 = std.math.minInt(i64);
-
-const CValidationReport = extern struct {
-    overall: c_int,
-    variant: c_int,
-    /// 0 means "not parsed".
-    width: u32,
-    height: u32,
-    findings: [*c]const CFinding,
-    findings_len: usize,
-};
-
-fn buildCFindings(zig_findings: []const jpegz.Finding) ![*c]CFinding {
-    if (zig_findings.len == 0) return null;
-    const arr = try c_allocator.alloc(CFinding, zig_findings.len);
-    errdefer c_allocator.free(arr);
-
-    for (zig_findings, 0..) |f, i| {
-        // For each detail string, allocate a NUL-terminated C copy.
-        var detail_c: ?[*:0]const u8 = null;
-        if (f.detail) |d| {
-            const buf = try c_allocator.alloc(u8, d.len + 1);
-            @memcpy(buf[0..d.len], d);
-            buf[d.len] = 0;
-            detail_c = @ptrCast(buf.ptr);
-        }
-        arr[i] = .{
-            .severity = @intFromEnum(f.severity),
-            .code = @intFromEnum(f.code),
-            .offset = if (f.offset) |o| @intCast(o) else OFFSET_NONE,
-            .detail = detail_c,
-        };
-    }
-    return @ptrCast(arr.ptr);
-}
-
-fn freeCFindings(findings: [*c]const CFinding, len: usize) void {
-    if (findings == null or len == 0) return;
-    // Free detail strings.
-    var i: usize = 0;
-    while (i < len) : (i += 1) {
-        if (findings[i].detail) |d| {
-            const slice = std.mem.span(d);
-            // Free the allocation including the NUL byte.
-            const full = @as([*]u8, @ptrCast(@constCast(d)))[0 .. slice.len + 1];
-            c_allocator.free(full);
-        }
-    }
-    // Free the array itself.
-    const arr_slice = @as([*]const CFinding, findings)[0..len];
-    c_allocator.free(@as([*]CFinding, @constCast(@ptrCast(arr_slice.ptr)))[0..len]);
-}
-
-export fn jpegz_validation_report_free(report: ?*CValidationReport) void {
-    const r = report orelse return;
-    freeCFindings(r.findings, r.findings_len);
-    r.* = std.mem.zeroes(CValidationReport);
-}
-
-fn doValidate(
-    validator: *const fn (std.mem.Allocator, []const u8) error{OutOfMemory}!jpegz.ValidationReport,
-    data: [*c]const u8,
-    len: usize,
-    out_report: ?*CValidationReport,
-) c_int {
-    clearLastError();
-    const out = out_report orelse {
-        setLastError("out_report must not be NULL", .{});
-        return -8; // OUT_OF_MEMORY-adjacent; reuse for invalid-arg-NULL.
-    };
-    const slice: []const u8 = if (data == null or len == 0) &[_]u8{} else data[0..len];
-    var report = validator(c_allocator, slice) catch |err| {
-        setLastError("validate failed: {s}", .{@errorName(err)});
-        return toCStatus(err);
-    };
-    defer report.deinit(c_allocator);
-
-    const c_findings = buildCFindings(report.findings.items) catch {
-        setLastError("OOM building C findings", .{});
-        return -8;
-    };
-
-    out.* = .{
-        .overall = @intFromEnum(report.overall),
-        .variant = @intFromEnum(report.variant),
-        .width = report.width orelse 0,
-        .height = report.height orelse 0,
-        .findings = c_findings,
-        .findings_len = report.findings.items.len,
-    };
-    return 0;
-}
-
-export fn jpegz_validate(data: [*c]const u8, len: usize, out_report: ?*CValidationReport) c_int {
-    return doValidate(jpegz.validate, data, len, out_report);
-}
-
-export fn jpegz_jp2_validate(data: [*c]const u8, len: usize, out_report: ?*CValidationReport) c_int {
-    return doValidate(jpegz.jpeg2000.validate, data, len, out_report);
-}
+// The validation surface (jpegz_validate, jpegz_jp2_validate,
+// jpegz_validate_any, jpegz_sniff, the name lookups and the report/result
+// free functions) lives in `c_api_validate.zig`, which is also the root of the
+// validation-only static library. See `c_common.zig` for why the two archives
+// must be separate. This file owns the decode half exclusively; defining a
+// symbol in both would collide when the full library links them together.

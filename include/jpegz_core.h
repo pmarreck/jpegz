@@ -17,6 +17,21 @@
  * jpegz_validation_report_t) own those pointers. Free them via the
  * matching jpegz_*_free() function. Do NOT free pointers individually.
  *
+ * Linking: one header, two static archives. Pick by what you need.
+ *
+ *   libjpegz-validate.a  Everything in the "Validation" and "Strict
+ *                        JPEG-family facade" sections below. Pure Zig plus
+ *                        Brotli (libjxlz reads Brotli-compressed JXL
+ *                        container metadata) — no libjpeg-turbo, no
+ *                        OpenJPEG, no CharLS, no upstream libjxl.
+ *   libjpegz.a           The above PLUS decode (pixels), which requires
+ *                        libjpeg-turbo, OpenJPEG and CharLS at link time.
+ *
+ * The archives never define the same symbol twice, so link whichever one
+ * matches your needs — not both. A validator, an integrity checker or a
+ * file-triage tool wants the small one; only something that needs actual
+ * pixels needs the large one.
+ *
  * License: MIT. See LICENSE.
  */
 
@@ -280,6 +295,7 @@ typedef enum {
     JPEGZ_VARIANT_LOSSLESS_ARITHMETIC     = 7,
     JPEGZ_VARIANT_JPEGLS                  = 8,
     JPEGZ_VARIANT_JPEG2000                = 9,
+    JPEGZ_VARIANT_JPEG_XL                 = 10,
 } jpegz_variant_t;
 
 typedef struct {
@@ -322,6 +338,102 @@ jpegz_status_t jpegz_jp2_validate(
     size_t                      len,
     jpegz_validation_report_t  *out_report
 );
+
+/* ── Strict JPEG-family facade ─────────────────────────────────────
+ *
+ * One entry point for the whole family: T.81 / T.87 go to jpegz's own
+ * cleanroom walker, T.800 to jp2z, and ISO/IEC 18181 to libjxlz, all
+ * answering in one vocabulary. A consumer gets JPEG, JPEG-LS, JPEG 2000 and
+ * JPEG XL coverage without linking three libraries or reconciling three
+ * finding registries.
+ *
+ * The four-way verdict is the reason this exists alongside the severity-rated
+ * report above. "Unsupported" and "indeterminate" are real answers: collapsing
+ * either into pass/fail turns a feature jpegz cannot check into either a false
+ * clean bill of health or a false accusation of damage.
+ */
+
+typedef enum {
+    JPEGZ_VERDICT_VALID         = 0,
+    JPEGZ_VERDICT_CORRUPT       = 1,
+    /* Well-formed, but uses a feature the validator does not cover. */
+    JPEGZ_VERDICT_UNSUPPORTED   = 2,
+    /* Validation could not reach a conclusion — resource limits, allocation
+     * failure, an untyped leaf error, or an unrecognized container. Never
+     * report this to a user as corruption. */
+    JPEGZ_VERDICT_INDETERMINATE = 3,
+} jpegz_verdict_t;
+
+typedef enum {
+    JPEGZ_FORMAT_JPEG2000 = 0,
+    JPEGZ_FORMAT_JPEG_XL  = 1,
+    /* T.81 and T.87 share one format; `jpegz_variant_t` separates them. */
+    JPEGZ_FORMAT_JPEG     = 2,
+    /* No JPEG-family signature matched, so no validator ran. */
+    JPEGZ_FORMAT_UNKNOWN  = 3,
+} jpegz_validation_format_t;
+
+typedef enum {
+    JPEGZ_VALIDATOR_JP2Z    = 0,
+    JPEGZ_VALIDATOR_LIBJXLZ = 1,
+    JPEGZ_VALIDATOR_JPEGZ   = 2,
+} jpegz_validator_source_t;
+
+/* `code` when the leaf reported something jpegz has no name for. The raw
+ * `leaf_code` is still populated, so a consumer can log it verbatim. */
+#define JPEGZ_FINDING_UNMAPPED (-1)
+
+typedef struct {
+    /* Which validator produced this finding. */
+    int                   source;
+    /* The leaf's own code, preserved verbatim across the translation. */
+    uint32_t              leaf_code;
+    /* jpegz_finding_code_t, or JPEGZ_FINDING_UNMAPPED. */
+    int                   code;
+    jpegz_severity_t      severity;
+    /* INT64_MIN means "not applicable / unknown". */
+    int64_t               offset;
+    /* Offset relative to the enclosing host file, for embedded streams. */
+    int64_t               host_offset;
+    int                   offset_is_exact;
+    /* NUL-terminated, owned by the result; NULL means "no detail". */
+    const char           *detail;
+} jpegz_strict_finding_t;
+
+typedef struct {
+    jpegz_verdict_t               verdict;
+    jpegz_validation_format_t     format;
+    /* The codec detail beneath `format`: baseline, progressive, arithmetic
+     * and JPEG-LS all report format JPEG. JPEGZ_VARIANT_UNKNOWN if undetected. */
+    jpegz_variant_t               variant;
+    /* 0 means "not parsed". */
+    uint32_t                      width;
+    uint32_t                      height;
+    uint32_t                      frames_validated;
+    const jpegz_strict_finding_t *findings;
+    size_t                        findings_len;
+} jpegz_strict_result_t;
+
+/* Classify a byte string by magic number alone. No allocation, no parsing.
+ * Returns JPEGZ_FORMAT_UNKNOWN rather than guessing. */
+jpegz_validation_format_t jpegz_sniff(const uint8_t *data, size_t len);
+
+/* Validate any JPEG-family container, dispatching on jpegz_sniff. Returns
+ * JPEGZ_OK with a populated result even when the verdict is CORRUPT; a
+ * non-OK status means validation could not run at all. */
+jpegz_status_t jpegz_validate_any(
+    const uint8_t          *data,
+    size_t                  len,
+    jpegz_strict_result_t  *out_result
+);
+
+/* Free findings and reset to zero. Safe on a zero-initialized struct. */
+void jpegz_strict_result_free(jpegz_strict_result_t *result);
+
+/* Stable lowercase names ("valid", "corrupt", "unsupported",
+ * "indeterminate" / "jpeg", "jpeg2000", "jpeg_xl", "unknown"). Never NULL. */
+const char *jpegz_verdict_name(int verdict);
+const char *jpegz_validation_format_name(int format);
 
 /* ── FindingsSink: tolerant-decode warning collector ───────────────
  *
