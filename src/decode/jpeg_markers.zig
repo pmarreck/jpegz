@@ -69,11 +69,18 @@ pub fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
     var i: usize = 0;
     while (i < fi.num_components) : (i += 1) {
         const off = pos + 8 + i * 3;
+        // T.81 §B.2.2 Table B.2: Tq selects one of FOUR quantization-table
+        // destinations, but it is a whole byte on disk, so it can name table
+        // 255. The scan decoder indexes `quant_tables[comp.qt_index]` on a
+        // [4] array, so an unchecked value reads out of bounds — same defect
+        // class as `sof_zero_dimension` above.
+        const tq = data[off + 2];
+        if (tq > 3) return fail("sof_bad_quant_selector", error.InvalidMarker);
         fi.components[i] = .{
             .id = data[off],
             .h_factor = @intCast(data[off + 1] >> 4),
             .v_factor = @intCast(data[off + 1] & 0x0F),
-            .qt_index = data[off + 2],
+            .qt_index = tq,
         };
     }
     return fi;

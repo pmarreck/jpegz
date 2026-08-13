@@ -442,11 +442,21 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!void {
         const cs = data[off];
         const td_ta = data[off + 1];
         // Find the matching component in frame.components by ID.
+        // T.81 §B.2.3 Table B.3: Td and Ta select one of FOUR table
+        // destinations, but each is a 4-bit field, so the bytes on disk can
+        // name destination 15. Rejecting that here is load-bearing: the scan
+        // decoder indexes `dc_tables[comp.dc_table]` on a [4] array, so an
+        // unchecked selector is an out-of-bounds read — a panic under
+        // ReleaseSafe (it crashed tiffz's validator on a crafted
+        // JPEG-in-TIFF) and silent UB under ReleaseFast, which is worse.
+        const td = td_ta >> 4;
+        const ta = td_ta & 0x0F;
+        if (td > 3 or ta > 3) return fail("sos_bad_table_selector", error.InvalidMarker);
         var j: usize = 0;
         while (j < frame.num_components) : (j += 1) {
             if (frame.components[j].id == cs) {
-                frame.components[j].dc_table = td_ta >> 4;
-                frame.components[j].ac_table = td_ta & 0x0F;
+                frame.components[j].dc_table = td;
+                frame.components[j].ac_table = ta;
                 break;
             }
         }

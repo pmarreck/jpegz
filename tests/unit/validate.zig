@@ -699,3 +699,68 @@ test "jpeg2000.validate: preserves jp2z's informational codes verbatim" {
     try std.testing.expect(reportHasCode(report, .jp2_uses_5x3_wavelet));
     try std.testing.expect(reportHasCode(report, .jp2_packets_walked_to_end));
 }
+
+// ── Totality: validate must never panic, whatever the bytes say ──────
+//
+// `validate` is the function every consumer reaches for when it does NOT
+// trust its input. A panic is therefore the one failure mode it cannot have:
+// it is uncatchable in Zig, so a single crafted file takes down the whole
+// host process (it took down tiffz's validateAllStripsAndTiles).
+//
+// The defect class: T.81 table-destination selectors are wider than the
+// tables they select. SOF's Tq is a full byte (0..255) and SOS's Td/Ta are
+// 4 bits each (0..15), but all three index 4-element arrays. Any value above
+// 3 indexed straight out of bounds. Same family as `sof_zero_dimension`,
+// which was an OOB crash in color.fancyUpsample.
+
+test "validate reports, never panics, on an out-of-range SOS table selector" {
+	// SOS layout (T.81 §B.2.3): FF DA, Ls(2), Ns(1), then Ns x (Cs, Td|Ta).
+	// Td/Ta is one byte of two 4-bit destination selectors, so 0xFF asks for
+	// DC table 15 and AC table 15 out of the four that exist.
+	const allocator = std.testing.allocator;
+	var data = fixture_baseline_2x2_rgb.*;
+	const sos = findMarker(&data, 0xDA) orelse return error.SkipZigTest;
+	data[sos + 6] = 0xFF; // Td|Ta of the first scan component
+
+	var report = try jpegz.validate(allocator, &data);
+	defer report.deinit(allocator);
+	// Reaching this line at all is the assertion that matters; a panic would
+	// abort the test binary rather than fail this test.
+	try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
+	try std.testing.expect(report.findings.items.len > 0);
+}
+
+test "validate reports, never panics, on an out-of-range SOF quant selector" {
+	// SOF0 layout (T.81 §B.2.2): FF C0, Lf(2), P, Y(2), X(2), Nf, then
+	// Nf x (C, H|V, Tq). Tq is a whole byte, so it can name table 255 of 4.
+	const allocator = std.testing.allocator;
+	var data = fixture_baseline_2x2_rgb.*;
+	const sof = findMarker(&data, 0xC0) orelse return error.SkipZigTest;
+	data[sof + 12] = 0xFF; // Tq of the first frame component
+
+	var report = try jpegz.validate(allocator, &data);
+	defer report.deinit(allocator);
+	try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
+	try std.testing.expect(report.findings.items.len > 0);
+}
+
+test "validate is total over every single-byte mutation of a real JPEG" {
+	// The two cases above were found by reading the code after tiffz hit a
+	// panic in the wild. This sweeps the whole file so the NEXT unchecked
+	// index is found by the suite rather than by a downstream consumer's
+	// crash: a classifier over a set, not two hand-picked examples.
+	const allocator = std.testing.allocator;
+	for (0..fixture_baseline_2x2_rgb.len) |off| {
+		for ([_]u8{ 0x00, 0x0F, 0x3F, 0xF0, 0xFF }) |val| {
+			var data = fixture_baseline_2x2_rgb.*;
+			if (data[off] == val) continue;
+			data[off] = val;
+			var report = jpegz.validate(allocator, &data) catch |err| {
+				// An error return is a legitimate outcome; a panic is not.
+				try std.testing.expectEqual(error.OutOfMemory, err);
+				continue;
+			};
+			report.deinit(allocator);
+		}
+	}
+}

@@ -146,7 +146,13 @@ pub const HuffmanTable = struct {
                 const bit = br.readBits(1) catch return error.HuffmanDecodeError;
                 code = (code << 1) | @as(i32, bit);
                 if (code <= self.max_code[len]) {
-                    const idx: usize = @intCast(code + self.val_offset[len]);
+                    // T.81 §F.2.2.3: val_offset is signed and, on a malformed DHT, can be
+                    // negative enough that code+val_offset goes below zero. The bounds
+                    // check below runs too late — @intCast of a negative value panics
+                    // under ReleaseSafe and is UB under ReleaseFast. Check the sign first.
+                    const signed_idx = code + self.val_offset[len];
+                    if (signed_idx < 0) return error.HuffmanDecodeError;
+                    const idx: usize = @intCast(signed_idx);
                     if (idx >= self.total) return error.HuffmanDecodeError;
                     return self.values[idx];
                 }
@@ -161,7 +167,13 @@ pub const HuffmanTable = struct {
             const bit = br.readBits(1) catch return error.HuffmanDecodeError;
             code = (code << 1) | @as(i32, bit);
             if (code <= self.max_code[len]) {
-                const idx: usize = @intCast(code + self.val_offset[len]);
+                // T.81 §F.2.2.3: val_offset is signed and, on a malformed DHT, can be
+                // negative enough that code+val_offset goes below zero. The bounds
+                // check below runs too late — @intCast of a negative value panics
+                // under ReleaseSafe and is UB under ReleaseFast. Check the sign first.
+                const signed_idx = code + self.val_offset[len];
+                if (signed_idx < 0) return error.HuffmanDecodeError;
+                const idx: usize = @intCast(signed_idx);
                 if (idx >= self.total) return error.HuffmanDecodeError;
                 return self.values[idx];
             }
