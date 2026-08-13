@@ -124,7 +124,7 @@
         #   1. set zigDepsHash = pkgs.lib.fakeHash
         #   2. nix build .#checks.<system>.cross-windows  → prints real hash
         #   3. paste it back here.
-        zigDepsHash = "sha256-7g4sJ0GsJIu2s6Y6iNJVGG8FL7RnTxba2HIZ78JxQR8=";
+        zigDepsHash = "sha256-O6Ag9WM7XUnohx2+sQZQ0JwRlUbMNaPhii+Is2l+5A4=";
         zigDeps = pkgs.stdenv.mkDerivation {
           pname = "jpegz-zig-deps";
           version = "0.1.0";

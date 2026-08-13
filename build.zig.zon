@@ -21,8 +21,8 @@
         // build (no network). Pairs with b.lazyDependency in build.zig.
         .openjpeg = .{ .path = "deps/openjpeg", .lazy = true },
         .jp2z = .{
-            .url = "https://github.com/pmarreck/jp2z/archive/d3754cfcfe3980daecb90de12d82ef4bdf100ce6.tar.gz",
-            .hash = "jp2z-0.0.1-yLLHxfSIQQDp9paH7zDaiSHmZePKAmEpBxwvrn9Df6cp",
+            .url = "https://github.com/pmarreck/jp2z/archive/1b29e0cdbe43da145294a05fc263bce56c1d5a88.tar.gz",
+            .hash = "jp2z-0.0.1-yLLHxXIHXgBlUoMZD3KOSJsgVZbaiWddF55BpqbpsQXm",
         },
         .libjxlz = .{
             .url = "https://github.com/pmarreck/libjxlz/archive/5e8f9d68152ae8a70cb823061f4b6c733eb09166.tar.gz",

@@ -88,6 +88,26 @@ pub fn build(b: *std.Build) void {
     const cflags: []const []const u8 = &.{
         "-DOPJ_STATIC",
         "-fvisibility=hidden",
+        // Upstream OpenJPEG's UB, not ours. openjpeg.c:225 and :336 store
+        // `opj_j2k_setup_decoder` (which takes `opj_j2k_t *`) into a function
+        // pointer typed `void (*)(void *, opj_dparameters_t *)` and then call
+        // through it. Calling through an incompatible function-pointer type is
+        // undefined (C17 §6.3.2.3p8), and clang's `-fsanitize=function` — on
+        // by default for C that Zig compiles in Debug/ReleaseSafe — traps it
+        // with `ud1`. Zig's segfault handler catches the SIGILL and aborts.
+        //
+        // It only bites on "vendored openjpeg + Debug/ReleaseSafe", which is
+        // exactly what a dev running `zig build test` in the devShell gets:
+        // the Nix path links the system libopenjp2 (gcc-built, uninstrumented)
+        // and cross-compiles run ReleaseFast where the sanitizer is off. So it
+        // sat latent, five SIGABRTs deep in decode_jp2, while every gate
+        // stayed green. Diagnosed by jp2z from a coredump disassembly
+        // (2026-08-13) and reproduced here.
+        //
+        // Disabling this ONE check on third-party C is the right scope —
+        // patching the casts would fork us from upstream, and the rest of
+        // UBSan stays active.
+        "-fno-sanitize=function",
     };
 
     // Source files for openjp2 library

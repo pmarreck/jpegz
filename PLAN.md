@@ -378,6 +378,33 @@ A JXL band must be allocated the same way.
       consumer source failing to compile with the gate on and succeeding with
       it off. Asserting only the success would pass just as well if the test
       had quietly stopped reaching that code.
+- [x] **Re-pinned jp2z@1b29e0c — validate's JP2 blocker is cleared.**
+      _(2026-08-13 EDT)_ `balloon_eciRGB_icc.jp2` now validates `valid`,
+      matching the OpenJPEG oracle. Root cause was neither of my two
+      hypotheses: jp2z's empty-packet early return (T.800 B.10.3) skipped the
+      per-cblk `last_contribution_length` reset, so phantom bytes were sliced
+      for every previously-contributing code-block in the precinct. The packet
+      WALK stayed in sync because its advance uses the header's true length —
+      which is exactly why 12 tiles reported `jp2_packets_walked_to_end`
+      alongside a FAIL. Two signals contradicting each other was the scent.
+
+      `entropy_under_read` keeps FAIL severity: post-fix the max under-read is
+      1 byte (normal MQ lookahead) against a `> 2` threshold, so a real
+      byte-budget mismatch is still corruption. Not softening it on our side
+      was correct.
+- [x] **Fixed the latent UBSan trap in vendored OpenJPEG.** _(2026-08-13 EDT)_
+      `-fno-sanitize=function` on the vendored openjp2 C flags. Upstream calls
+      `opj_j2k_setup_decoder` through an incompatible function-pointer type
+      (C17 §6.3.2.3p8 UB); clang's `-fsanitize=function` traps it with `ud1`
+      and Zig's segfault handler aborts.
+
+      It only fires on "vendored openjpeg + Debug/ReleaseSafe" — the Nix path
+      links the uninstrumented system lib and cross-compiles run ReleaseFast —
+      so it sat latent while every gate stayed green, and I dismissed it twice
+      as an unrelated devShell quirk. jp2z diagnosed it from a coredump
+      disassembly; reproduced here (5 SIGABRTs → 0). Second time this session
+      that something I labelled "pre-existing devShell breakage" was a real
+      bug.
 - [ ] **Decide: should the whole test suite default to ReleaseSafe?**
       Three genuine crashes (two OOB indexes, one negative `@intCast`) lived in
       the decode path passing every local run, because ReleaseFast compiles
