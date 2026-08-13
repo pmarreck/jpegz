@@ -364,6 +364,28 @@ A JXL band must be allocated the same way.
       an error set through one read as empty through the other. `smoke.c`
       caught exactly that ("abort preserves return code in
       last_error_message") when an intermediate attempt linked both.
+- [x] **`-Dwith-jp2-decode=false`** — drops OpenJPEG entirely. _(2026-08-13 EDT)_
+      Requested by validate for a v1 production closure with no non-first-party
+      codecs. OpenJPEG is the only one jpegz links at runtime and
+      `jpeg2000.decode` is the only path reaching it, so a consumer that
+      validates but never decodes JP2 can shed it; strict JP2 validation (jp2z)
+      is untouched. With the gate off, `jpeg2000.decode` returns
+      `error.NotImplemented` rather than failing to compile, so the API shape
+      does not change per build.
+
+      Measured: 18 `opj_` symbols in `libjpegz.a` with the gate on, 0 with it
+      off. Gated by a PAIR of assertions in `no_c_consumer.bash` — the same
+      consumer source failing to compile with the gate on and succeeding with
+      it off. Asserting only the success would pass just as well if the test
+      had quietly stopped reaching that code.
+- [ ] **Decide: should the whole test suite default to ReleaseSafe?**
+      Three genuine crashes (two OOB indexes, one negative `@intCast`) lived in
+      the decode path passing every local run, because ReleaseFast compiles
+      those checks out — they were UB, not panics, until a consumer's
+      ReleaseSafe build turned one into an abort. The Nix `test` check does
+      build ReleaseSafe so CI now catches this class, but `zig build test` in
+      the devShell does not. Peter's call; the tradeoff is local iteration
+      speed against never again shipping a silent OOB.
 - [ ] **Vendor Brotli and re-enable JXL on Windows.** `-Dwith-jxl=false` is
       currently forced for `x86_64-windows-gnu` because nixpkgs has no usable
       mingw-w64 Brotli: `pkgsCross.mingwW64.brotli` ships only `.dll.a` import

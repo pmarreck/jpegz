@@ -82,6 +82,23 @@ pub fn build(b: *std.Build) void {
         "Compile + link the JPEG XL validation leg (needs Brotli). Default true.",
     ) orelse true;
 
+    // -Dwith-jp2-decode=false drops OpenJPEG entirely: the wrapper's @cImport
+    // never runs and no openjp2 link edge is created.
+    //
+    // Requested by validate (2026-08-11) for their v1 production closure,
+    // whose rule is no non-first-party codecs. `jpeg2000.decode` is the ONLY
+    // path that touches OpenJPEG; strict JP2 validation is jp2z and stays
+    // fully functional with this off, which is the point — a consumer that
+    // validates but never decodes JP2 should not carry a JPEG 2000 codec.
+    //
+    // With it off, `jpeg2000.decode` returns error.NotImplemented rather than
+    // failing to compile, so the shape of the API does not change per build.
+    const with_jp2_decode = b.option(
+        bool,
+        "with-jp2-decode",
+        "Compile + link OpenJPEG for jpeg2000.decode. Default true; false leaves strict JP2 validation intact.",
+    ) orelse true;
+
     // Expose options to Zig source via @import("jpegz_build_options").
     // charls_wrapper.zig branches its @cImport on with_charls, and src/jpegz.zig
     // gates its libjpeg-oracle internals on with_libjpeg_oracle, so neither C
@@ -98,6 +115,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "with_charls", with_charls);
     build_options.addOption(bool, "with_libjpeg_oracle", with_libjpeg_oracle);
     build_options.addOption(bool, "with_jxl", with_jxl);
+    build_options.addOption(bool, "with_jp2_decode", with_jp2_decode);
     const build_options_mod = build_options.createModule();
     jpegz_mod.addImport("jpegz_build_options", build_options_mod);
 
@@ -139,6 +157,10 @@ pub fn build(b: *std.Build) void {
     validation_build_options.addOption(bool, "with_charls", false);
     validation_build_options.addOption(bool, "with_libjpeg_oracle", false);
     validation_build_options.addOption(bool, "with_jxl", with_jxl);
+    // The validation graph never decodes JP2 — jp2z does the strict walk — so
+    // this is false regardless of the flag, making the exclusion explicit
+    // rather than relying on lazy analysis to keep OpenJPEG out.
+    validation_build_options.addOption(bool, "with_jp2_decode", false);
     const jpegz_validation_mod = b.createModule(.{
         .root_source_file = b.path("src/jpegz.zig"),
         .target = target,
@@ -199,17 +221,23 @@ pub fn build(b: *std.Build) void {
         fn apply(
             mod: *std.Build.Module,
             oracle: bool,
+            jp2_decode: bool,
             jpeg_lib: ?[]const u8,
             openjpeg_lib: ?[]const u8,
         ) void {
             if (jpeg_lib) |p| mod.addLibraryPath(.{ .cwd_relative = p });
-            if (openjpeg_lib) |p| mod.addLibraryPath(.{ .cwd_relative = p });
             if (oracle) mod.linkSystemLibrary("jpeg", .{});
+            if (!jp2_decode) return; // -Dwith-jp2-decode=false: no openjp2 edge
+            if (openjpeg_lib) |p| mod.addLibraryPath(.{ .cwd_relative = p });
             if (openjpeg_lib != null) mod.linkSystemLibrary("openjp2", .{});
         }
     }.apply;
 
-    if (opt_openjpeg_lib != null) {
+    if (!with_jp2_decode) {
+        // -Dwith-jp2-decode=false: no OpenJPEG edge of any kind. The wrapper's
+        // @cImport is pruned too, so neither the header nor the library is
+        // needed. Strict JP2 validation (jp2z) is unaffected.
+    } else if (opt_openjpeg_lib != null) {
         // Linked per-artifact by linkJpegSystemDeps, not here.
     } else if (b.lazyDependency("openjpeg", .{ .target = target, .optimize = optimize })) |openjpeg_dep| {
         // lazyDependency (not dependency): the vendored openjp2 source is
@@ -377,7 +405,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     smoke_mod.addImport("jpegz", jpegz_mod);
-    linkJpegSystemDeps(smoke_mod, with_libjpeg_oracle, opt_libjpeg_lib, opt_openjpeg_lib);
+    linkJpegSystemDeps(smoke_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
     const smoke_tests = b.addTest(.{
         .name = "smoke",
         .root_module = smoke_mod,
@@ -496,7 +524,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     decode_mod.addImport("jpegz", jpegz_mod);
-    linkJpegSystemDeps(decode_mod, with_libjpeg_oracle, opt_libjpeg_lib, opt_openjpeg_lib);
+    linkJpegSystemDeps(decode_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
     const decode_tests = b.addTest(.{
         .name = "decode",
         .root_module = decode_mod,
@@ -511,7 +539,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     validate_mod.addImport("jpegz", jpegz_mod);
-    linkJpegSystemDeps(validate_mod, with_libjpeg_oracle, opt_libjpeg_lib, opt_openjpeg_lib);
+    linkJpegSystemDeps(validate_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
     const validate_tests = b.addTest(.{
         .name = "validate",
         .root_module = validate_mod,
@@ -592,7 +620,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     decode_jp2_mod.addImport("jpegz", jpegz_mod);
-    linkJpegSystemDeps(decode_jp2_mod, with_libjpeg_oracle, opt_libjpeg_lib, opt_openjpeg_lib);
+    linkJpegSystemDeps(decode_jp2_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
     const decode_jp2_tests = b.addTest(.{
         .name = "decode_jp2",
         .root_module = decode_jp2_mod,
@@ -628,7 +656,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     decode_fuzz_mod.addImport("jpegz", jpegz_mod);
-    linkJpegSystemDeps(decode_fuzz_mod, with_libjpeg_oracle, opt_libjpeg_lib, opt_openjpeg_lib);
+    linkJpegSystemDeps(decode_fuzz_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
     decode_fuzz_mod.addImport("seed", seed_corpus_mod);
     const decode_fuzz_tests = b.addTest(.{
         .name = "decode_fuzz",
@@ -642,7 +670,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     validate_fuzz_mod.addImport("jpegz", jpegz_mod);
-    linkJpegSystemDeps(validate_fuzz_mod, with_libjpeg_oracle, opt_libjpeg_lib, opt_openjpeg_lib);
+    linkJpegSystemDeps(validate_fuzz_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
     validate_fuzz_mod.addImport("seed", seed_corpus_mod);
     const validate_fuzz_tests = b.addTest(.{
         .name = "validate_fuzz",
@@ -667,7 +695,7 @@ pub fn build(b: *std.Build) void {
     // library itself was given. Native builds: these options are
     // unset and Zig finds the libs via the host wrapper-cc.
     if (with_libjpeg_oracle) c_smoke_mod.linkSystemLibrary("jpeg", .{});
-    if (opt_openjpeg_lib != null) c_smoke_mod.linkSystemLibrary("openjp2", .{});
+    if (with_jp2_decode and opt_openjpeg_lib != null) c_smoke_mod.linkSystemLibrary("openjp2", .{});
     c_smoke_mod.link_libcpp = true; // libjpegz.a pulls in vendored charls (C++)
     // The full archive now also carries the validation half, whose JXL leg
     // reaches libjxlz's Brotli calls for container metadata. This suite is the
@@ -754,7 +782,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
         diff_mod.addImport("jpegz", jpegz_mod);
-        linkJpegSystemDeps(diff_mod, with_libjpeg_oracle, opt_libjpeg_lib, opt_openjpeg_lib);
+        linkJpegSystemDeps(diff_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
         const diff_exe = b.addExecutable(.{
             .name = "cleanroom-diff",
             .root_module = diff_mod,
@@ -770,7 +798,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
         diag_mod.addImport("jpegz", jpegz_mod);
-        linkJpegSystemDeps(diag_mod, with_libjpeg_oracle, opt_libjpeg_lib, opt_openjpeg_lib);
+        linkJpegSystemDeps(diag_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
         const diag_exe = b.addExecutable(.{
             .name = "diag-one",
             .root_module = diag_mod,
@@ -786,7 +814,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
         pd_mod.addImport("jpegz", jpegz_mod);
-        linkJpegSystemDeps(pd_mod, with_libjpeg_oracle, opt_libjpeg_lib, opt_openjpeg_lib);
+        linkJpegSystemDeps(pd_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
         const pd_exe = b.addExecutable(.{
             .name = "pixel-diff",
             .root_module = pd_mod,
@@ -802,7 +830,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
         dc_mod.addImport("jpegz", jpegz_mod);
-        linkJpegSystemDeps(dc_mod, with_libjpeg_oracle, opt_libjpeg_lib, opt_openjpeg_lib);
+        linkJpegSystemDeps(dc_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
         const dc_exe = b.addExecutable(.{
             .name = "dump-coefs-jpegz",
             .root_module = dc_mod,
@@ -818,7 +846,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
         b1_mod.addImport("jpegz", jpegz_mod);
-        linkJpegSystemDeps(b1_mod, with_libjpeg_oracle, opt_libjpeg_lib, opt_openjpeg_lib);
+        linkJpegSystemDeps(b1_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
         const b1_exe = b.addExecutable(.{
             .name = "bench-one",
             .root_module = b1_mod,

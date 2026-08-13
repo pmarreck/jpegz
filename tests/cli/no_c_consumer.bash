@@ -62,6 +62,17 @@ ZIG
 cat >"$work/jpegz_build_options.zig" <<'ZIG'
 pub const with_charls = false;
 pub const with_libjpeg_oracle = false;
+// TRUE here on purpose: it keeps the negative control below honest, since a
+// jp2-decoding consumer must still require OpenJPEG in the default posture.
+pub const with_jp2_decode = true;
+ZIG
+
+# Same options, but with the JPEG 2000 decoder gated off — validate's v1
+# production closure posture (no non-first-party codecs).
+cat >"$work/jpegz_build_options_nojp2.zig" <<'ZIG'
+pub const with_charls = false;
+pub const with_libjpeg_oracle = false;
+pub const with_jp2_decode = false;
 ZIG
 
 # Note the deliberate absence of any -I / -L / -l flag for libjpeg, openjpeg or
@@ -125,6 +136,38 @@ if [ "$rc2" -ne 0 ]; then
 else
 	fail "negative control: a jp2-decoding consumer still requires C (gate can fail)" \
 		"it compiled without openjpeg — this gate is vacuous and would pass anything"
+fi
+
+# ── -Dwith-jp2-decode=false ──────────────────────────────────────────
+#
+# Same consumer source as the negative control, same absence of C — only the
+# build option differs. Requested by validate for a production closure with no
+# non-first-party codecs: OpenJPEG is the only one jpegz links at runtime, and
+# `jpeg2000.decode` is the only path that reaches it, so a consumer that
+# validates but never decodes JP2 should not have to carry a JPEG 2000 codec.
+#
+# Asserting the PAIR is what makes this meaningful. The same file failing to
+# compile with the gate on and succeeding with it off proves the option
+# actually prunes the `@cImport`, rather than the test having quietly stopped
+# reaching that code at all.
+out3="$(cd "$work" && "$zig" build-exe \
+	--dep jpegz -Mroot="$work/needs_c.zig" \
+	--dep jpegls_bitstream --dep jpegz_build_options \
+	-Mjpegz="$repo/src/jpegz.zig" \
+	-Mjpegls_bitstream="$repo/src/decode/jpegls_bitstream.zig" \
+	-Mjpegz_build_options="$work/jpegz_build_options_nojp2.zig" \
+	-lc --name nojp2 \
+	--cache-dir "$work/zig-cache" --global-cache-dir "$work/zig-global" 2>&1)"
+rc3=$?
+
+if [ "$rc3" -eq 0 ]; then
+	pass "-Dwith-jp2-decode=false compiles a jp2-decoding consumer with no OpenJPEG"
+else
+	case "$out3" in
+	*"openjpeg.h"*) detail3="openjpeg.h still resolved — the @cImport is not pruned by the gate" ;;
+	*) detail3="$(printf '%s' "$out3" | head -5)" ;;
+	esac
+	fail "-Dwith-jp2-decode=false compiles a jp2-decoding consumer with no OpenJPEG" "$detail3"
 fi
 
 echo

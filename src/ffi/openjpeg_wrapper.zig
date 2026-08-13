@@ -16,10 +16,20 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const errors = @import("../core/errors.zig");
 const types = @import("../jpegz.zig");
+const build_options = @import("jpegz_build_options");
 
-const c = @cImport({
+/// OpenJPEG is the ONLY non-first-party codec jpegz links at runtime, and
+/// `jpeg2000.decode` is the only path that reaches it — strict JP2 validation
+/// goes to jp2z instead. Consumers that validate but never decode JP2 can
+/// therefore shed it entirely (`-Dwith-jp2-decode=false`), which is what
+/// validate needs for a production closure containing no third-party codecs.
+///
+/// Same `if (comptime ...) @cImport(...) else struct {}` shape as
+/// charls_wrapper: keeping the @cImport inside the false-pruned branch means
+/// `openjpeg.h` never has to resolve when the gate is off.
+const c = if (build_options.with_jp2_decode) @cImport({
     @cInclude("openjpeg.h");
-});
+}) else struct {};
 
 /// Magic-byte detect: JP2 box (".. .. .. 0C jP  ") vs raw J2K
 /// codestream (FF 4F FF 51).
@@ -78,6 +88,11 @@ fn warningCallback(_: [*c]const u8, _: ?*anyopaque) callconv(.c) void {}
 fn infoCallback(_: [*c]const u8, _: ?*anyopaque) callconv(.c) void {}
 
 pub fn decode(allocator: Allocator, data: []const u8) errors.DecodeError!types.Image {
+    // Comptime-known, so nothing below is analyzed when the gate is off —
+    // which is what keeps `openjpeg.h` and the openjp2 link edge out of the
+    // build. The API shape does not change per build: callers still get a
+    // typed error rather than a missing symbol.
+    if (!build_options.with_jp2_decode) return error.NotImplemented;
     if (data.len < 4) return error.TruncatedStream;
 
     const codec_fmt = detectCodec(data) orelse return error.InvalidJp2Codestream;
