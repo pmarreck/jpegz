@@ -406,6 +406,18 @@ A JXL band must be allocated the same way.
       that something I labelled "pre-existing devShell breakage" was a real
       bug.
 - [ ] **Decide: should the whole test suite default to ReleaseSafe?**
+      _Evidence has accumulated on the "yes" side since this was written:_
+      - **jp2z already did it**, commit `1148d0e` — "Run tests at ReleaseSafe
+        so UB can actually fail the suite". Same fleet, same owner, same
+        rationale, and they report the sanitizer is quiet in steady state, so
+        the ongoing cost is low rather than theoretical.
+      - **jpegz has in-repo precedent**: `cc844e2` flipped the jpegls tests to
+        ReleaseSafe for exactly this reason (a u12 overflow).
+      - **Three crashes this session** hid behind ReleaseFast, plus the
+        vendored-OpenJPEG UB trap that only fires in Debug/ReleaseSafe.
+      Recommendation: flip it. The remaining argument against is local
+      iteration speed, and CLAUDE.md's ReleaseFast mandate is about
+      *benchmarks*, which would keep their own optimize flag either way.
       Three genuine crashes (two OOB indexes, one negative `@intCast`) lived in
       the decode path passing every local run, because ReleaseFast compiles
       those checks out — they were UB, not panics, until a consumer's
