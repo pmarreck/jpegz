@@ -405,19 +405,30 @@ A JXL band must be allocated the same way.
       disassembly; reproduced here (5 SIGABRTs → 0). Second time this session
       that something I labelled "pre-existing devShell breakage" was a real
       bug.
-- [ ] **Decide: should the whole test suite default to ReleaseSafe?**
-      _Evidence has accumulated on the "yes" side since this was written:_
-      - **jp2z already did it**, commit `1148d0e` — "Run tests at ReleaseSafe
-        so UB can actually fail the suite". Same fleet, same owner, same
-        rationale, and they report the sanitizer is quiet in steady state, so
-        the ongoing cost is low rather than theoretical.
-      - **jpegz has in-repo precedent**: `cc844e2` flipped the jpegls tests to
-        ReleaseSafe for exactly this reason (a u12 overflow).
-      - **Three crashes this session** hid behind ReleaseFast, plus the
-        vendored-OpenJPEG UB trap that only fires in Debug/ReleaseSafe.
-      Recommendation: flip it. The remaining argument against is local
-      iteration speed, and CLAUDE.md's ReleaseFast mandate is about
-      *benchmarks*, which would keep their own optimize flag either way.
+- [x] **Tests default to ReleaseSafe.** _(2026-08-14 EDT — Peter: "Flip it. We
+      can worry about speed later; out of the gate, we need correctness
+      first.")_ `-Dtest-optimize`, defaulting to ReleaseSafe; an explicit
+      `-Doptimize` still wins for both, so `-Doptimize=Debug` debugs
+      everything. Builds and benchmarks stay ReleaseFast.
+
+      **The gap was the devShell, not CI.** flake.nix already passed
+      `-Doptimize=ReleaseSafe`, so `./test` was correct all along — but
+      `zig build test` locally ran ReleaseFast, giving a dev *weaker*
+      guarantees than the gate they were trying to predict. That is precisely
+      how three decode crashes stayed invisible to me while CI would have
+      caught them.
+
+      **The obstacle that had blocked doing this in build.zig** was real and is
+      now removed: `jpegz_inline_tests` roots on the shared `jpegz` module,
+      which must stay ReleaseFast for the shipped library, so a per-module
+      `.optimize` could not reach it. Fixed with `jpegz_test_mod` — a second
+      module over the same root file differing only in optimize. Every
+      configuration call now iterates `jpegz_mods` so the two cannot diverge;
+      configuring one and forgetting the other would give the inline tests a
+      different build than the library they test.
+
+      Fleet alignment: jp2z (`1148d0e`) and tiffz (`checks.fuzz` at
+      ReleaseSafe, which they call "the fleet UB floor") already enforce this.
       Three genuine crashes (two OOB indexes, one negative `@intCast`) lived in
       the decode path passing every local run, because ReleaseFast compiles
       those checks out — they were UB, not panics, until a consumer's

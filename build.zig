@@ -3,11 +3,35 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     // ReleaseFast default — see CLAUDE.md "Zig-Specific Notes"
-    const optimize = b.option(
+    const optimize_explicit = b.option(
         std.builtin.OptimizeMode,
         "optimize",
         "Optimization mode (default: ReleaseFast)",
-    ) orelse .ReleaseFast;
+    );
+    const optimize = optimize_explicit orelse .ReleaseFast;
+
+    // TESTS default to ReleaseSafe, builds to ReleaseFast (Peter, 2026-08-14:
+    // "correctness first, worry about speed later").
+    //
+    // ReleaseFast compiles out index-bounds and integer-cast checks, so a test
+    // suite running under it cannot observe a whole class of defect. Three
+    // real crashes in the JPEG decode path were passing every local
+    // `zig build test` for exactly this reason — under ReleaseFast they were
+    // not panics at all, but silent out-of-bounds reads and UB, which is
+    // strictly worse. They only appeared once safety checks were on.
+    //
+    // The Nix `test` check already passed -Doptimize=ReleaseSafe, so CI was
+    // right and the devShell was the gap: a dev running `zig build test`
+    // locally got weaker guarantees than the gate they were trying to
+    // predict. This closes that.
+    //
+    // An explicit -Doptimize still wins, so `-Doptimize=Debug` debugs
+    // everything. Benchmarks must stay ReleaseFast and set it themselves.
+    const test_optimize = b.option(
+        std.builtin.OptimizeMode,
+        "test-optimize",
+        "Optimization mode for TEST artifacts (default: ReleaseSafe — safety checks catch UB that ReleaseFast compiles out)",
+    ) orelse optimize_explicit orelse .ReleaseSafe;
 
     // ============================================================
     // Core Zig library: src/jpegz.zig
@@ -117,7 +141,25 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "with_jxl", with_jxl);
     build_options.addOption(bool, "with_jp2_decode", with_jp2_decode);
     const build_options_mod = build_options.createModule();
-    jpegz_mod.addImport("jpegz_build_options", build_options_mod);
+    // A second module over the SAME root file, differing only in optimize
+    // mode, so `jpegz_inline_tests` (which roots on the module itself, not on
+    // a file under tests/) can run at ReleaseSafe while the shipped library
+    // stays ReleaseFast. Precedent: `jpegz_validation_mod` below is a third
+    // module over this same root.
+    //
+    // Every configuration call from here on is applied over `jpegz_mods`
+    // rather than to `jpegz_mod` directly. That is the point: configuring one
+    // and forgetting the other would give the inline tests a subtly different
+    // build than the library they are testing, and the difference would be
+    // invisible until something failed only in one of them.
+    const jpegz_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/jpegz.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
+    const jpegz_mods = [_]*std.Build.Module{ jpegz_mod, jpegz_test_mod };
+
+    for (jpegz_mods) |m| m.addImport("jpegz_build_options", build_options_mod);
 
     // jp2z supplies the cleanroom T.800 codestream walker behind
     // `jpegz.jpeg2000.validate`. Consumed as a plain Zig module, never
@@ -138,7 +180,7 @@ pub fn build(b: *std.Build) void {
     // that C dependency off the validation graph. The Nix validator-closure
     // check fails if it ever creeps back on.
     const jp2z_dep = b.dependency("jp2z", .{ .target = target, .optimize = optimize });
-    jpegz_mod.addImport("jp2z", jp2z_dep.module("jp2z"));
+    for (jpegz_mods) |m| m.addImport("jp2z", jp2z_dep.module("jp2z"));
     const libjxlz_dep = b.dependency("libjxlz", .{ .target = target, .optimize = optimize });
     const libjxlz_mod = b.createModule(.{
         .root_source_file = libjxlz_dep.path("src/root.zig"),
@@ -147,7 +189,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     addBrotliIncludes(libjxlz_mod, brotli_include_dir);
-    jpegz_mod.addImport("libjxlz", libjxlz_mod);
+    for (jpegz_mods) |m| m.addImport("libjxlz", libjxlz_mod);
 
     // A separately rooted facade module makes the production validation graph
     // mechanically incapable of inheriting jpegz's libjpeg/OpenJPEG/CharLS
@@ -180,8 +222,10 @@ pub fn build(b: *std.Build) void {
     // NOTE: libjpeg and openjpeg are deliberately NOT linked onto `jpegz_mod`.
     // See `linkJpegSystemDeps` below — the shared module supplies HEADERS, and
     // each consuming artifact does its own linking.
-    if (with_charls) jpegz_mod.link_libcpp = true;
-    jpegz_mod.link_libc = true;
+    if (with_charls) {
+        for (jpegz_mods) |m| m.link_libcpp = true;
+    }
+    for (jpegz_mods) |m| m.link_libc = true;
 
     // Optional explicit include / library paths from the flake. When
     // cross-targeting (musl on Linux), Zig's host NIX_CFLAGS / NIX_LDFLAGS
@@ -192,10 +236,10 @@ pub fn build(b: *std.Build) void {
     const opt_libjpeg_lib = b.option([]const u8, "libjpeg-lib", "Path to libjpeg library directory");
     const opt_openjpeg_inc = b.option([]const u8, "openjpeg-include", "Path to openjpeg headers (incl. version subdir)");
     const opt_openjpeg_lib = b.option([]const u8, "openjpeg-lib", "Path to openjpeg library directory");
-    if (opt_libjpeg_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
-    if (opt_libjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
-    if (opt_openjpeg_inc) |p| jpegz_mod.addIncludePath(.{ .cwd_relative = p });
-    if (opt_openjpeg_lib) |p| jpegz_mod.addLibraryPath(.{ .cwd_relative = p });
+    if (opt_libjpeg_inc) |p| for (jpegz_mods) |m| m.addIncludePath(.{ .cwd_relative = p });
+    if (opt_libjpeg_lib) |p| for (jpegz_mods) |m| m.addLibraryPath(.{ .cwd_relative = p });
+    if (opt_openjpeg_inc) |p| for (jpegz_mods) |m| m.addIncludePath(.{ .cwd_relative = p });
+    if (opt_openjpeg_lib) |p| for (jpegz_mods) |m| m.addLibraryPath(.{ .cwd_relative = p });
 
     // openjpeg linkage: link the system lib when a path is provided (native
     // nix build — the flake passes -Dopenjpeg-lib); otherwise Zig-vendor it
@@ -244,7 +288,7 @@ pub fn build(b: *std.Build) void {
         // fetched ONLY when this branch runs (cross-compile, no system lib).
         // The native system-openjpeg path above never calls this, so the
         // sandboxed Linux build never needs network for openjpeg_src.
-        jpegz_mod.linkLibrary(openjpeg_dep.artifact("openjp2"));
+        for (jpegz_mods) |m| m.linkLibrary(openjpeg_dep.artifact("openjp2"));
     }
 
     // ── charls — vendored, compiled by Zig (gated on -Dwith-charls) ──
@@ -301,8 +345,8 @@ pub fn build(b: *std.Build) void {
             .linkage = .static,
             .root_module = charls_mod,
         });
-        jpegz_mod.linkLibrary(charls_lib);
-        jpegz_mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{path}) });
+        for (jpegz_mods) |m| m.linkLibrary(charls_lib);
+        for (jpegz_mods) |m| m.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{path}) });
     }
 
     // The static library is rooted at src/lib_root.zig, NOT src/jpegz.zig.
@@ -384,25 +428,34 @@ pub fn build(b: *std.Build) void {
     //   3. src/core/errors.zig    — inline tests (numeric stability)
     // The `test` step depends on all three; failure of any propagates.
     // ============================================================
-    // FLEET FLOOR — tests run ReleaseSafe (fleet finding 2026-07-01, Pattern 3):
-    // ReleaseFast masks UB (integer overflow, bounds) so a green ./test can hide
-    // real crashers — e.g. jpegls setDefaultThresholds overflowed on valid 16-bit
-    // input, invisible in ReleaseFast. Enforcement lives in flake.nix
-    // (jpegzTestCheck passes -Doptimize=ReleaseSafe), which flips the ENTIRE test
-    // compilation — the shared `jpegz` module + every test module — to ReleaseSafe
-    // in one shot. (A per-module `.optimize = .ReleaseSafe` here, rarz-style,
-    // would leave import-based tests' jpegz code at ReleaseFast, since Zig honors
-    // per-module optimize; jpegz's `jpegz` module is shared with the shipped lib,
-    // which must stay ReleaseFast.) `./test` runs the flake check, so it is safe;
-    // benchmarks + the packaged lib stay ReleaseFast.
-    const test_step = b.step("test", "Run unit tests (ReleaseSafe via flake; see note above)");
+    // FLEET FLOOR — tests run ReleaseSafe (fleet finding 2026-07-01, Pattern 3;
+    // tiffz and jp2z enforce the same floor). ReleaseFast masks UB — integer
+    // overflow, bounds — so a green suite can hide real crashers: jpegls
+    // setDefaultThresholds overflowed on valid 16-bit input invisibly, and in
+    // 2026-08 three separate decode-path crashes passed every local run while
+    // being silent out-of-bounds reads rather than panics.
+    //
+    // Enforcement is now in THIS FILE (`test_optimize`, default ReleaseSafe),
+    // not only in flake.nix. It used to be flake-only, on the reasoning that a
+    // per-module `.optimize` could not reach the inline tests — they root on
+    // the shared `jpegz` module, which must stay ReleaseFast for the shipped
+    // library. `jpegz_test_mod` removes that obstacle: a second module over
+    // the same root file, differing only in optimize mode.
+    //
+    // That gap was not academic. `./test` ran the flake check and was safe,
+    // but `zig build test` in the devShell silently ran ReleaseFast — so a dev
+    // got weaker guarantees than the CI gate they were trying to predict, and
+    // the three crashes above are what that cost. Local and CI now agree.
+    //
+    // Benchmarks and the packaged lib stay ReleaseFast.
+    const test_step = b.step("test", "Run unit tests (ReleaseSafe by default; -Dtest-optimize overrides)");
     const test_build_step = b.step("test-build", "Compile all tests without running, for cross-target link verification");
 
     // (1) Public smoke suite — imports `jpegz` like any consumer.
     const smoke_mod = b.createModule(.{
         .root_source_file = b.path("tests/unit/smoke.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     smoke_mod.addImport("jpegz", jpegz_mod);
     linkJpegSystemDeps(smoke_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
@@ -416,7 +469,7 @@ pub fn build(b: *std.Build) void {
     // (2) Inline tests in the core module itself.
     const jpegz_inline_tests = b.addTest(.{
         .name = "jpegz_inline",
-        .root_module = jpegz_mod,
+        .root_module = jpegz_test_mod,
     });
     test_step.dependOn(&b.addRunArtifact(jpegz_inline_tests).step);
     test_build_step.dependOn(&jpegz_inline_tests.step);
@@ -425,7 +478,7 @@ pub fn build(b: *std.Build) void {
     const bitstream_mod = b.createModule(.{
         .root_source_file = b.path("src/decode/bitstream.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     const bitstream_tests = b.addTest(.{
         .name = "decode_bitstream",
@@ -437,7 +490,7 @@ pub fn build(b: *std.Build) void {
     const huffman_mod = b.createModule(.{
         .root_source_file = b.path("src/decode/huffman.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     const huffman_tests = b.addTest(.{
         .name = "decode_huffman",
@@ -449,7 +502,7 @@ pub fn build(b: *std.Build) void {
     const idct_mod = b.createModule(.{
         .root_source_file = b.path("src/decode/idct.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     const idct_tests = b.addTest(.{
         .name = "decode_idct",
@@ -461,7 +514,7 @@ pub fn build(b: *std.Build) void {
     const last_error_mod = b.createModule(.{
         .root_source_file = b.path("src/core/last_error.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     const last_error_tests = b.addTest(.{
         .name = "core_last_error",
@@ -473,7 +526,7 @@ pub fn build(b: *std.Build) void {
     const arith_coder_mod = b.createModule(.{
         .root_source_file = b.path("src/decode/arith_coder.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     const arith_coder_tests = b.addTest(.{
         .name = "decode_arith_coder",
@@ -485,7 +538,7 @@ pub fn build(b: *std.Build) void {
     const jpegls_bitstream_mod = b.createModule(.{
         .root_source_file = b.path("src/decode/jpegls_bitstream.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     const jpegls_bitstream_tests = b.addTest(.{
         .name = "decode_jpegls_bitstream",
@@ -502,7 +555,7 @@ pub fn build(b: *std.Build) void {
     // Their inline tests run via `jpegz_inline_tests` (no separate
     // test target — that would put their files in two modules and
     // Zig 0.16 rejects it).
-    jpegz_mod.addImport("jpegls_bitstream", jpegls_bitstream_mod);
+    for (jpegz_mods) |m| m.addImport("jpegls_bitstream", jpegls_bitstream_mod);
     // The validation-only module needs it too: `validateAny`'s T.81/T.87 leg
     // runs the same cleanroom walker, and the JPEG family is the largest thing
     // the facade covers. Pure Zig, so the no-external-validator closure gate
@@ -521,7 +574,7 @@ pub fn build(b: *std.Build) void {
     const decode_mod = b.createModule(.{
         .root_source_file = b.path("tests/unit/decode.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     decode_mod.addImport("jpegz", jpegz_mod);
     linkJpegSystemDeps(decode_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
@@ -536,7 +589,7 @@ pub fn build(b: *std.Build) void {
     const validate_mod = b.createModule(.{
         .root_source_file = b.path("tests/unit/validate.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     validate_mod.addImport("jpegz", jpegz_mod);
     linkJpegSystemDeps(validate_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
@@ -553,7 +606,7 @@ pub fn build(b: *std.Build) void {
     const facade_validation_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/unit/facade_validation.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     if (with_jxl) linkBrotli(facade_validation_test_mod, brotli_lib_dir);
     facade_validation_test_mod.addImport("jpegz", jpegz_validation_mod);
@@ -579,7 +632,7 @@ pub fn build(b: *std.Build) void {
     const i18n_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/unit/i18n.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     i18n_test_mod.addImport("jpegz", jpegz_validation_mod);
     const i18n_tests = b.addTest(.{
@@ -617,7 +670,7 @@ pub fn build(b: *std.Build) void {
     const decode_jp2_mod = b.createModule(.{
         .root_source_file = b.path("tests/unit/decode_jp2.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     decode_jp2_mod.addImport("jpegz", jpegz_mod);
     linkJpegSystemDeps(decode_jp2_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
@@ -653,7 +706,7 @@ pub fn build(b: *std.Build) void {
     const decode_fuzz_mod = b.createModule(.{
         .root_source_file = b.path("tests/fuzz/decode_fuzz.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     decode_fuzz_mod.addImport("jpegz", jpegz_mod);
     linkJpegSystemDeps(decode_fuzz_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
@@ -667,7 +720,7 @@ pub fn build(b: *std.Build) void {
     const validate_fuzz_mod = b.createModule(.{
         .root_source_file = b.path("tests/fuzz/validate_fuzz.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
     });
     validate_fuzz_mod.addImport("jpegz", jpegz_mod);
     linkJpegSystemDeps(validate_fuzz_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
@@ -685,7 +738,7 @@ pub fn build(b: *std.Build) void {
     // ============================================================
     const c_smoke_mod = b.createModule(.{
         .target = target,
-        .optimize = optimize,
+        .optimize = test_optimize,
         .link_libc = true,
     });
     // The c_smoke executable transitively pulls in libjpeg + openjp2
