@@ -1,10 +1,12 @@
 # Dirtree: Stateful directory trees in the CLI for humans and LLMs. https://github.com/pmarreck/dirtree
 ver=1.2
 annotate=[
+	HANDOFF-20260827164916EDT.md = session handoff 2026-08-27: Brotli rationale, cleanup commit pending, next = vendor Brotli + U5b progress
 	NEXT_STEPS.md = Session handoff: variant-coverage matrix, prioritized next tasks, architecture decisions
 	RULES.md = Standing project rules: i18n decision, FFI dogfooding, validation closure, finding-code registry
 	SPEC.md = Full project specification: milestones, ABI shape, design decisions
 	THIRD_PARTY_NOTICES.md = BSD attribution for libjpeg-turbo/openjpeg algorithm shapes ported into pure Zig (idct/color/upsampling/JP2)
+	ZIG_RECENT_API_CHANGES.md = vault-symlinked Zig 0.16 API-changes reference (replaces retired ZIG_0.15_TO_0.16_MIGRATION.md)
 	build = Bash wrapper: nix build .#default (release); --debug for devShell Debug build
 	deps/openjpeg = Vendored openjpeg (uclouvain 2.5.4, no-SIMD) — static libopenjp2 compiled by Zig for cross/Windows; used when no -Dopenjpeg-lib is given
 	docs/I18N.md = i18n phase, canonical 50 locales + selection rationale, parser pitfalls
