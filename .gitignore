@@ -1,6 +1,8 @@
 .zig-cache/
 zig-cache/
 zig-out/
+# Ad-hoc `zig build-exe -femit-bin=probe` output of tools/facade_validator_probe.zig
+probe
 result
 result-*
 .direnv/
@@ -24,3 +26,6 @@ scratch/
 # Claude Code per-session state (lock files, scheduled task records).
 .claude/
 zig-pkg
+
+# session handoff docs (skill: handoff)
+HANDOFF*

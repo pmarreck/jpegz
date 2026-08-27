@@ -446,6 +446,25 @@ A JXL band must be allocated the same way.
       Windows compiled no JXL path at all before the facade. The fix is to
       vendor Brotli's source and compile it with Zig exactly as charls already
       is, which also keeps the Windows artifact a single static binary.
+
+      **Confirmed 2026-08-27: Brotli cannot be dropped, only vendored.** Peter
+      asked why JXL needs Brotli at all, since Brotli is its own format (RFC
+      7932). It is: the link is the JXL *container*. ISO/IEC 18181-2 defines a
+      `brob` box holding Brotli-compressed metadata. libjxlz's
+      `validateBrobPayload` (`src/lib/codec/container.zig:189`) decompresses
+      those payloads *specifically to validate them*, because a mutation sweep
+      on 2026-07-24 found a single flipped bit inside a `brob` payload that
+      produced pixel output byte-identical to the clean decode — a false
+      accept. Skipping Brotli would make our JXL verdicts silently weaker on
+      exactly the corruption class this project exists to catch. So the
+      vendoring plan above stands; there is no shortcut.
+
+      Separately filed to libjxlz as FYI (`2026-08-27-from-jpegz-...`): their
+      `validation.zig` re-exports `capi_root.zig`, whose 21 non-lazy
+      `JxlEncoder*` exports reach `brotli.compress`, so a validation-only
+      consumer also needs `libbrotlienc`. Same closure defect jpegz fixed in
+      U0 (`a60ecc7`). Fixing it would drop `-lbrotlienc` but NOT `brotlidec` /
+      `brotlicommon` — it does not change this task.
 - [ ] **U5 (original scope note) — `jpegz` C CLI dogfooding jpegz's C FFI** (Peter, 2026-07-31).
       **Scope for now: VALIDATION WITH RICH ERROR REPORTING ONLY.** No decode
       / convert / encode subcommands — resist the scope creep; the point is

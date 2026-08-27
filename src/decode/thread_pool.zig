@@ -20,7 +20,7 @@
 //! Threading primitives — Zig 0.16 removed `std.Thread.Mutex` and
 //! `std.Thread.Condition`. For short critical sections (queue push /
 //! pop) an atomic-CAS spin lock is the right tool (per compact_pro's
-//! firsthand note in ZIG_0.15_TO_0.16_MIGRATION.md §🔥 `SpinMutex`).
+//! firsthand note in ZIG_RECENT_API_CHANGES.md §🔥 `SpinMutex`).
 //! Workers idle by yielding the CPU instead of `condvar.wait` —
 //! decode work units (≥ 8 µs) dominate the idle yield cost.
 

@@ -5,7 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     # We pin Zig explicitly via mitchellh/zig-overlay. Now targeting 0.16.0
-    # (the "Juicy Main" release). See ZIG_0.15_TO_0.16_MIGRATION.md for the
+    # (the "Juicy Main" release). See ZIG_RECENT_API_CHANGES.md for the
     # patterns applied during the migration.
     zig-overlay = {
       url = "github:mitchellh/zig-overlay";
