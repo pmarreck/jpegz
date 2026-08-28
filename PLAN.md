@@ -336,6 +336,15 @@ A JXL band must be allocated the same way.
       mutating process-global state; and an unparseable **system** locale stays
       silent while an unparseable **explicit** request is named, because the
       former would warn on every machine we do not translate.
+- [ ] **HIGH (Peter, 2026-08-27 ~21:00 EDT) — MFIC dependency-freshness hard
+      gate, same as tiffz and validate already have.** Builds must FAIL if
+      any dependency pin (jp2z, libjxlz, ...) is not up-to-date with its
+      upstream — or, when there is no internet, with the sibling repo
+      checkout under ~/Code/ (everything lives here). Do not invent the
+      mechanism: copy the working pattern from tiffz's and validate's build
+      gates (read their repos first; validate's freshness gate reportedly
+      "catches re-pins the same hour"). This is a control per the MFIC
+      brief: the check must be independent of the agent doing the pinning.
 - [ ] **HIGH (validate work order, 2026-08-27 20:55 EDT, from Peter's own
       report) — JPEG entropy-region strictness: 24% sniper must rise via
       accounting invariants.** validate measured single-byte-flip detection
