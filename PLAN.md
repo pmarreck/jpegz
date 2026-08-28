@@ -1,5 +1,15 @@
 # jpegz — work plan
 
+## Workspace-document continuity audit (2026-08-27)
+
+- [x] Read the current handoff and standing project instructions; classify every root Markdown document; move the consumed handoff and superseded `NEXT_SESSION_2026-05-16.md` to FreeDesktop Trash; purge the old orphaned dirtree handoff note. Both files have `.trashinfo` restore records, and the tracked session handoff remains recoverable from Git. _(2026-08-27 22:48 EDT)_
+- [ ] Repair current entry documents: `README.md` still calls JPEG-LS eventual, `PROJECT_OVERVIEW.md` still says Phase 1 milestone 2 is next and omits the JXL facade, and `LICENSING_NOTES.md` still calls CharLS the only JPEG-LS runtime path in one historical paragraph.
+- [ ] Label or relocate historical planning documents without breaking live references: `SPEC.md` still declares a greenfield scaffold and sketches a superseded source-vtable ABI; `NEXT_STEPS.md` remains cited by source comments, tests, and completed design specs despite its obsolete pickup checklist.
+- [ ] Tighten `FUTURE_DIRECTIONS.md`: distinguish codec-implementation scope from facade scope consistently, date or source time-sensitive JXL market claims, and reconcile its edge-case heading with the stated T.81 scope.
+- [ ] Prune old completed history from `PLAN.md` after the active entropy/freshness work no longer depends on it.
+
+Curiosity poke: distinguish stale facts from still-useful decision history, and check whether another current document already owns each surviving requirement.
+
 ## Mecha Validate v1 bounded JPEG-family facade promotion (2026-08-05 overnight)
 
 - [x] Pin exact pure-Zig validator leaves `jp2z@d3754cfcfe3980daecb90de12d82ef4bdf100ce6` and `libjxlz@5e8f9d68152ae8a70cb823061f4b6c733eb09166`. _(2026-08-05 01:24 EDT)_
