@@ -336,6 +336,33 @@ A JXL band must be allocated the same way.
       mutating process-global state; and an unparseable **system** locale stays
       silent while an unparseable **explicit** request is named, because the
       former would warn on every machine we do not translate.
+- [ ] **HIGH (validate work order, 2026-08-27 20:55 EDT, from Peter's own
+      report) — JPEG entropy-region strictness: 24% sniper must rise via
+      accounting invariants.** validate measured single-byte-flip detection
+      at **37/154 = 24.0%** [18.0, 31.4] (shotgun 146/146) on a real scanned
+      baseline JFIF extracted from Peter's 49MB scanned-paperwork PDF (the
+      dominant weakness dragging that PDF to ~65% composite; reproducer:
+      `qpdf --show-object=22 --raw-stream-data` on his file + `validate
+      --test-coverage`; exact seeds available from validate on request).
+      Five asks, in value order — accounting invariants, not heuristics:
+      1. **Exact consumption at end of scan** — entropy decode consumes the
+         scan's bytes exactly and lands on EOI/next marker; final-byte pad
+         bits must be all-ones per T.81. Extra or missing bytes = corrupt.
+      2. **MCU accounting** — decoded MCU count must equal the count implied
+         by frame dimensions + sampling factors; short or long = corrupt.
+      3. **Restart cadence** (DRI > 0) — RSTn at exact MCU intervals, mod-8
+         monotonic sequence, DC predictors reset. Scanned docs often carry
+         DRI, so this is cheap and strong on exactly Peter's corpus.
+      4. **AC run overflow** — any block whose run passes index 63 = corrupt
+         (verify not already enforced; if it is, prove it with a test).
+      5. **Progressive constraints** — spectral band / successive
+         approximation bounds, if progressive in scope.
+      **MFIC acceptance bar (validate's, and ours):** zero new rejects on
+      the known-good specificity corpus + entropy-interior mutation sweep
+      demonstrating the sniper gain (literature-typical target band
+      60-85%; true ceiling is content-dependent physics). Ship under the
+      seam rule; chain is our SHA → tiffz re-pin → validate re-pin, and
+      validate re-runs Peter's file end-to-end and reports before/after.
 - [ ] **U5b (rest) — progress indication** for large multi-file runs (live
       count, elapsed, ETA, `--no-progress`, only when stderr is a terminal).
       Per CLAUDE.md the renderer must be a pure function taking `now` as a
