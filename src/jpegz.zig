@@ -198,7 +198,6 @@ pub const DecodeOptions = struct {
 
     /// `false` (default) rejects detected entropy-boundary errors and
     /// restart mismatches. Legal marker fill may still produce warnings.
-    /// Progressive truncation recovery currently remains unconditional.
     ///
     /// `true` — tolerant decode. The cleanroom mirrors libjpeg-turbo's
     /// recovery behavior: truncated baseline scans yield partial
@@ -807,17 +806,16 @@ pub const internal = struct {
         return @import("decode/progressive.zig").decode(allocator, data);
     }
     /// Progressive cleanroom decode that emits a `Finding(.warn,
-    /// .insufficient_data)` into the supplied sink the first time
-    /// within each scan that the entropy stream runs out before
-    /// the scan completes (libjpeg `JWRN_HIT_MARKER`/`JWRN_JPEG_EOF`
-    /// parity). Other tolerance sites are silent in v1.
+    /// .insufficient_data)` for each recovered truncated restart interval
+    /// (or scan without restarts). This helper opts into recovery;
+    /// `progressiveDecode` rejects truncation by default.
     pub fn progressiveDecodeWithFindings(
         allocator: Allocator,
         data: []const u8,
         sink: *FindingsSink,
     ) DecodeError!Image {
         const progressive = @import("decode/progressive.zig");
-        return progressive.decodeWithOptions(allocator, data, .{ .findings_sink = sink });
+        return progressive.decodeWithOptions(allocator, data, .{ .findings_sink = sink, .lenient = true });
     }
     /// Progressive cleanroom decode with lenient RST recovery: emits
     /// `restart_marker_unexpected` / `restart_marker_missing` warns

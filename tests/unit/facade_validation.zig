@@ -47,6 +47,8 @@ test "classic facade rejects recovered entropy damage but accepts legal fill" {
 	const allocator = std.testing.allocator;
 	const baseline = @embedFile("fixtures/baseline_2x2_rgb.jpg");
 	const restart = @embedFile("fixtures/baseline_128x128_dri4.jpg");
+	const progressive = @embedFile("fixtures/progressive_16x16_rgb12_444.jpg");
+	const progressive_truncated = progressive[0 .. progressive.len - 18].* ++ [_]u8{ 0xff, 0xd9 };
 	const legal_fill = baseline[0..2].* ++ [_]u8{ 0xff, 0xff } ++ baseline[2..].*;
 	// Keep EOI intact: only the codec check can detect the missing entropy.
 	const truncated = baseline[0 .. baseline.len - 26].* ++ [_]u8{ 0xff, 0xd9 };
@@ -67,6 +69,8 @@ test "classic facade rejects recovered entropy damage but accepts legal fill" {
 		.{ .bytes = @embedFile("fixtures/arith_baseline_8x8_gray.jpg"), .verdict = .valid },
 		.{ .bytes = &legal_fill, .verdict = .valid, .warning = .entropy_fill_bytes },
 		.{ .bytes = &truncated, .verdict = .corrupt, .warning = .insufficient_data },
+		.{ .bytes = progressive, .verdict = .valid },
+		.{ .bytes = &progressive_truncated, .verdict = .corrupt, .warning = .insufficient_data },
 		.{ .bytes = &wrong_restart, .verdict = .corrupt, .warning = .restart_marker_unexpected },
 		.{ .bytes = &missing_restart, .verdict = .corrupt, .warning = .restart_marker_missing },
 	};

@@ -10,7 +10,8 @@ An unchecked historical box does not create a second work order.
 - Branch `yolo`; September 6 documentation and entropy checkpoints passed
   `./test` and `./build`, including unit tests, package build, 71 FFI
   assertions, 49 CLI cases, and three consumer controls. Latest verification:
-  2026-09-06 12:54 EDT. Mechatron passed restart-row checkpoint `8b3e7ed`
+  2026-09-06 13:06 EDT, plus Windows cross-build and validator closure.
+  Mechatron passed restart-row checkpoint `8b3e7ed`
   at 12:19 EDT (361 seconds); no consumer remeasurement is claimed.
 - `validateAny`, JP2/JXL delegation, split C archives, the C validation CLI,
   and prepare-phase locale resolution are implemented.
@@ -25,9 +26,10 @@ An unchecked historical box does not create a second work order.
 
 ## Active order
 
-- [ ] Continue Peter's 12:32 EDT request: unchecked-variant classification,
-  public decoder-option forwarding, then progressive entropy boundaries.
-  Keep corruption distinct from unsupported or unexamined codec data.
+- [x] Complete the next three scoped units from Peter's 12:32 EDT request:
+  unchecked-variant classification, public decoder-option forwarding, and
+  progressive entropy boundaries. Individual evidence is below; broader
+  entropy coverage remains open. _(2026-09-06 13:06 EDT)_
 - [ ] Continue the ordered queue per Peter's September 6 request; record
   completed sub-items and their test evidence without marking the whole
   entropy milestone complete before its corpus and mutation checks pass.
@@ -94,10 +96,15 @@ on one input, not measured performance of a later revision.
     Valid samples match libjpeg-turbo; internal lenient recovery retains a
     failure finding. Independent static review and the full `./test` pass.
     _(2026-09-06 12:01 EDT)_
-  - [ ] Apply checked boundaries to progressive scans and restart intervals.
-    `seekToMarker` still discards unchecked bits there.
-    Progressive EOB runs must be exhausted at each boundary without rejecting
-    valid byte-aligned runs that span subsequent zero blocks.
+  - [x] Apply checked boundaries to progressive scans and restart intervals.
+    The red set accepted a zero DC padding bit after 12 valid controls passed
+    libjpeg pixel comparisons. All 29 cases now pass: EOB exhaustion, marker
+    lookahead, padding/stuffing, edge blocks, final RST rejection, required
+    refinement bits, per-interval recovery warnings, and nonzero output after
+    recovery. Public truncation now requires lenient mode; the legacy recovery
+    helper remains explicit. The facade rejects recovered 12-bit progressive
+    damage. Independent review, native/full tests, build, Windows cross-build,
+    and validator closure pass. _(2026-09-06 13:06 EDT)_
 - [ ] Enforce MCU counts implied by frame dimensions and sampling, including
   non-interleaved scans and partial edge MCUs.
 - [ ] Enforce DRI restart cadence, modulo-eight marker order, and predictor
@@ -113,6 +120,9 @@ on one input, not measured performance of a later revision.
     _(2026-09-06 12:12 EDT)_
 - [ ] Verify progressive spectral-selection and successive-approximation
   constraints, including the checks already in the structural walker.
+  Review also found legacy semantic-error guards that label an illegal decoded
+  symbol as insufficient data when lookahead has seen a marker. Strict decode
+  rejects these, but their legacy recovery classification needs separate tests.
 - [ ] Classify the known-good corpus as a set, with zero new rejects.
 - [ ] Run reproducible entropy-interior mutation sweeps before and after;
   distinguish must-detect malformed streams from mutations that remain legal.

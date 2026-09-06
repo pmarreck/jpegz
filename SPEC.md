@@ -54,8 +54,10 @@ attach a `FindingsSink` to retain the recovery diagnostics.
 The public dispatcher forwards recovery and findings options to sequential
 Huffman, progressive, and lossless decoders. Rejected format probes discard
 their own findings; caller findings and genuine decode-error diagnostics stay.
-Progressive truncation still tolerates missing data independently of `lenient`;
-strict scan accounting remains an open item in PLAN.md.
+Progressive truncation requires opt-in recovery, with one warning per damaged
+restart interval (or scan without restarts). Completed progressive intervals
+must exhaust their EOB runs and end with only all-one byte padding. Refinement
+scans must supply correction bits for coefficients with nonzero history.
 
 ## 3. Validation contract
 

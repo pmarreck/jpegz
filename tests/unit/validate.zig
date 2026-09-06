@@ -11,6 +11,118 @@ const fixture_progressive_8x8 = @embedFile("fixtures/progressive_8x8_rgb.jpg");
 const fixture_lossless_4x4_gray8 = @embedFile("fixtures/lossless_4x4_gray8.jpg");
 const fixture_arith_8x8_gray = @embedFile("fixtures/arith_baseline_8x8_gray.jpg");
 
+test "progressive boundaries account for EOB runs padding and refinement bits" {
+	// T.81 G.1.2 and F.1.2.3, independently reviewed before implementation.
+	// Literal entropy bytes, not a test-side encoder. DC code0 => category0.
+	// AC eob7: code0000000 => EOB2 + extension; eob6 leaves one pad bit.
+	// AC lookahead: code0 => 01, code10000 => 10. Byte60 encodes AC1=+1
+	// then EOB2, forcing marker lookahead before the last block decrements EOB.
+	const eob7 = [_]u8{ 0xff, 0xc4, 0, 20, 0x10 } ++ ([_]u8{0} ** 6) ++ [_]u8{1} ++ ([_]u8{0} ** 9) ++ [_]u8{0x10};
+	const eob6 = [_]u8{ 0xff, 0xc4, 0, 20, 0x10 } ++ ([_]u8{0} ** 5) ++ [_]u8{1} ++ ([_]u8{0} ** 10) ++ [_]u8{0x10};
+	const lookahead = [_]u8{ 0xff, 0xc4, 0, 21, 0x10, 1, 0, 0, 0, 1 } ++ ([_]u8{0} ** 11) ++ [_]u8{ 1, 0x10 };
+	const cases = [_]struct {
+		dc: []const u8 = &.{0x3f},
+		ac: []const u8 = &.{0x00},
+		width: u8 = 16,
+		ri: u8 = 0,
+		table: []const u8 = &eob7,
+		refine: ?[]const u8 = null,
+		recovery_ac: ?[]const u8 = null,
+		valid: bool = true,
+		insufficient_count: usize = 0,
+		recovered_boundary_failure: bool = false,
+	}{
+		.{}, // Two blocks, byte-aligned EOB2.
+		.{ .dc = &.{0x1f}, .ac = &.{0x01}, .width = 17 }, // Three blocks, partial edge.
+		.{ .ac = &.{0x60}, .table = &lookahead }, // Marker lookahead with pending EOB.
+		.{ .ac = &.{0x01}, .table = &eob6 }, // One all-one padding bit.
+		.{ .ac = &.{ 0x00, 0xff, 0xff } }, // Legal marker fill.
+		.{ .ri = 2 }, // Exact final interval needs no RST.
+		.{ .ri = 3 }, // Short final interval.
+		.{ .width = 32, .ri = 2, .dc = &.{ 0x3f, 0xff, 0xd0, 0x3f }, .ac = &.{ 0x00, 0xff, 0xd0, 0x00 } },
+		.{ .width = 40, .ri = 3, .dc = &.{ 0x1f, 0xff, 0xd0, 0x3f }, .ac = &.{ 0x01, 0xff, 0xd0, 0x00 } },
+		.{ .refine = &.{0x00} }, // Zero history requires no correction bits.
+		.{ .ac = &.{0x60}, .table = &lookahead, .refine = &.{ 0x00, 0x7f } }, // AC1=+2, correction0.
+		.{ .ac = &.{0x60}, .table = &lookahead, .refine = &.{ 0x00, 0xff, 0x00 } }, // AC1=+3, stuffed correction1.
+		.{ .dc = &.{0x3e}, .valid = false }, // Zero DC padding bit.
+		.{ .table = &eob6, .valid = false }, // Zero AC padding bit.
+		.{ .ac = &.{ 0x00, 0x00 }, .valid = false }, // Surplus entropy byte.
+		.{ .ac = &.{ 0x00, 0xff, 0x00 }, .valid = false }, // Surplus stuffed byte.
+		.{ .dc = &.{0x7f}, .width = 8, .valid = false }, // EOB2 exceeds one block.
+		.{ .ac = &.{0x01}, .valid = false }, // EOB3 exceeds two blocks.
+		.{ .ac = &.{ 0x00, 0xff, 0xd0 }, .valid = false }, // Final RST without DRI.
+		.{ .ri = 2, .ac = &.{ 0x00, 0xff, 0xd0 }, .valid = false },
+		.{ .dc = &.{0x7f}, .valid = false, .insufficient_count = 1 }, // Missing second DC block.
+		.{ .dc = &.{0x00}, .width = 65, .ac = &.{ 0x01, 0x01, 0x01 }, .valid = false, .insufficient_count = 1 }, // Byte-aligned missing ninth DC block.
+		.{ .dc = &.{0x1f}, .width = 17, .valid = false, .insufficient_count = 1 }, // EOB2 undersupplies three blocks.
+		.{ .ac = &.{0x60}, .table = &lookahead, .refine = &.{0x00}, .valid = false, .insufficient_count = 1 }, // Missing correction for a prior nonzero.
+		.{ .width = 32, .ri = 2, .dc = &.{ 0x3e, 0xff, 0xd0, 0x3f }, .ac = &.{ 0x00, 0xff, 0xd0, 0x00 }, .valid = false, .recovered_boundary_failure = true },
+		.{ .width = 32, .ri = 2, .dc = &.{ 0x3f, 0xff, 0xd0, 0x3f }, .ac = &.{ 0x01, 0xff, 0xd0, 0x00 }, .valid = false, .recovered_boundary_failure = true }, // EOB crosses restart.
+		.{ .width = 40, .ri = 3, .dc = &.{ 0x1f, 0xff, 0xd0, 0x3f }, .ac = &.{ 0x00, 0xff, 0xd0, 0x00 }, .valid = false, .insufficient_count = 1 },
+		.{ .width = 64, .ri = 3, .dc = &.{ 0x3f, 0xff, 0xd0, 0x3f, 0xff, 0xd1, 0x3f }, .ac = &.{ 0x01, 0xff, 0xd0, 0x01, 0xff, 0xd1, 0x00 }, .valid = false, .insufficient_count = 2 },
+		.{ .width = 32, .ri = 2, .dc = &.{ 0x3f, 0xff, 0xd0, 0x3f }, .ac = &.{ 0xff, 0xd0, 0x60 }, .table = &lookahead, .valid = false, .insufficient_count = 1, .recovery_ac = &.{ 0x83, 0xff, 0xd0, 0x60 } }, // Recovery resumes before the nonzero second interval.
+	};
+	const allocator = std.testing.allocator;
+	for (cases, 0..) |case, case_index| {
+		const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{16} ** 64) ++
+			[_]u8{ 0xff, 0xc2, 0, 11, 8, 0, 8, 0, case.width, 1, 1, 0x11, 0 } ++
+			[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0};
+		const dri = [_]u8{ 0xff, 0xdd, 0, 4, 0, case.ri };
+		const ac_sos = [_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, 63, if (case.refine != null) 1 else 0 };
+		const refinement_header = eob7 ++ [_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, 63, 0x10 };
+		const data = try std.mem.concat(allocator, u8, &.{
+			&header, &dri, case.table, &.{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 0, 0 }, case.dc,
+			&ac_sos, case.ac, if (case.refine != null) &refinement_header else &.{}, case.refine orelse &.{}, &.{ 0xff, 0xd9 },
+		});
+		defer allocator.free(data);
+		if (jpegz.decode(allocator, data)) |image| {
+			var decoded = image;
+			defer decoded.deinit(allocator);
+			if (!case.valid) {
+				std.debug.print("progressive boundary case {d}: accepted malformed stream\n", .{case_index});
+				return error.ExpectedDecodeFailure;
+			}
+			var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+			defer oracle.deinit(allocator);
+			try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+		} else |err| {
+			if (case.valid) {
+				std.debug.print("progressive boundary case {d}: rejected valid stream ({s})\n", .{ case_index, @errorName(err) });
+				return err;
+			}
+			try std.testing.expectEqual(error.BackendError, err);
+		}
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expectEqual(case.valid or case.insufficient_count > 0, report.isValid());
+		if (case.insufficient_count > 0 or case.recovered_boundary_failure) {
+			var sink = jpegz.FindingsSink.init(allocator);
+			defer sink.deinit();
+			var recovered = try jpegz.decodeWithOptions(allocator, data, .{ .lenient = true, .findings_sink = &sink });
+			defer recovered.deinit(allocator);
+			var insufficient: usize = 0;
+			var boundary_failures: usize = 0;
+			for (sink.items()) |finding| {
+				if (finding.code == .insufficient_data and finding.severity == .warn) insufficient += 1;
+				if (finding.code == .huffman_table_corrupt and finding.severity == .fail) boundary_failures += 1;
+			}
+			try std.testing.expectEqual(case.insufficient_count, insufficient);
+			try std.testing.expectEqual(@as(usize, if (case.recovered_boundary_failure) 1 else 0), boundary_failures);
+			if (case.recovery_ac) |ac| {
+				const ac_start = header.len + dri.len + case.table.len + 10 + case.dc.len + ac_sos.len;
+				const complete = try std.mem.concat(allocator, u8, &.{ data[0..ac_start], ac, data[ac_start + case.ac.len ..] });
+				defer allocator.free(complete);
+				var oracle = try jpegz.internal.wrapperDecode(allocator, complete);
+				defer oracle.deinit(allocator);
+				try std.testing.expect(!std.mem.allEqual(u8, oracle.pixels, 128));
+				try std.testing.expectEqualSlices(u8, oracle.pixels, recovered.pixels);
+			} else if (case.refine == null) {
+				try std.testing.expect(std.mem.allEqual(u8, recovered.pixels, 128));
+			}
+		}
+	}
+}
+
 test "sequential entropy bounds classify legal endings and malformed runs" {
 	// T.81 F.1.2.2 / F.2.2.2: ZRL represents exactly 16 AC zeros;
 	// the block has 63 AC positions. Independent specification:
