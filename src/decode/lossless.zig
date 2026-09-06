@@ -381,6 +381,16 @@ fn decodeScan(
             // sample per component. After RST, the next MCU's first
             // sample uses the initial predictor (per §H.1.2.2).
             if (rst.interval > 0 and rst.samples_since == rst.interval) {
+                // Validate before discarding padding. A copy preserves the
+                // existing cursor when opt-in recovery needs to resynchronize.
+                var boundary = br;
+                if (boundary.finishHuffmanSegment()) |_| {} else |_| {
+                    if (!options.lenient) return error.BackendError;
+                    if (options.findings_sink) |sink| {
+                        try sink.emit(.fail, .huffman_table_corrupt, @intCast(br.byte_pos),
+                            "invalid Huffman entropy or padding at restart boundary");
+                    }
+                }
                 br.seekToMarker();
                 if (!br.marker_seen) {
                     if (options.lenient) {
@@ -456,6 +466,8 @@ fn decodeScan(
         }
     }
 
+    const marker = br.finishHuffmanSegment() catch return error.BackendError;
+    if (marker >= 0xD0 and marker <= 0xD7) return error.BackendError;
     return out;
 }
 
@@ -523,4 +535,3 @@ inline fn computePredictorAt(
         else => unreachable,
     };
 }
-

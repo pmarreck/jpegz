@@ -104,6 +104,79 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 	}
 }
 
+test "lossless entropy boundaries classify complete samples and restart intervals" {
+	// T.81 H.1/H.2: one-bit DC code 0 gives difference zero. With predictor
+	// 1 and precision 8, every sample is 128. Entropy bytes are hand-authored;
+	// the external decoder checks the valid set independently.
+	const cases = [_]struct {
+		entropy: []const u8,
+		valid: bool,
+		width: u8 = 1,
+		height: u8 = 1,
+		restart: ?u8 = null,
+		recoverable_boundary_error: bool = false,
+	}{
+		.{ .entropy = &.{0x7f}, .valid = true },
+		.{ .entropy = &.{0x00}, .width = 8, .valid = true },
+		.{ .entropy = &.{ 0x00, 0x7f }, .width = 9, .valid = true },
+		.{ .entropy = &.{ 0x7f, 0xff, 0xff }, .valid = true }, // Marker fill.
+		.{ .entropy = &.{0x7e}, .valid = false }, // Zero padding bit.
+		.{ .entropy = &.{0x3f}, .valid = false }, // Extra sample within final byte.
+		.{ .entropy = &.{ 0x7f, 0x00 }, .valid = false },
+		.{ .entropy = &.{ 0x7f, 0xff, 0x00 }, .valid = false },
+		.{ .entropy = &.{ 0x7f, 0xff, 0xd0 }, .valid = false },
+		.{ .entropy = &.{0x01}, .width = 8, .valid = false }, // Missing eighth sample.
+		.{ .entropy = &.{0x00}, .width = 9, .valid = false }, // Missing ninth sample.
+		.{ .entropy = &.{0x7f}, .restart = 2, .valid = true },
+		.{ .entropy = &.{0x3f}, .width = 2, .restart = 2, .valid = true },
+		.{ .entropy = &.{ 0x3f, 0xff, 0xd0 }, .width = 2, .restart = 2, .valid = false },
+		.{ .entropy = &.{ 0x7f, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = true },
+		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x00 }, .width = 8, .height = 2, .restart = 8, .valid = true },
+		.{ .entropy = &.{ 0x7f, 0xff, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = true },
+		.{ .entropy = &.{ 0x7e, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = false, .recoverable_boundary_error = true },
+		.{ .entropy = &.{ 0x7f, 0x00, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = false },
+		.{ .entropy = &.{ 0x7f, 0xff, 0x00, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = false },
+	};
+	const allocator = std.testing.allocator;
+	for (cases) |case| {
+		const header = [_]u8{ 0xff, 0xd8, 0xff, 0xc3, 0, 11, 8, 0, case.height, 0, case.width, 1, 1, 0x11, 0 } ++
+			[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0};
+		const dri = [_]u8{ 0xff, 0xdd, 0, 4, 0, case.restart orelse 0 };
+		const data = try std.mem.concat(allocator, u8, &.{
+			&header, if (case.restart != null) &dri else &.{},
+			&.{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, 0, 0 }, case.entropy, &.{ 0xff, 0xd9 },
+		});
+		defer allocator.free(data);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expectEqual(case.valid, report.isValid());
+		if (case.valid) {
+			var decoded = try jpegz.decode(allocator, data);
+			defer decoded.deinit(allocator);
+			try std.testing.expectEqual(@as(usize, case.width) * case.height, decoded.pixels.len);
+			try std.testing.expect(std.mem.allEqual(u8, decoded.pixels, 128));
+			var oracle = jpegz.internal.wrapperDecode(allocator, data) catch |err| switch (err) {
+				error.NotImplemented => continue,
+				else => return err,
+			};
+			defer oracle.deinit(allocator);
+			try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+		} else {
+			try std.testing.expectError(error.BackendError, jpegz.decode(allocator, data));
+		}
+		if (case.recoverable_boundary_error) {
+			var sink = jpegz.FindingsSink.init(allocator);
+			defer sink.deinit();
+			var recovered = try jpegz.internal.losslessDecodeLenientWithFindings(allocator, data, &sink);
+			defer recovered.deinit(allocator);
+			try std.testing.expect(std.mem.allEqual(u8, recovered.pixels, 128));
+			try std.testing.expectEqual(@as(usize, 1), sink.items().len);
+			try std.testing.expectEqual(jpegz.Severity.fail, sink.items()[0].severity);
+			try std.testing.expectEqual(jpegz.FindingCode.huffman_table_corrupt, sink.items()[0].code);
+		}
+	}
+}
+
 test "validate clean baseline JPEG → valid, baseline_huffman" {
     const allocator = std.testing.allocator;
 

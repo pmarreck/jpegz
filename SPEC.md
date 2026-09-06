@@ -74,8 +74,10 @@ Code-number changes require the coordination recorded in PLAN.md.
 Strict validation must account for decoded entropy and surface recovery.
 The implementation still has accounting gaps; the active work order requires
 both corruption-detection gains and zero new rejects on the known-good corpus.
-Sequential Huffman scans check padding and exact entropy consumption at scan
-ends and restart intervals. Progressive/lossless boundary checks remain pending.
+Sequential and lossless Huffman scans check padding and exact entropy
+consumption at scan ends and restart intervals. Progressive boundary checks
+remain pending. Lossless restart-row cadence and predictor-reset gaps are
+tracked separately in PLAN.md.
 Do not advertise complete corruption detection from pixel-oracle equality.
 
 ## 4. Artifacts and dependencies

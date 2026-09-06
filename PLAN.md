@@ -10,7 +10,7 @@ An unchecked historical box does not create a second work order.
 - Branch `yolo`; September 6 documentation and entropy checkpoints passed
   `./test` and `./build`, including unit tests, package build, 71 FFI
   assertions, 49 CLI cases, and three consumer controls. Latest verification:
-  2026-09-06 11:51 EDT. No new upstream CI or consumer remeasurement is claimed.
+  2026-09-06 12:01 EDT. No new upstream CI or consumer remeasurement is claimed.
 - `validateAny`, JP2/JXL delegation, split C archives, the C validation CLI,
   and prepare-phase locale resolution are implemented.
 - JPEG/JPEG-LS pixel dispatch stays in Zig. CharLS and libjpeg-turbo are
@@ -60,6 +60,10 @@ on one input, not measured performance of a later revision.
   cases are corrupt; all six valid controls pass. Legal fill warnings and
   the legacy report API are preserved. _(2026-09-06 11:23 EDT)_
 - [ ] Classify unchecked classic-JPEG codec variants separately from validity.
+- [ ] Forward public `DecodeOptions` to progressive/lossless decoders, with
+  public-entrypoint regressions. September 6 review found dispatch calls to
+  `decode` that discard the requested leniency and findings sink; internal
+  lenient APIs already exist. Do not count internal tests as public coverage.
 - [ ] Enforce exact scan consumption and all-one final padding bits, with
   correct accounting for lookahead and stuffed bytes.
   - [x] Sequential Huffman final-scan boundary: added `finishHuffmanSegment`
@@ -73,14 +77,25 @@ on one input, not measured performance of a later revision.
     finding. The 24-case set includes exact-byte endings, partial-edge MCUs,
     short streams, legal fill, and bad interval padding. Independent review,
     `./test`, and `./build` pass. _(2026-09-06 11:51 EDT)_
-  - [ ] Apply checked boundaries to progressive/lossless scans and their
-    restart intervals. `seekToMarker` still discards unchecked bits there.
+  - [x] Lossless Huffman scan and restart boundaries: the 20-case classifier
+    first failed on accepted zero padding, then passed with checked boundaries.
+    Valid samples match libjpeg-turbo; internal lenient recovery retains a
+    failure finding. Independent static review and the full `./test` pass.
+    _(2026-09-06 12:01 EDT)_
+  - [ ] Apply checked boundaries to progressive scans and restart intervals.
+    `seekToMarker` still discards unchecked bits there.
     Progressive EOB runs must be exhausted at each boundary without rejecting
     valid byte-aligned runs that span subsequent zero blocks.
 - [ ] Enforce MCU counts implied by frame dimensions and sampling, including
   non-interleaved scans and partial edge MCUs.
 - [ ] Enforce DRI restart cadence, modulo-eight marker order, and predictor
   reset at the exact MCU boundaries.
+  - [ ] Lossless DRI must be a whole number of MCU rows (T.81 H.1.1).
+    Independently flagged September 6; add a failing set classifier before
+    changing the current decoder, which does not check this constraint.
+  - [ ] Reproduce the lossless post-restart first-row predictor concern for
+    Ss=2–7 with nonconstant samples. Current code tests image row zero;
+    the first row of each restart interval needs horizontal prediction.
 - [ ] Verify progressive spectral-selection and successive-approximation
   constraints, including the checks already in the structural walker.
 - [ ] Classify the known-good corpus as a set, with zero new rejects.
