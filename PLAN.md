@@ -14,8 +14,10 @@ An unchecked historical box does not create a second work order.
   Mechatron passed progressive-boundary checkpoint `7df6ba3`
   at 13:45 EDT (383 seconds), then AC-band checkpoint `e8f9982`
   at 13:56 EDT (401 seconds), each on all four manifest targets.
-  The subsequent refinement-size fix passed native tests, `./test`, and
-  `./build` at 14:15 EDT; its cross-checks and exact CI are pending.
+  The subsequent refinement-size checkpoint `5c08b96` passed native tests,
+  `./test`, and `./build` at 14:15 EDT, then Windows cross-build and validator
+  closure by 14:17 EDT. Exact-commit Mechatron results track pushed revisions
+  independently of these local checks.
   Controlled consumer remeasurement at earlier checkpoint `8b3e7ed` is below.
 - `validateAny`, JP2/JXL delegation, split C archives, the C validation CLI,
   and prepare-phase locale resolution are implemented.
