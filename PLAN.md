@@ -10,7 +10,7 @@ An unchecked historical box does not create a second work order.
 - Branch `yolo`; September 6 documentation and entropy checkpoints passed
   `./test` and `./build`, including unit tests, package build, 71 FFI
   assertions, 49 CLI cases, and three consumer controls. Latest verification:
-  2026-09-06 13:06 EDT, plus Windows cross-build and validator closure.
+  2026-09-06 13:40 EDT, plus Windows cross-build and validator closure.
   Mechatron passed restart-row checkpoint `8b3e7ed`
   at 12:19 EDT (361 seconds); no consumer remeasurement is claimed.
 - `validateAny`, JP2/JXL delegation, split C archives, the C validation CLI,
@@ -120,22 +120,39 @@ on one input, not measured performance of a later revision.
     _(2026-09-06 12:12 EDT)_
 - [ ] Verify progressive spectral-selection and successive-approximation
   constraints, including the checks already in the structural walker.
-  Review also found legacy semantic-error guards that label an illegal decoded
-  symbol as insufficient data when lookahead has seen a marker. Strict decode
+  - [x] Bound progressive AC zero runs and nonzero placement to the selected
+    band. Red tests reproduced four accepted ZRLs in 63 slots, then a legacy
+    valid verdict for a nonzero placed beyond Se. A 15-case complete-band set
+    now passes, with exact-fit/narrow-band controls and observable nonzero
+    libjpeg pixel comparisons. Independent review, native/full tests, build,
+    Windows cross-build, and validator closure pass. _(2026-09-06 13:40 EDT)_
+  Legacy DC-category and AC-refinement-symbol guards still label illegal decoded
+  symbols as insufficient data when lookahead has seen a marker. Strict decode
   rejects these, but their legacy recovery classification needs separate tests.
 - [ ] Classify the known-good corpus as a set, with zero new rejects.
 - [ ] Run reproducible entropy-interior mutation sweeps before and after;
   distinguish must-detect malformed streams from mutations that remain legal.
   The old work order suggested 60–85% as a target, but supplied no source;
   report actual counts without treating that band as a proven ceiling or floor.
-- [ ] Obtain the consumer JPEG/seeds and arrange end-to-end remeasurement
-  through the jpegz → tiffz → validate pin chain when the change is ready.
-  Requested the exact path, SHA-256, seeds, and command in validate's inbox
-  on September 6 (`2026-09-06-from-jpegz@thelio-nixos-request-original-jpeg-entropy-mutation-fixture-and-seeds.frontmatter.md`).
-  Awaiting acknowledgement; no consumer pin update requested yet.
-  A read-only check of validate's current PLAN found full-PDF seed
-  `1787878036` (historical 303/400 overall, sniper 52.5%). That is not the
-  missing extracted-JPEG seed or a new measurement of this revision.
+- [x] Obtain the original consumer JPEG and mutation recipe. Validate supplied
+  seed `1787878261`, 300 rounds, sniper+shotgun, shotgun span4096, auto jobs,
+  default early-stop radius0.025. Independently verified 698,412 bytes and
+  SHA-256 `4a2e013e63ff9674ebce3f19cde91491e827ca1fb8202a2f0c22da7ef44154fa`.
+  Validate reports reproducing 183/300 overall, including the historical
+  37/154 sniper and 146/146 shotgun counts, using consumer `c582e410c`.
+  This is private, local-only paperwork: never commit or upload the original
+  or mutated derivatives. Paths and extraction recipe are kept privately in
+  `.git/jpegz-private-entropy-reproducer.md`. _(2026-09-06 13:33 EDT)_
+  The current ReleaseFast jpegz CLI independently accepts the original as valid
+  baseline Huffman, 2538x3296, with only JFIF metadata information (13:40 EDT).
+- [ ] Arrange end-to-end remeasurement through jpegz → tiffz → validate using
+  the supplied recipe and an immutable green jpegz revision. Hold input, seed,
+  consumer, and other dependency revisions constant; vary only jpegz. No new
+  jpegz detection rate or consumer pin update has been claimed.
+  Requested a scratch comparison against CI-green baseline checkpoint `8b3e7ed`
+  from validate on September 6; newer progressive checkpoints are distinct.
+  The request asks for exact dependency/binary provenance and a clean-input
+  control, with no consumer pin promotion yet.
 
 Start in `src/decode/baseline.zig`, `bitstream.zig`, `huffman.zig`, and
 `progressive.zig`. Existing restart seeds include

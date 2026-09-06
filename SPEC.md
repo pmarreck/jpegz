@@ -58,6 +58,8 @@ Progressive truncation requires opt-in recovery, with one warning per damaged
 restart interval (or scan without restarts). Completed progressive intervals
 must exhaust their EOB runs and end with only all-one byte padding. Refinement
 scans must supply correction bits for coefficients with nonzero history.
+AC-first zero runs and nonzero placements must stay within the scan's selected
+coefficient band; a decoded run overflow is an error even in recovery mode.
 
 ## 3. Validation contract
 

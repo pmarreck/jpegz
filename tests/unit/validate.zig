@@ -11,6 +11,65 @@ const fixture_progressive_8x8 = @embedFile("fixtures/progressive_8x8_rgb.jpg");
 const fixture_lossless_4x4_gray8 = @embedFile("fixtures/lossless_4x4_gray8.jpg");
 const fixture_arith_8x8_gray = @embedFile("fixtures/arith_baseline_8x8_gray.jpg");
 
+test "progressive AC first-pass runs cannot exceed the selected band" {
+	// T.81 G.1.2.2: a ZRL represents 16 zeros within this scan's band.
+	// One grayscale block, DC0 in its own scan. AC Huffman codes
+	// 000/001/010/011 represent EOB/ZRL/E1/F1. Literal payloads below
+	// are independent of the decoder; valid pixels also use libjpeg's oracle.
+	const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{16} ** 64) ++
+		[_]u8{ 0xff, 0xc2, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 23, 0x10, 0, 0, 4 } ++ ([_]u8{0} ** 13) ++ [_]u8{ 0, 0xf0, 0xe1, 0xf1 } ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 0, 0, 0x7f };
+	const cases = [_]struct { ac: []const u8, valid: bool, ss: u8 = 1, se: u8 = 63, nonzero: bool = false }{
+		.{ .ac = &.{0x1f}, .valid = true },
+		.{ .ac = &.{0x23}, .valid = true },
+		.{ .ac = &.{ 0x24, 0x8f }, .valid = true },
+		.{ .ac = &.{ 0x25, 0x4f }, .valid = true, .nonzero = true },
+		.{ .ac = &.{ 0x24, 0xaf }, .valid = true, .nonzero = true },
+		.{ .ac = &.{ 0x24, 0x9f }, .valid = false },
+		.{ .ac = &.{ 0x24, 0xbf }, .valid = false },
+		.{ .ac = &.{0x3f}, .ss = 1, .se = 16, .valid = true },
+		.{ .ac = &.{0x3f}, .ss = 1, .se = 15, .valid = false },
+		.{ .ac = &.{0x3f}, .ss = 48, .se = 63, .valid = true },
+		.{ .ac = &.{0x3f}, .ss = 49, .se = 63, .valid = false },
+		.{ .ac = &.{0x5f}, .ss = 1, .se = 15, .valid = true, .nonzero = true },
+		.{ .ac = &.{0x5f}, .ss = 1, .se = 14, .valid = false },
+		.{ .ac = &.{0x7f}, .ss = 1, .se = 16, .valid = true, .nonzero = true },
+		.{ .ac = &.{0x7f}, .ss = 1, .se = 15, .valid = false },
+	};
+	const allocator = std.testing.allocator;
+	for (cases, 0..) |case, index| {
+		// Cover every AC position even when the tested scan is a narrow band.
+		const before = [_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, case.ss - 1, 0, 0x1f };
+		const scan = [_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, case.ss, case.se, 0 };
+		const after = [_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, case.se + 1, 63, 0, 0x1f };
+		const data = try std.mem.concat(allocator, u8, &.{
+			&header, if (case.ss > 1) &before else &.{}, &scan, case.ac,
+			if (case.se < 63) &after else &.{}, &.{ 0xff, 0xd9 },
+		});
+		defer allocator.free(data);
+		if (jpegz.decode(allocator, data)) |image| {
+			var decoded = image;
+			defer decoded.deinit(allocator);
+			if (!case.valid) {
+				std.debug.print("progressive AC run case {d}: accepted overflow\n", .{index});
+				return error.ExpectedDecodeFailure;
+			}
+			var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+			defer oracle.deinit(allocator);
+			try std.testing.expectEqual(case.nonzero, !std.mem.allEqual(u8, oracle.pixels, 128));
+			try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+		} else |err| {
+			try std.testing.expect(!case.valid);
+			try std.testing.expectEqual(error.BackendError, err);
+		}
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expectEqual(case.valid, report.isValid());
+	}
+}
+
 test "progressive boundaries account for EOB runs padding and refinement bits" {
 	// T.81 G.1.2 and F.1.2.3, independently reviewed before implementation.
 	// Literal entropy bytes, not a test-side encoder. DC code0 => category0.

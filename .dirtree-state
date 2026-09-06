@@ -1,6 +1,7 @@
 # Dirtree: Stateful directory trees in the CLI for humans and LLMs. https://github.com/pmarreck/dirtree
 ver=1.2
 annotate=[
+	.git/jpegz-private-entropy-reproducer.md = Private local-only consumer JPEG paths, hash, seed, and reproduction recipe
 	NEXT_STEPS.md = Retained validation, threading and numerical decisions; no active task queue
 	PLAN.md = Active ordered tasks, acceptance criteria, decisions and dated baseline
 	RULES.md = Standing project rules: i18n decision, FFI dogfooding, validation closure, finding-code registry

@@ -757,7 +757,7 @@ fn decodeProgressiveDcRefine(
 
 /// T.81 §G.1.2.2 — AC first pass (Ah=0). Like baseline AC decode but:
 ///  - EOB run extension: RS values 0x10..0xE0 mean "end-of-band run for
-///    2^run additional blocks" (skip `eob_run` more blocks at end-of-block).
+///    2^run + extension blocks", including the current block.
 ///  - Decoded value shifted left by Al before storing.
 fn decodeProgressiveAcFirst(
     br: *bitstream.BitReader,
@@ -789,10 +789,11 @@ fn decodeProgressiveAcFirst(
         if (size == 0) {
             if (run == 15) {
                 // ZRL — 16 zeros
+                if (@as(u16, k) + 15 > scan.se) return error.BackendError;
                 k += 16;
                 continue;
             } else {
-                // EOB run: 2^run + extra `run` bits more blocks
+                // EOB run includes this block; decrement it after extension.
                 eob_run.* = (@as(u32, 1) << @intCast(run));
                 if (run > 0) {
                     const extra = br.readBits(@intCast(run)) catch {
@@ -810,10 +811,7 @@ fn decodeProgressiveAcFirst(
         }
         k += run;
         if (k > scan.se) {
-            if (br.markerHit()) {
-                try emitInsufficientData(recovery, br.byte_pos);
-                return;
-            }
+            // The decoded run is out of band even if lookahead saw a marker.
             dbg("[prog:ac_first] k>se after run k={d} se={d} byte_pos={d}\n", .{ k, scan.se, br.byte_pos });
             return error.BackendError;
         }
