@@ -51,8 +51,11 @@ explicitly requests automatic selection; larger values are budgets. Actual
 parallelism depends on the decoder. JP2's current wrapper ignores this option.
 `lenient` defaults to false. Opt-in recovery can return partial pixels;
 attach a `FindingsSink` to retain the recovery diagnostics.
-The public dispatcher currently drops these options for progressive and
-lossless decoding; forwarding them is an open item in PLAN.md.
+The public dispatcher forwards recovery and findings options to sequential
+Huffman, progressive, and lossless decoders. Rejected format probes discard
+their own findings; caller findings and genuine decode-error diagnostics stay.
+Progressive truncation still tolerates missing data independently of `lenient`;
+strict scan accounting remains an open item in PLAN.md.
 
 ## 3. Validation contract
 

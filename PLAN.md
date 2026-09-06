@@ -10,7 +10,7 @@ An unchecked historical box does not create a second work order.
 - Branch `yolo`; September 6 documentation and entropy checkpoints passed
   `./test` and `./build`, including unit tests, package build, 71 FFI
   assertions, 49 CLI cases, and three consumer controls. Latest verification:
-  2026-09-06 12:43 EDT. Mechatron passed restart-row checkpoint `8b3e7ed`
+  2026-09-06 12:54 EDT. Mechatron passed restart-row checkpoint `8b3e7ed`
   at 12:19 EDT (361 seconds); no consumer remeasurement is claimed.
 - `validateAny`, JP2/JXL delegation, split C archives, the C validation CLI,
   and prepare-phase locale resolution are implemented.
@@ -69,10 +69,13 @@ on one input, not measured performance of a later revision.
   state now distinguishes unsupported and skipped checks, with corruption
   precedence. Legacy severity semantics and C layout are unchanged. Independent
   review, `./test`, and `./build` pass. _(2026-09-06 12:43 EDT)_
-- [ ] Forward public `DecodeOptions` to progressive/lossless decoders, with
-  public-entrypoint regressions. September 6 review found dispatch calls to
-  `decode` that discard the requested leniency and findings sink; internal
-  lenient APIs already exist. Do not count internal tests as public coverage.
+- [x] Forward public `DecodeOptions` to progressive/lossless decoders.
+  Public RST-recovery regressions failed before forwarding, then passed with
+  identical recovered pixels, with or without a sink. Further red tests found
+  duplicate probe warnings (3 instead of 2) and leaked unsupported-probe
+  warnings (4 instead of 1). Rejected probes now free only their own findings;
+  caller prefixes and real-error diagnostics survive. Independent review,
+  native tests, `./test`, and `./build` pass. _(2026-09-06 12:54 EDT)_
 - [ ] Enforce exact scan consumption and all-one final padding bits, with
   correct accounting for lookahead and stuffed bytes.
   - [x] Sequential Huffman final-scan boundary: added `finishHuffmanSegment`

@@ -196,9 +196,9 @@ pub const DecodeOptions = struct {
     /// traditional API has no thread param.
     threads: u8 = 1,
 
-    /// `false` (default) — strict decode. Truncated entropy data,
-    /// missing markers, or any other bitstream deviation that
-    /// libjpeg-turbo silently warns about returns a `DecodeError`.
+    /// `false` (default) rejects detected entropy-boundary errors and
+    /// restart mismatches. Legal marker fill may still produce warnings.
+    /// Progressive truncation recovery currently remains unconditional.
     ///
     /// `true` — tolerant decode. The cleanroom mirrors libjpeg-turbo's
     /// recovery behavior: truncated baseline scans yield partial
@@ -207,8 +207,8 @@ pub const DecodeOptions = struct {
     /// deviation is reported there as a warning or failure finding.
     ///
     /// Pick `true` for thumbnail generators, image viewers, and
-    /// best-effort format converters. Stay `false` (or omit) for
-    /// pipelines where any deviation should halt processing.
+    /// best-effort format converters. Validation consumers should use
+    /// `validateAny` to classify damage reported during recovery.
     lenient: bool = false,
 
     /// Optional collector for failure, warning, and informational
@@ -216,12 +216,11 @@ pub const DecodeOptions = struct {
     /// decoding. Caller owns the sink and frees it via
     /// `FindingsSink.deinit()`.
     ///
-    /// What gets emitted is independent of `lenient`:
+    /// Findings include:
     ///   - `.extraneous_bytes_before_marker` fires whenever the
     ///     marker walker silently skips non-0xFF bytes (libjpeg's
     ///     `JWRN_EXTRANEOUS_DATA` equivalent).
-    ///   - `.insufficient_data` fires only in lenient mode when a
-    ///     truncated scan was recovered.
+    ///   - `.insufficient_data` reports recovered scan truncation.
     ///
     /// `null` (default) suppresses all emission — the decoder still
     /// tolerates whatever it's been told to tolerate, but no
@@ -229,9 +228,9 @@ pub const DecodeOptions = struct {
     findings_sink: ?*FindingsSink = null,
 };
 
-/// Decode any T.81 / T.87 JPEG (sequential / progressive / lossless /
-/// arithmetic / JPEG-LS) into a fully-realized `Image`. Universal
-/// entry point — works for every storage mode and precision.
+/// Decode supported T.81 / T.87 JPEG variants (sequential / progressive /
+/// lossless / arithmetic / JPEG-LS) into a fully-realized `Image`.
+/// Unsupported variants return `error.NotImplemented`.
 ///
 /// `data` must remain valid through the call's return.
 ///
@@ -246,10 +245,9 @@ pub fn decode(allocator: Allocator, data: []const u8) DecodeError!Image {
     return decodeWithOptions(allocator, data, .{});
 }
 
-/// Same as `decode` but accepts a `DecodeOptions` struct for caller-
-/// controlled behavior (today: thread-count budget). Existing call
-/// sites of `decode` are unaffected; new consumers needing thread
-/// control call this entry point.
+/// Decode with a thread budget, optional recovery, and diagnostic collection.
+/// Findings from rejected format probes are discarded; the caller's existing
+/// findings and diagnostics from the selected decoder are preserved.
 pub fn decodeWithOptions(
     allocator: Allocator,
     data: []const u8,
@@ -269,6 +267,7 @@ pub fn decodeWithOptions(
     // reimplementation — separate entry point, not reached through this
     // dispatcher.)
     const baseline = @import("decode/baseline.zig");
+	const findings_start = if (options.findings_sink) |sink| sink.items().len else 0;
 
     // JPEG-LS comes first: T.87 uses a different SOF marker (SOF55 =
     // 0xF7) that the other cleanroom paths' marker walkers don't
@@ -293,7 +292,7 @@ pub fn decodeWithOptions(
     if (baseline.decodeWithOptions(allocator, data, baseline_opts)) |img| {
         return img;
     } else |err| switch (err) {
-        error.NotImplemented => {},
+        error.NotImplemented => if (options.findings_sink) |sink| sink.truncate(findings_start),
         else => return err,
     }
 
@@ -306,27 +305,32 @@ pub fn decodeWithOptions(
     // libjpeg `insufficient_data` parity, AC refinement ZRL break
     // semantics (libjpeg's `--r < 0`), float→fixed-point YCbCr,
     // single-component scan iteration via T.81 §A.2.4 xi/yi, IJG
-    // fancy chroma upsampling. NotImplemented falls through to wrapper
-    // for: DRI in progressive, 12-bit precision, multi-component scans
-    // with > 4 components, etc.
+    // fancy chroma upsampling. Unsupported layouts continue to the next
+    // cleanroom decoder; DRI and 12-bit precision are supported here.
     const progressive = @import("decode/progressive.zig");
-    if (progressive.decode(allocator, data)) |img| {
+    if (progressive.decodeWithOptions(allocator, data, .{
+        .lenient = options.lenient,
+        .findings_sink = options.findings_sink,
+    })) |img| {
         return img;
     } else |err| switch (err) {
-        error.NotImplemented => {},
+        error.NotImplemented => if (options.findings_sink) |sink| sink.truncate(findings_start),
         else => return err,
     }
 
     // Try lossless cleanroom (SOF3, T.81 §H — predictive coding).
     // Byte-perfect vs libjpeg-turbo across all 13 lossless fixtures:
     // precision 8/12/14/16, 1- and 3-component, DRI > 0, all 7
-    // predictors. NotImplemented falls through to wrapper for non-1×1
-    // sampling factors and point transform Al > 0.
+    // predictors. Non-1×1 sampling factors return NotImplemented;
+    // point transforms are supported.
     const lossless = @import("decode/lossless.zig");
-    if (lossless.decode(allocator, data)) |img| {
+    if (lossless.decodeWithOptions(allocator, data, .{
+        .lenient = options.lenient,
+        .findings_sink = options.findings_sink,
+    })) |img| {
         return img;
     } else |err| switch (err) {
-        error.NotImplemented => {},
+        error.NotImplemented => if (options.findings_sink) |sink| sink.truncate(findings_start),
         else => return err,
     }
 

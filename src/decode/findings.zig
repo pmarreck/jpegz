@@ -67,6 +67,15 @@ pub const FindingsSink = struct {
     pub fn items(self: *const FindingsSink) []const Finding {
         return self.list.items;
     }
+
+	/// Discard findings after a saved length, retaining the caller's prefix.
+	pub fn truncate(self: *FindingsSink, len: usize) void {
+		std.debug.assert(len <= self.list.items.len);
+		for (self.list.items[len..]) |finding| {
+			if (finding.detail) |detail| self.allocator.free(detail);
+		}
+		self.list.shrinkRetainingCapacity(len);
+	}
 };
 
 test "FindingsSink: init, emit, deinit cleans owned details" {

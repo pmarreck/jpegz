@@ -1661,6 +1661,89 @@ test "cleanroom emits NO Finding(.adobe_app14_conflicts_jfif) when APP14 says YC
     }
 }
 
+test "public decoder preserves caller findings without duplicating format-probe warnings" {
+	const allocator = std.testing.allocator;
+	const fixtures = [_][]const u8{ fixture_baseline_2x2_rgb, fixture_progressive_8x8, fixture_lossless_4x4_gray8 };
+	for (fixtures) |fixture| {
+		const data = try std.mem.concat(allocator, u8, &.{ fixture[0..2], &.{0xff}, fixture[2..] });
+		defer allocator.free(data);
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		try sink.emit(.info, .unknown_marker, 42, "caller-owned finding");
+		var image = try jpegz.decodeWithOptions(allocator, data, .{ .findings_sink = &sink });
+		defer image.deinit(allocator);
+		try std.testing.expectEqual(@as(usize, 2), sink.items().len);
+		try std.testing.expectEqualStrings("caller-owned finding", sink.items()[0].detail.?);
+		try std.testing.expectEqual(jpegz.FindingCode.unknown_marker, sink.items()[0].code);
+		try std.testing.expectEqual(jpegz.Severity.info, sink.items()[0].severity);
+		try std.testing.expectEqual(@as(?u64, 42), sink.items()[0].offset);
+		try std.testing.expectEqual(jpegz.FindingCode.entropy_fill_bytes, sink.items()[1].code);
+		try std.testing.expectEqual(jpegz.Severity.warn, sink.items()[1].severity);
+	}
+}
+
+test "public decoder rolls back unsupported probes but retains real error findings" {
+	const allocator = std.testing.allocator;
+	const cases = [_]struct { fixture: []const u8, sof: u8, unsupported: bool }{
+		.{ .fixture = fixture_lossless_4x4_gray8, .sof = 0xc3, .unsupported = true },
+		.{ .fixture = fixture_baseline_2x2_rgb, .sof = 0xc0, .unsupported = false },
+	};
+	for (cases) |case| {
+		const data = try std.mem.concat(allocator, u8, &.{ case.fixture[0..2], &.{0xff}, case.fixture[2..] });
+		defer allocator.free(data);
+		const sof = std.mem.indexOf(u8, data, &.{ 0xff, case.sof }).?;
+		if (case.unsupported) {
+			data[sof + 11] = 0x21;
+		} else {
+			@memset(data[sof + 7 .. sof + 9], 0);
+		}
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		try sink.emit(.info, .unknown_marker, 42, "caller-owned finding");
+		const expected_error = if (case.unsupported) error.NotImplemented else error.InvalidMarker;
+		try std.testing.expectError(expected_error, jpegz.decodeWithOptions(allocator, data, .{ .findings_sink = &sink }));
+		try std.testing.expectEqual(@as(usize, if (case.unsupported) 1 else 2), sink.items().len);
+		try std.testing.expectEqualStrings("caller-owned finding", sink.items()[0].detail.?);
+		try std.testing.expectEqual(jpegz.FindingCode.unknown_marker, sink.items()[0].code);
+		try std.testing.expectEqual(jpegz.Severity.info, sink.items()[0].severity);
+		try std.testing.expectEqual(@as(?u64, 42), sink.items()[0].offset);
+		if (!case.unsupported) {
+			try std.testing.expectEqual(jpegz.FindingCode.entropy_fill_bytes, sink.items()[1].code);
+			try std.testing.expectEqual(jpegz.Severity.warn, sink.items()[1].severity);
+		}
+	}
+}
+
+test "public decoder forwards progressive and lossless recovery options" {
+	const allocator = std.testing.allocator;
+	const cases = [_]struct { data: []const u8, rst: usize }{
+		.{ .data = fixture_progressive_32x32_dri, .rst = 149 },
+		.{ .data = fixture_lossless_16x16_gray_dri, .rst = 115 },
+	};
+	for (cases) |case| {
+		var expected = try jpegz.decode(allocator, case.data);
+		defer expected.deinit(allocator);
+		const damaged = try allocator.dupe(u8, case.data);
+		defer allocator.free(damaged);
+		try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xd0 }, damaged[case.rst .. case.rst + 2]);
+		damaged[case.rst + 1] = 0xd3;
+		try std.testing.expectError(error.InvalidMarker, jpegz.decode(allocator, damaged));
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		var recovered = try jpegz.decodeWithOptions(allocator, damaged, .{ .lenient = true, .findings_sink = &sink });
+		defer recovered.deinit(allocator);
+		try std.testing.expectEqualSlices(u8, expected.pixels, recovered.pixels);
+		var warned = false;
+		for (sink.items()) |finding| {
+			if (finding.code == .restart_marker_unexpected and finding.severity == .warn) warned = true;
+		}
+		try std.testing.expect(warned);
+		var recovered_without_sink = try jpegz.decodeWithOptions(allocator, damaged, .{ .lenient = true });
+		defer recovered_without_sink.deinit(allocator);
+		try std.testing.expectEqualSlices(u8, expected.pixels, recovered_without_sink.pixels);
+	}
+}
+
 test "cleanroom progressive lenient: RST cycle mismatch → warn + recovers" {
     const allocator = std.testing.allocator;
 
