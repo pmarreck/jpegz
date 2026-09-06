@@ -65,9 +65,11 @@ The older severity report remains available through `validate` and
 `jpeg2000.validate`. Its `isValid()` accepts warnings. The facade supplies
 the four-way vocabulary and classifies recovered entropy truncation and
 missing/misordered restart markers as corrupt, even when their findings have
-warning severity. Legal fill and metadata warnings remain valid. Unchecked
-classic-JPEG codec variants can still map to valid; correcting that gap is
-pending. The facade's name does not establish complete coverage for this leg.
+warning severity. Legal fill and metadata warnings remain valid. A codec check
+that returns `NotImplemented` maps to unsupported; a skipped check maps to
+indeterminate. Known corruption takes precedence. The Zig legacy report's
+`codec_check` records whether decoding ran; its `isValid()` stays severity-based.
+This does not establish complete codec coverage for every decoded variant.
 
 Registry values are append-only and shared with sibling validators.
 Use `jpegz_finding_code_name()` for display; do not duplicate the name table.

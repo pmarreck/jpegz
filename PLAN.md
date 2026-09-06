@@ -10,8 +10,8 @@ An unchecked historical box does not create a second work order.
 - Branch `yolo`; September 6 documentation and entropy checkpoints passed
   `./test` and `./build`, including unit tests, package build, 71 FFI
   assertions, 49 CLI cases, and three consumer controls. Latest verification:
-  2026-09-06 12:12 EDT. Mechatron passed boundary checkpoint `09c0b57`
-  at 12:09 EDT (198 seconds); no consumer remeasurement is claimed.
+  2026-09-06 12:43 EDT. Mechatron passed restart-row checkpoint `8b3e7ed`
+  at 12:19 EDT (361 seconds); no consumer remeasurement is claimed.
 - `validateAny`, JP2/JXL delegation, split C archives, the C validation CLI,
   and prepare-phase locale resolution are implemented.
 - JPEG/JPEG-LS pixel dispatch stays in Zig. CharLS and libjpeg-turbo are
@@ -25,6 +25,9 @@ An unchecked historical box does not create a second work order.
 
 ## Active order
 
+- [ ] Continue Peter's 12:32 EDT request: unchecked-variant classification,
+  public decoder-option forwarding, then progressive entropy boundaries.
+  Keep corruption distinct from unsupported or unexamined codec data.
 - [ ] Continue the ordered queue per Peter's September 6 request; record
   completed sub-items and their test evidence without marking the whole
   entropy milestone complete before its corpus and mutation checks pass.
@@ -61,7 +64,11 @@ on one input, not measured performance of a later revision.
   corrupt); the adapter fix passed `./test` and `./build`. All three damaged
   cases are corrupt; all six valid controls pass. Legal fill warnings and
   the legacy report API are preserved. _(2026-09-06 11:23 EDT)_
-- [ ] Classify unchecked classic-JPEG codec variants separately from validity.
+- [x] Classify unchecked classic-JPEG codec variants separately from validity.
+  Seven-case regression reproduced unsupported-as-valid. Explicit codec-check
+  state now distinguishes unsupported and skipped checks, with corruption
+  precedence. Legacy severity semantics and C layout are unchanged. Independent
+  review, `./test`, and `./build` pass. _(2026-09-06 12:43 EDT)_
 - [ ] Forward public `DecodeOptions` to progressive/lossless decoders, with
   public-entrypoint regressions. September 6 review found dispatch calls to
   `decode` that discard the requested leniency and findings sink; internal

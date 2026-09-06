@@ -469,12 +469,14 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         }
 
         if (result) |img| {
-            // Successful decode — codec is structurally sound.
+            // Decode completed; findings may still report recovered damage.
+            report.codec_check = .decoded;
             // Discard pixels (we only care about the integrity signal).
             var img_mut = img;
             img_mut.deinit(allocator);
         } else |err| switch (err) {
             error.NotImplemented => {
+                report.codec_check = .unsupported;
                 // Cleanroom doesn't own this variant yet — don't slander
                 // the file with FAIL. Surface as INFO so strict
                 // consumers know we didn't run codec check.
@@ -483,6 +485,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             },
             error.OutOfMemory => return error.OutOfMemory,
             else => {
+                report.codec_check = .failed;
                 try addFinding(&report, allocator, .fail,
                     mapDecodeErrorToFindingCode(err), null, @errorName(err));
             },

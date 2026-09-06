@@ -143,6 +143,10 @@ pub const ValidationReport = struct {
     /// Image dimensions from SOF, when available. `null` if SOF not parsed.
     width: ?u32,
     height: ?u32,
+    /// Outcome of the classic-JPEG decode-through check. A completed decode
+    /// can still carry recovery findings; it does not prove full coverage.
+    /// Other legacy validators leave this at not_run.
+    codec_check: enum { not_run, decoded, unsupported, failed } = .not_run,
     /// All findings, in detection order. Caller must pass the same
     /// allocator to `deinit` that was used to construct the report
     /// (Zig 0.15.2 std.ArrayList is unmanaged).
@@ -491,7 +495,12 @@ fn strictFromReport(
     defer report.deinit(allocator);
 
     var result = StrictValidationResult{
-        .verdict = if (report.overall == .fail) .corrupt else .valid,
+        .verdict = if (report.overall == .fail) .corrupt else switch (report.codec_check) {
+            .decoded => .valid,
+            .unsupported => .unsupported,
+            .not_run => .indeterminate,
+            .failed => .corrupt,
+        },
         .format = .jpeg,
         .variant = report.variant,
         .width = report.width,
