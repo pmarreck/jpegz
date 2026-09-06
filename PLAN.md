@@ -14,6 +14,8 @@ An unchecked historical box does not create a second work order.
   Mechatron passed progressive-boundary checkpoint `7df6ba3`
   at 13:45 EDT (383 seconds), then AC-band checkpoint `e8f9982`
   at 13:56 EDT (401 seconds), each on all four manifest targets.
+  The subsequent refinement-size fix passed native tests, `./test`, and
+  `./build` at 14:15 EDT; its cross-checks and exact CI are pending.
   Controlled consumer remeasurement at earlier checkpoint `8b3e7ed` is below.
 - `validateAny`, JP2/JXL delegation, split C archives, the C validation CLI,
   and prepare-phase locale resolution are implemented.
@@ -128,9 +130,14 @@ on one input, not measured performance of a later revision.
     now passes, with exact-fit/narrow-band controls and observable nonzero
     libjpeg pixel comparisons. Independent review, native/full tests, build,
     Windows cross-build, and validator closure pass. _(2026-09-06 13:40 EDT)_
-  Legacy DC-category and AC-refinement-symbol guards still label illegal decoded
-  symbols as insufficient data when lookahead has seen a marker. Strict decode
-  rejects these, but their legacy recovery classification needs separate tests.
+  - [x] Reject decoded AC-refinement sizes2..15 regardless of marker lookahead.
+    The 32-case classifier reproduced legacy-valid acceptance. Removing only
+    that recovery branch preserves actual missing-bit handling; four valid
+    controls match libjpeg pixels. Independent review, native tests, `./test`,
+    and `./build` pass. _(2026-09-06 14:15 EDT)_
+  Legacy DC-category guards still treat size>11 as insufficient data when
+  lookahead has seen a marker. Check precision-dependent category limits before
+  changing this behavior, especially valid 12-bit streams.
 - [ ] Classify the known-good corpus as a set, with zero new rejects.
 - [ ] Run reproducible entropy-interior mutation sweeps before and after;
   distinguish must-detect malformed streams from mutations that remain legal.
@@ -163,8 +170,13 @@ on one input, not measured performance of a later revision.
   from validate by durable inbox note at 14:00 EDT on September 6. Validate
   acknowledged and routed the pin work to tiffz's owning session. It reports
   a separate z7z duplicate-bzip2z-module build blocker, already under repair
-  by z7z. Scratch full-PDF measurement at `e8f9982` is running meanwhile;
-  promoted pins, Nix-built replay, and full-PDF results remain pending.
+  by z7z. Promoted pins and post-promotion Nix replay remain pending.
+- [x] Independently replay the pre-promotion full-PDF comparison in scratch.
+  Same native build route, `89d74e3` to `e8f9982`: 303/400 to 319/400 overall,
+  sniper 107/204 to 123/204 (52.5% to 60.3%), unchanged 196/196 shotgun, and
+  both original controls clean. Both binary hashes and the manifest difference
+  were checked; complete source/toolchain isolation is validate-reported.
+  See the measurement report for commands and limits. _(2026-09-06 14:14 EDT)_
 
 Start in `src/decode/baseline.zig`, `bitstream.zig`, `huffman.zig`, and
 `progressive.zig`. Existing restart seeds include

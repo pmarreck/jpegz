@@ -11,6 +11,53 @@ const fixture_progressive_8x8 = @embedFile("fixtures/progressive_8x8_rgb.jpg");
 const fixture_lossless_4x4_gray8 = @embedFile("fixtures/lossless_4x4_gray8.jpg");
 const fixture_arith_8x8_gray = @embedFile("fixtures/arith_baseline_8x8_gray.jpg");
 
+test "progressive refinement rejects illegal decoded sizes even after marker lookahead" {
+	// T.81 G.1.2.3: size1 introduces a coefficient; sizes2..15 are illegal.
+	// Sweep the complete size domain before and after lookahead sees a marker.
+	const allocator = std.testing.allocator;
+	const eob = [_]u8{ 0xff, 0xc4, 0, 20, 0x10, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0};
+	for ([_]u8{ 8, 16 }) |width| {
+		for (0..16) |size| {
+			const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{16} ** 64) ++
+				[_]u8{ 0xff, 0xc2, 0, 11, 8, 0, 8, 0, width, 1, 1, 0x11, 0 } ++
+				[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0};
+			const zeros: u8 = if (width == 8) 0x7f else 0x3f;
+			// Codes0/10 mean EOB/selected size. Leave10=01 unused for size0.
+			const table = [_]u8{ 0xff, 0xc4, 0, 21, 0x10, 1, 1 } ++ ([_]u8{0} ** 14) ++
+				[_]u8{ 0, @intCast(if (size == 0) 1 else size) };
+			const payload: u8 = if (size == 0) zeros else if (width == 8) 0xbf else 0x5f;
+			const data = try std.mem.concat(allocator, u8, &.{
+				&header, &eob, &.{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 0, 0, zeros },
+				&.{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, 63, 1, zeros },
+				&table, &.{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, 1, 0x10, payload },
+				&eob, &.{ 0xff, 0xda, 0, 8, 1, 1, 0, 2, 63, 0x10, zeros, 0xff, 0xd9 },
+			});
+			defer allocator.free(data);
+			const valid = size <= 1;
+			if (valid) {
+				var decoded = try jpegz.decode(allocator, data);
+				defer decoded.deinit(allocator);
+				var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+				defer oracle.deinit(allocator);
+				try std.testing.expectEqual(size == 1, !std.mem.allEqual(u8, oracle.pixels, 128));
+				try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+			} else {
+				try std.testing.expectError(error.BackendError, jpegz.decode(allocator, data));
+			}
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try std.testing.expectEqual(valid, report.isValid());
+			if (!valid) {
+				if (jpegz.decodeWithOptions(allocator, data, .{ .lenient = true })) |image| {
+					var accepted = image;
+					accepted.deinit(allocator);
+					return error.ExpectedDecodeFailure;
+				} else |err| try std.testing.expectEqual(error.BackendError, err);
+			}
+		}
+	}
+}
+
 test "progressive AC first-pass runs cannot exceed the selected band" {
 	// T.81 G.1.2.2: a ZRL represents 16 zeros within this scan's band.
 	// One grayscale block, DC0 in its own scan. AC Huffman codes

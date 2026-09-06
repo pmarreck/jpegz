@@ -882,10 +882,6 @@ fn decodeProgressiveAcRefine(
 
         if (size != 0) {
             if (size != 1) {
-                if (br.markerHit()) {
-                    try emitInsufficientData(recovery, br.byte_pos);
-                    return;
-                }
                 dbg("[prog:ac_refine] size!=1 (size={d}) k={d} se={d} byte_pos={d}\n", .{ size, k, scan.se, br.byte_pos });
                 return error.BackendError; // refinement always ±1 LSB
             }
