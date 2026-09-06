@@ -11,8 +11,10 @@ An unchecked historical box does not create a second work order.
   `./test` and `./build`, including unit tests, package build, 71 FFI
   assertions, 49 CLI cases, and three consumer controls. Latest verification:
   2026-09-06 13:40 EDT, plus Windows cross-build and validator closure.
-  Mechatron passed restart-row checkpoint `8b3e7ed`
-  at 12:19 EDT (361 seconds); no consumer remeasurement is claimed.
+  Mechatron passed progressive-boundary checkpoint `7df6ba3`
+  at 13:45 EDT (383 seconds), then AC-band checkpoint `e8f9982`
+  at 13:56 EDT (401 seconds), each on all four manifest targets.
+  Controlled consumer remeasurement at earlier checkpoint `8b3e7ed` is below.
 - `validateAny`, JP2/JXL delegation, split C archives, the C validation CLI,
   and prepare-phase locale resolution are implemented.
 - JPEG/JPEG-LS pixel dispatch stays in Zig. CharLS and libjpeg-turbo are
@@ -145,14 +147,18 @@ on one input, not measured performance of a later revision.
   `.git/jpegz-private-entropy-reproducer.md`. _(2026-09-06 13:33 EDT)_
   The current ReleaseFast jpegz CLI independently accepts the original as valid
   baseline Huffman, 2538x3296, with only JFIF metadata information (13:40 EDT).
-- [ ] Arrange end-to-end remeasurement through jpegz → tiffz → validate using
-  the supplied recipe and an immutable green jpegz revision. Hold input, seed,
-  consumer, and other dependency revisions constant; vary only jpegz. No new
-  jpegz detection rate or consumer pin update has been claimed.
-  Requested a scratch comparison against CI-green baseline checkpoint `8b3e7ed`
-  from validate on September 6; newer progressive checkpoints are distinct.
-  The request asks for exact dependency/binary provenance and a clean-input
-  control, with no consumer pin promotion yet.
+- [x] Run the controlled extracted-JPEG comparison through tiffz and validate.
+  Independently reran validate's signed before/after binaries: `89d74e3` to
+  CI-green `8b3e7ed` improved single-byte detection from 37/154 to 47/154
+  (24.0% to 30.5%); shotgun stayed 146/146, and both clean-input controls pass.
+  Validate's build record reports fixed consumer, toolchain, and other sources;
+  jpegz checked the manifest change, binary/input hashes, and result replays.
+  This measures one input and seed, not later progressive checkpoints or a
+  general rate. See [provenance and results](docs/measurements/jpeg-entropy-2026-09-06.md).
+  No consumer pin was promoted. _(2026-09-06 13:49 EDT)_
+- [ ] Promote an immutable CI-green final revision through tiffz → validate
+  and remeasure full-PDF acceptance (seed 1787878036, 400 rounds; historical
+  baseline 303/400, sniper 52.5%). Keep originals and mutants local-only.
 
 Start in `src/decode/baseline.zig`, `bitstream.zig`, `huffman.zig`, and
 `progressive.zig`. Existing restart seeds include

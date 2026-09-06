@@ -13,6 +13,7 @@ annotate=[
 	docs/I18N.md = i18n phase, canonical 50 locales + selection rationale, parser pitfalls
 	docs/VALIDATION_FACADE_EVIDENCE.md = Exact pins, classifier scorecard, and external-validator closure proof for the strict facade.
 	docs/history/PLAN-2026-08-27.md = Historical plan and measurements; superseded by root PLAN.md
+	docs/measurements/jpeg-entropy-2026-09-06.md = Controlled consumer JPEG mutation counts, fixed revisions, binary provenance, and limits
 	docs/superpowers/specs = Frozen design specs (public API, 12-bit precision, arithmetic, JPEG-LS, etc.)
 	flake.nix = Nix packages, checks, and devShell; Zig 0.16.0 and codec dependencies
 	include/jpegz_core.h = Hand-curated public C ABI header (jpegz_decode/validate/free/version)
