@@ -33,6 +33,12 @@ test "AC run bounds classify legal endings and overflowing runs" {
 		.{ .entropy = &.{ 0x12, 0x57 }, .verdict = .valid }, // 3 ZRL, E1(+1): nonzero at 63
 		.{ .entropy = &.{ 0x12, 0x4f }, .verdict = .corrupt }, // 4 ZRL: 64 zeros in 63 slots
 		.{ .entropy = &.{ 0x12, 0x5f }, .verdict = .corrupt }, // 3 ZRL, F1(+1): nonzero at 64
+		.{ .entropy = &.{0x0e}, .verdict = .corrupt }, // One zero in the four final padding bits.
+		.{ .entropy = &.{ 0x0f, 0x00 }, .verdict = .corrupt }, // Extra whole entropy byte.
+		.{ .entropy = &.{ 0x0f, 0xff, 0x00 }, .verdict = .corrupt }, // Stuffed extra payload is not marker fill.
+		.{ .entropy = &.{0x00}, .verdict = .corrupt }, // Two blocks where geometry requires one.
+		.{ .entropy = &.{ 0x0f, 0xff, 0xff }, .verdict = .valid }, // Legal fill before EOI.
+		.{ .entropy = &.{ 0x0f, 0xff, 0xd0 }, .verdict = .corrupt }, // No restart after the final MCU.
 	};
 	const allocator = std.testing.allocator;
 	for (cases) |case| {

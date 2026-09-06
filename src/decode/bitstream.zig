@@ -145,6 +145,20 @@ pub const BitReader = struct {
         self.marker_byte = 0;
     }
 
+    /// Finish a Huffman-coded scan or restart segment without discarding
+    /// unchecked entropy. T.81 F.1.2.3 permits at most seven all-one pad bits.
+    /// Lookahead bytes count as payload; FF marker fill does not.
+    pub fn finishHuffmanSegment(self: *BitReader) error{InvalidEntropyBoundary}!u8 {
+        if (self.bits_valid > 7) return error.InvalidEntropyBoundary;
+        if (self.bits_valid != 0) {
+            const mask = @as(u32, std.math.maxInt(u32)) << @intCast(32 - @as(u6, self.bits_valid));
+            if (self.buf & mask != mask) return error.InvalidEntropyBoundary;
+        }
+        self.seekToMarker();
+        if (!self.marker_seen) return error.InvalidEntropyBoundary;
+        return self.marker_byte;
+    }
+
     /// Discard any padding bits in the bit buffer (per T.81 §F.1.2.3
     /// the encoder pads to byte boundary with 1-bits before emitting
     /// a restart marker), then peek at the next bytes in `data` to
@@ -179,6 +193,51 @@ pub const BitReader = struct {
 };
 
 // ── Tests ────────────────────────────────────────────────────
+
+test "Huffman boundary accepts only all-one partial-byte padding with or without lookahead" {
+    // T.81 F.1.2.3. Start with legal stuffed FF; flip each padding bit
+    // individually while preserving all consumed bits. No Huffman encoder.
+    for (0..8) |padding| {
+        for ([_]bool{ false, true }) |lookahead| {
+            var good = BitReader.init(&.{ 0xff, 0x00, 0xff, 0xd9 });
+            _ = try good.readBits(@intCast(8 - padding));
+            if (lookahead) _ = good.peekBits(16);
+            try std.testing.expectEqual(@as(u8, 0xd9), try good.finishHuffmanSegment());
+            try std.testing.expectEqual(@as(usize, 2), good.byte_pos);
+            for (0..padding) |bit| {
+                const changed: u8 = 0xff ^ (@as(u8, 1) << @intCast(bit));
+                var bad = BitReader.init(&.{ changed, 0xff, 0xd9 });
+                _ = try bad.readBits(@intCast(8 - padding));
+                if (lookahead) _ = bad.peekBits(16);
+                try std.testing.expectError(error.InvalidEntropyBoundary, bad.finishHuffmanSegment());
+            }
+        }
+    }
+}
+
+test "Huffman boundary distinguishes marker fill from whole extra entropy bytes" {
+    const cases = [_]struct { data: []const u8, valid: bool }{
+        .{ .data = &.{ 0xaf, 0xff, 0xd9 }, .valid = true },
+        .{ .data = &.{ 0xaf, 0xff, 0xff, 0xd9 }, .valid = true },
+        .{ .data = &.{ 0xaf, 0xff, 0xff, 0xff, 0xd0 }, .valid = true },
+        .{ .data = &.{ 0xaf, 0x00, 0xff, 0xd9 }, .valid = false },
+        .{ .data = &.{ 0xaf, 0xff, 0x00, 0xff, 0xd9 }, .valid = false },
+        .{ .data = &.{ 0xaf, 0xff, 0xff, 0x00, 0xff, 0xd9 }, .valid = false },
+        .{ .data = &.{0xaf}, .valid = false },
+        .{ .data = &.{ 0xaf, 0xff }, .valid = false },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |lookahead| {
+            var reader = BitReader.init(case.data);
+            _ = try reader.readBits(4);
+            if (lookahead) _ = reader.peekBits(16);
+            if (case.valid) {
+                try std.testing.expectEqual(case.data[case.data.len - 1], try reader.finishHuffmanSegment());
+                try std.testing.expectEqual(case.data.len - 2, reader.byte_pos);
+            } else try std.testing.expectError(error.InvalidEntropyBoundary, reader.finishHuffmanSegment());
+        }
+    }
+}
 
 test "BitReader basic MSB-first" {
     // 0b10110100 0b11001010 → bits MSB first: 1,0,1,1,0,1,0,0,1,1,0,0,1,0,1,0

@@ -23,6 +23,9 @@ An unchecked historical box does not create a second work order.
 
 ## Active order
 
+- [ ] Continue the ordered queue per Peter's September 6 request; record
+  completed sub-items and their test evidence without marking the whole
+  entropy milestone complete before its corpus and mutation checks pass.
 - [x] Finish the September documentation reconciliation; `./test` passed
   unit tests, 49 CLI cases, 71 FFI assertions, package build, and three
   consumer controls. _(2026-09-06 11:07 EDT)_
@@ -59,11 +62,16 @@ on one input, not measured performance of a later revision.
 - [ ] Classify unchecked classic-JPEG codec variants separately from validity.
 - [ ] Enforce exact scan consumption and all-one final padding bits, with
   correct accounting for lookahead and stuffed bytes.
-  Source checkpoint: baseline `decodeScanT` returns after its geometry-driven
-  MCU loop without checking scan termination. `BitReader.seekToMarker`
-  discards the entire lookahead buffer, which can hold more than seven bits;
-  it cannot itself prove that only legal padding remained. It is shared with
-  other decoders, so changes need mode-specific boundary tests.
+  - [x] Sequential Huffman final-scan boundary: added `finishHuffmanSegment`
+    to check all buffered and unread entropy before the next marker. Reject
+    bad padding, whole extra bytes, stuffed surplus, and a final RST; retain
+    legal marker fill. The 13-case JPEG classifier and 88 bit-reader boundary
+    outcomes pass. Independent T.81 review approved this scoped change;
+    `./test` and `./build` pass. _(2026-09-06 11:39 EDT)_
+  - [ ] Apply checked boundaries to restart intervals and progressive/lossless
+    scans. `seekToMarker` still discards unchecked bits at those call sites.
+    Progressive EOB runs must be exhausted at each boundary without rejecting
+    valid byte-aligned runs that span subsequent zero blocks.
 - [ ] Enforce MCU counts implied by frame dimensions and sampling, including
   non-interleaved scans and partial edge MCUs.
 - [ ] Enforce DRI restart cadence, modulo-eight marker order, and predictor

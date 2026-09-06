@@ -74,6 +74,8 @@ Code-number changes require the coordination recorded in PLAN.md.
 Strict validation must account for decoded entropy and surface recovery.
 The implementation still has accounting gaps; the active work order requires
 both corruption-detection gains and zero new rejects on the known-good corpus.
+Sequential Huffman scans check final padding and exact entropy consumption;
+restart-interval and progressive/lossless boundary checks remain pending.
 Do not advertise complete corruption detection from pixel-oracle equality.
 
 ## 4. Artifacts and dependencies

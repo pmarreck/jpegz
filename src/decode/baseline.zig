@@ -626,6 +626,14 @@ fn decodeScanT(
         }
     }
 
+    // Account for every entropy bit before handing the marker back. Recovered
+    // truncation already has an insufficient_data finding in the legacy API.
+    if (!lenient_state.truncation_seen) {
+        const marker = br.finishHuffmanSegment() catch return fail("scan_entropy_boundary", error.BackendError);
+        if (marker >= 0xD0 and marker <= 0xD7)
+            return fail("rst_after_final_mcu", error.BackendError);
+    }
+
     // Pool machinery is hoisted to function scope so `pool_ptr` survives to the
     // assembleOutputT call below. Only populated for P<=8 (the parallel IDCT +
     // color-convert fast path); P=12 stays single-threaded (pool_ptr null),
