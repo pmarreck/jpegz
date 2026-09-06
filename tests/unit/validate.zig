@@ -11,6 +11,56 @@ const fixture_progressive_8x8 = @embedFile("fixtures/progressive_8x8_rgb.jpg");
 const fixture_lossless_4x4_gray8 = @embedFile("fixtures/lossless_4x4_gray8.jpg");
 const fixture_arith_8x8_gray = @embedFile("fixtures/arith_baseline_8x8_gray.jpg");
 
+test "AC run bounds classify legal endings and overflowing runs" {
+	// T.81 F.1.2.2 / F.2.2.2: ZRL represents exactly 16 AC zeros;
+	// the block has 63 AC positions. Independent specification:
+	// https://www.w3.org/Graphics/JPEG/itu-t81.pdf
+	// One 8x8 grayscale block, unit quantization. DC code 0 means zero;
+	// AC codes 000/001/010/011 mean EOB/ZRL/E1/F1 respectively.
+	const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++
+		([_]u8{1} ** 64) ++
+		[_]u8{ 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 23, 0x10, 0, 0, 4 } ++ ([_]u8{0} ** 13) ++
+		[_]u8{ 0, 0xf0, 0xe1, 0xf1 } ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0 };
+	const cases = [_]struct { entropy: []const u8, verdict: jpegz.StrictVerdict }{
+		// Explicit bit strings, padded with ones; no test-side entropy encoder.
+		.{ .entropy = &.{0x0f}, .verdict = .valid }, // DC, EOB
+		.{ .entropy = &.{0x11}, .verdict = .valid }, // DC, ZRL, EOB
+		.{ .entropy = &.{ 0x12, 0x47 }, .verdict = .valid }, // 3 ZRL, EOB
+		.{ .entropy = &.{ 0x12, 0xa7 }, .verdict = .valid }, // 2 ZRL, E1(+1), ZRL: ends at 64
+		.{ .entropy = &.{ 0x12, 0x57 }, .verdict = .valid }, // 3 ZRL, E1(+1): nonzero at 63
+		.{ .entropy = &.{ 0x12, 0x4f }, .verdict = .corrupt }, // 4 ZRL: 64 zeros in 63 slots
+		.{ .entropy = &.{ 0x12, 0x5f }, .verdict = .corrupt }, // 3 ZRL, F1(+1): nonzero at 64
+	};
+	const allocator = std.testing.allocator;
+	for (cases) |case| {
+		const data = try std.mem.concat(allocator, u8, &.{ &header, case.entropy, &.{ 0xff, 0xd9 } });
+		defer allocator.free(data);
+		var result = try jpegz.validate(allocator, data);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(case.verdict == .valid, result.isValid());
+		if (case.verdict == .valid) {
+			var decoded = try jpegz.decode(allocator, data);
+			defer decoded.deinit(allocator);
+			var oracle = jpegz.internal.wrapperDecode(allocator, data) catch |err| switch (err) {
+				error.NotImplemented => continue, // Optional oracle excluded from this build.
+				else => return err,
+			};
+			defer oracle.deinit(allocator);
+			try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+		} else {
+			// Strict decoding must reject the same malformed set as validation.
+			if (jpegz.decode(allocator, data)) |image| {
+				var unexpected = image;
+				unexpected.deinit(allocator);
+				return error.ExpectedDecodeFailure;
+			} else |err| try std.testing.expectEqual(error.BackendError, err);
+		}
+	}
+}
+
 test "validate clean baseline JPEG → valid, baseline_huffman" {
     const allocator = std.testing.allocator;
 

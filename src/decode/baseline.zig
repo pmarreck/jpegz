@@ -942,6 +942,7 @@ fn decodeBlockCoefficients(
         if (rs == 0x00) break; // EOB — rest of block is zero
         if (rs == 0xF0) {
             k += 16; // ZRL — 16 zeros (already zeroed; just advance)
+            if (k > 64) return fail("ac_k_overflow", error.BackendError);
             continue;
         }
         const run: u8 = rs >> 4;
@@ -1191,4 +1192,3 @@ pub fn assembleOutput(
 ) Error!types.Image {
     return assembleOutputT(8, allocator, frame, channels, width, height, max_h, max_v, plane_w, plane_h, planes, pool, false);
 }
-

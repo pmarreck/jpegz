@@ -43,8 +43,13 @@ are available from validate; extraction used
 `qpdf --show-object=22 --raw-stream-data`. These are historical measurements
 on one input, not measured performance of a later revision.
 
-- [ ] Prove AC run-overflow behavior with a regression first. A run cannot
+- [x] Prove AC run-overflow behavior with a regression first. A run cannot
   extend beyond the block's 64 coefficients; preserve valid boundary cases.
+  September 6 red run: the seven-case classifier failed because four ZRLs
+  were accepted (64 zeros in 63 AC slots). All five valid boundary cases
+  passed libjpeg-turbo pixel comparisons. The one-line bounds fix passed
+  `./test`, including package build and consumer controls.
+  _(2026-09-06 EDT)_
 - [ ] Correct classic-JPEG facade classification of recovered entropy damage
   and unchecked variants. Preserve benign warnings and the legacy report API.
 - [ ] Enforce exact scan consumption and all-one final padding bits, with
