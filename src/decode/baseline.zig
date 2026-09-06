@@ -61,6 +61,16 @@ fn handleRstResync(
     mcus_since_rst: *u32,
     options: DecodeOptions,
 ) errors.DecodeError!void {
+    // Preserve opt-in pixel recovery, but never hide discarded entropy from
+    // a validator. Check a copy so lenient resynchronization retains its input.
+    var boundary = br.*;
+    if (boundary.finishHuffmanSegment()) |_| {} else |_| {
+        if (!options.lenient) return fail("rst_entropy_boundary", error.BackendError);
+        if (options.findings_sink) |sink| {
+            try sink.emit(.fail, .huffman_table_corrupt, @intCast(br.byte_pos),
+                "invalid Huffman entropy or padding at restart boundary");
+        }
+    }
     // Force the reader to look ahead for the marker — the bit
     // buffer may still hold padding bits that haven't triggered a
     // refill yet.

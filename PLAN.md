@@ -10,7 +10,7 @@ An unchecked historical box does not create a second work order.
 - Branch `yolo`; September 6 documentation and entropy checkpoints passed
   `./test` and `./build`, including unit tests, package build, 71 FFI
   assertions, 49 CLI cases, and three consumer controls. Latest verification:
-  2026-09-06 11:23 EDT. No new upstream CI or consumer remeasurement is claimed.
+  2026-09-06 11:51 EDT. No new upstream CI or consumer remeasurement is claimed.
 - `validateAny`, JP2/JXL delegation, split C archives, the C validation CLI,
   and prepare-phase locale resolution are implemented.
 - JPEG/JPEG-LS pixel dispatch stays in Zig. CharLS and libjpeg-turbo are
@@ -68,8 +68,13 @@ on one input, not measured performance of a later revision.
     legal marker fill. The 13-case JPEG classifier and 88 bit-reader boundary
     outcomes pass. Independent T.81 review approved this scoped change;
     `./test` and `./build` pass. _(2026-09-06 11:39 EDT)_
-  - [ ] Apply checked boundaries to restart intervals and progressive/lossless
-    scans. `seekToMarker` still discards unchecked bits at those call sites.
+  - [x] Sequential Huffman restart boundaries: check padding and surplus
+    entropy before resynchronization; opt-in pixel recovery emits a fail
+    finding. The 24-case set includes exact-byte endings, partial-edge MCUs,
+    short streams, legal fill, and bad interval padding. Independent review,
+    `./test`, and `./build` pass. _(2026-09-06 11:51 EDT)_
+  - [ ] Apply checked boundaries to progressive/lossless scans and their
+    restart intervals. `seekToMarker` still discards unchecked bits there.
     Progressive EOB runs must be exhausted at each boundary without rejecting
     valid byte-aligned runs that span subsequent zero blocks.
 - [ ] Enforce MCU counts implied by frame dimensions and sampling, including
@@ -85,6 +90,9 @@ on one input, not measured performance of a later revision.
   report actual counts without treating that band as a proven ceiling or floor.
 - [ ] Obtain the consumer JPEG/seeds and arrange end-to-end remeasurement
   through the jpegz → tiffz → validate pin chain when the change is ready.
+  Requested the exact path, SHA-256, seeds, and command in validate's inbox
+  on September 6 (`2026-09-06-from-jpegz@thelio-nixos-request-original-jpeg-entropy-mutation-fixture-and-seeds.frontmatter.md`).
+  Awaiting acknowledgement; no consumer pin update requested yet.
 
 Start in `src/decode/baseline.zig`, `bitstream.zig`, `huffman.zig`, and
 `progressive.zig`. Existing restart seeds include

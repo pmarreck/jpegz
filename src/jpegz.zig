@@ -200,15 +200,15 @@ pub const DecodeOptions = struct {
     /// recovery behavior: truncated baseline scans yield partial
     /// pixels (the rest filled with solid gray from zero-coef IDCT
     /// blocks). When a `findings_sink` is also attached, the
-    /// deviation is reported there as a `Finding(.warn, ...)`.
+    /// deviation is reported there as a warning or failure finding.
     ///
     /// Pick `true` for thumbnail generators, image viewers, and
     /// best-effort format converters. Stay `false` (or omit) for
     /// pipelines where any deviation should halt processing.
     lenient: bool = false,
 
-    /// Optional collector for `Finding(.warn, ...)` and
-    /// `Finding(.info, ...)` notes the cleanroom emits while
+    /// Optional collector for failure, warning, and informational
+    /// findings the cleanroom emits while
     /// decoding. Caller owns the sink and frees it via
     /// `FindingsSink.deinit()`.
     ///

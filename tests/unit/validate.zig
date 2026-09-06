@@ -11,7 +11,7 @@ const fixture_progressive_8x8 = @embedFile("fixtures/progressive_8x8_rgb.jpg");
 const fixture_lossless_4x4_gray8 = @embedFile("fixtures/lossless_4x4_gray8.jpg");
 const fixture_arith_8x8_gray = @embedFile("fixtures/arith_baseline_8x8_gray.jpg");
 
-test "AC run bounds classify legal endings and overflowing runs" {
+test "sequential entropy bounds classify legal endings and malformed runs" {
 	// T.81 F.1.2.2 / F.2.2.2: ZRL represents exactly 16 AC zeros;
 	// the block has 63 AC positions. Independent specification:
 	// https://www.w3.org/Graphics/JPEG/itu-t81.pdf
@@ -24,7 +24,14 @@ test "AC run bounds classify legal endings and overflowing runs" {
 		[_]u8{ 0xff, 0xc4, 0, 23, 0x10, 0, 0, 4 } ++ ([_]u8{0} ** 13) ++
 		[_]u8{ 0, 0xf0, 0xe1, 0xf1 } ++
 		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0 };
-	const cases = [_]struct { entropy: []const u8, verdict: jpegz.StrictVerdict }{
+	const cases = [_]struct {
+		entropy: []const u8,
+		verdict: jpegz.StrictVerdict,
+		width: u8 = 8,
+		restart: ?u8 = null,
+		legacy_valid: ?bool = null,
+		recoverable_boundary_error: bool = false,
+	}{
 		// Explicit bit strings, padded with ones; no test-side entropy encoder.
 		.{ .entropy = &.{0x0f}, .verdict = .valid }, // DC, EOB
 		.{ .entropy = &.{0x11}, .verdict = .valid }, // DC, ZRL, EOB
@@ -39,14 +46,44 @@ test "AC run bounds classify legal endings and overflowing runs" {
 		.{ .entropy = &.{0x00}, .verdict = .corrupt }, // Two blocks where geometry requires one.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xff }, .verdict = .valid }, // Legal fill before EOI.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xd0 }, .verdict = .corrupt }, // No restart after the final MCU.
+		.{ .entropy = &.{0x00}, .width = 16, .verdict = .valid }, // Two blocks exactly fill one byte.
+		.{ .entropy = &.{ 0x00, 0x0f }, .width = 17, .verdict = .valid }, // Partial edge MCU is still a whole block.
+		.{ .entropy = &.{0x0f}, .restart = 2, .verdict = .valid }, // Final short interval needs no RST.
+		.{ .entropy = &.{ 0x0f, 0xff, 0xd0 }, .restart = 1, .verdict = .corrupt },
+		.{ .entropy = &.{ 0x0f, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
+		.{ .entropy = &.{ 0x0e, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt, .recoverable_boundary_error = true },
+		.{ .entropy = &.{ 0x0f, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
+		.{ .entropy = &.{ 0x0f, 0xff, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
+		.{ .entropy = &.{ 0x0f, 0xff, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
+		.{ .entropy = &.{0x0f}, .width = 16, .verdict = .corrupt, .legacy_valid = true }, // Missing second MCU.
+		.{ .entropy = &.{0x00}, .width = 17, .verdict = .corrupt, .legacy_valid = true }, // Missing partial-edge MCU.
 	};
 	const allocator = std.testing.allocator;
 	for (cases) |case| {
-		const data = try std.mem.concat(allocator, u8, &.{ &header, case.entropy, &.{ 0xff, 0xd9 } });
+		var case_header = header;
+		const sof_start = 7 + 64; // SOI plus the complete DQT segment above.
+		case_header[sof_start + 8] = case.width;
+		const dri = [_]u8{ 0xff, 0xdd, 0, 4, 0, case.restart orelse 0 };
+		const data = try std.mem.concat(allocator, u8, &.{
+			case_header[0..2], if (case.restart != null) &dri else &.{},
+			case_header[2..], case.entropy, &.{ 0xff, 0xd9 },
+		});
 		defer allocator.free(data);
 		var result = try jpegz.validate(allocator, data);
 		defer result.deinit(allocator);
-		try std.testing.expectEqual(case.verdict == .valid, result.isValid());
+		try std.testing.expectEqual(case.legacy_valid orelse (case.verdict == .valid), result.isValid());
+		if (case.recoverable_boundary_error) {
+			var sink = jpegz.FindingsSink.init(allocator);
+			defer sink.deinit();
+			var recovered = try jpegz.decodeWithOptions(allocator, data, .{ .lenient = true, .findings_sink = &sink });
+			defer recovered.deinit(allocator);
+			var failures: usize = 0;
+			for (sink.items()) |finding| {
+				if (finding.code == .huffman_table_corrupt and finding.severity == .fail) failures += 1;
+			}
+			try std.testing.expectEqual(@as(usize, 1), failures);
+			try std.testing.expectEqual(@as(u32, case.width), recovered.width);
+		}
 		if (case.verdict == .valid) {
 			var decoded = try jpegz.decode(allocator, data);
 			defer decoded.deinit(allocator);
