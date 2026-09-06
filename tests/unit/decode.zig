@@ -1144,6 +1144,55 @@ test "M2.6: lossless SOF3 cleanroom decodes 3-component RGB byte-for-byte" {
     try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
 }
 
+test "lossless direct decode rejects zero width before restart-row arithmetic" {
+	const allocator = std.testing.allocator;
+	for ([_]u8{ 0, 1 }) |interval| {
+		const data = [_]u8{ 0xff, 0xd8, 0xff, 0xc3, 0, 11, 8, 0, 1, 0, 0, 1, 1, 0x11, 0 } ++
+			[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+			[_]u8{ 0xff, 0xdd, 0, 4, 0, interval, 0xff, 0xda, 0, 8, 1, 1, 0, 1, 0, 0, 0xff, 0xd9 };
+		if (jpegz.internal.losslessDecode(allocator, &data)) |image| {
+			var unexpected = image;
+			unexpected.deinit(allocator);
+			return error.ExpectedDecodeFailure;
+		} else |err| try std.testing.expectEqual(error.InvalidMarker, err);
+	}
+}
+
+test "lossless predictors reset for an entire restart row then resume below it" {
+	// T.81 H.1.2.1. DC codes 00/01/10 represent categories 0/1/3.
+	// 0x76 = 011|10110 encodes +1,+6; 0xa3 = 10100|011 encodes +4,+1.
+	// The first row of EVERY interval uses horizontal prediction, regardless
+	// of Ss. Rows below it use the selected predictor. No entropy encoder here.
+	const allocator = std.testing.allocator;
+	const second_row_right = [_]u8{ 134, 136, 130, 140, 137, 138, 135 };
+	for (second_row_right, 1..) |right, predictor| {
+		const cases = [_]struct { height: u8, interval: u8, entropy: []const u8, pixels: []const u8 }{
+			.{ .height = 2, .interval = 2, .entropy = &.{ 0x76, 0xff, 0xd0, 0xa3 }, .pixels = &.{ 129, 135, 132, 133 } },
+			.{ .height = 2, .interval = 0, .entropy = &.{ 0x76, 0xa3 }, .pixels = &.{ 129, 135, 133, right } },
+			.{ .height = 4, .interval = 4, .entropy = &.{ 0x76, 0xa3, 0xff, 0xd0, 0x76, 0xa3 },
+				.pixels = &.{ 129, 135, 133, right, 129, 135, 133, right } },
+		};
+		for (cases) |case| {
+			const header = [_]u8{ 0xff, 0xd8, 0xff, 0xc3, 0, 11, 8, 0, case.height, 0, 2, 1, 1, 0x11, 0 } ++
+				[_]u8{ 0xff, 0xc4, 0, 22, 0, 0, 3 } ++ ([_]u8{0} ** 14) ++ [_]u8{ 0, 1, 3 };
+			const data = try std.mem.concat(allocator, u8, &.{ &header,
+				&.{ 0xff, 0xdd, 0, 4, 0, case.interval, 0xff, 0xda, 0, 8, 1, 1, 0, @intCast(predictor), 0, 0 },
+				case.entropy, &.{ 0xff, 0xd9 },
+			});
+			defer allocator.free(data);
+			var decoded = try jpegz.decode(allocator, data);
+			defer decoded.deinit(allocator);
+			try std.testing.expectEqualSlices(u8, case.pixels, decoded.pixels);
+			var oracle = jpegz.internal.wrapperDecode(allocator, data) catch |err| switch (err) {
+				error.NotImplemented => continue,
+				else => return err,
+			};
+			defer oracle.deinit(allocator);
+			try std.testing.expectEqualSlices(u8, case.pixels, oracle.pixels);
+		}
+	}
+}
+
 test "M2.4: lossless SOF3 cleanroom decodes 4x4 gradient with predictors 2..7 byte-for-byte" {
     const allocator = std.testing.allocator;
     const expected = [_]u8{ 0x00, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0 };

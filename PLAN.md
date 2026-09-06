@@ -10,14 +10,16 @@ An unchecked historical box does not create a second work order.
 - Branch `yolo`; September 6 documentation and entropy checkpoints passed
   `./test` and `./build`, including unit tests, package build, 71 FFI
   assertions, 49 CLI cases, and three consumer controls. Latest verification:
-  2026-09-06 12:01 EDT. No new upstream CI or consumer remeasurement is claimed.
+  2026-09-06 12:12 EDT. Mechatron passed boundary checkpoint `09c0b57`
+  at 12:09 EDT (198 seconds); no consumer remeasurement is claimed.
 - `validateAny`, JP2/JXL delegation, split C archives, the C validation CLI,
   and prepare-phase locale resolution are implemented.
 - JPEG/JPEG-LS pixel dispatch stays in Zig. CharLS and libjpeg-turbo are
   optional oracles; JP2 pixel decode still uses OpenJPEG. JXL validation
   requires Brotli; Windows JXL remains disabled pending vendoring.
 - Current leaf pins are in `build.zig.zon`: jp2z `1b29e0c`, libjxlz
-  `5e8f9d6`. Their upstream freshness has not yet been established here.
+  `5e8f9d6`. Both trail upstream and sibling HEADs as checked September 6;
+  exact observations are recorded under Dependency freshness.
 - Tests default to ReleaseSafe in both build.zig and Nix; builds and
   benchmarks default to ReleaseFast.
 
@@ -90,12 +92,15 @@ on one input, not measured performance of a later revision.
   non-interleaved scans and partial edge MCUs.
 - [ ] Enforce DRI restart cadence, modulo-eight marker order, and predictor
   reset at the exact MCU boundaries.
-  - [ ] Lossless DRI must be a whole number of MCU rows (T.81 H.1.1).
-    Independently flagged September 6; add a failing set classifier before
-    changing the current decoder, which does not check this constraint.
-  - [ ] Reproduce the lossless post-restart first-row predictor concern for
-    Ss=2–7 with nonconstant samples. Current code tests image row zero;
-    the first row of each restart interval needs horizontal prediction.
+  - [x] Lossless DRI must be a whole number of MCU rows (T.81 H.1.1).
+    Red classifier reproduced acceptance of non-row intervals. The guard
+    passes the 24-case lossless set and two zero-width regressions, plus
+    `./test` and `./build`. _(2026-09-06 12:12 EDT)_
+  - [x] Reproduce and fix lossless post-restart first-row prediction for
+    Ss=2–7 with nonconstant samples. Reproduced pixel 136 instead of 133;
+    the first-row counter fix passes 21 cases against hand-calculated pixels
+    and libjpeg-turbo, with independent review, `./test`, and `./build`.
+    _(2026-09-06 12:12 EDT)_
 - [ ] Verify progressive spectral-selection and successive-approximation
   constraints, including the checks already in the structural walker.
 - [ ] Classify the known-good corpus as a set, with zero new rejects.
@@ -108,6 +113,9 @@ on one input, not measured performance of a later revision.
   Requested the exact path, SHA-256, seeds, and command in validate's inbox
   on September 6 (`2026-09-06-from-jpegz@thelio-nixos-request-original-jpeg-entropy-mutation-fixture-and-seeds.frontmatter.md`).
   Awaiting acknowledgement; no consumer pin update requested yet.
+  A read-only check of validate's current PLAN found full-PDF seed
+  `1787878036` (historical 303/400 overall, sniper 52.5%). That is not the
+  missing extracted-JPEG seed or a new measurement of this revision.
 
 Start in `src/decode/baseline.zig`, `bitstream.zig`, `huffman.zig`, and
 `progressive.zig`. Existing restart seeds include
@@ -117,8 +125,10 @@ existing corpus and mutation patterns.
 
 ## Dependency freshness
 
-- [ ] Read the implemented gates in tiffz and validate before choosing code.
+- [x] Read the implemented gates in tiffz and validate before choosing code.
   Peter explicitly requested their working mechanism, not a new one.
+  Read both scripts, classifier tests, and build entrypoints.
+  _(2026-09-06 12:12 EDT)_
 - [ ] Fail when a pinned dependency trails upstream; when offline, compare
   against the sibling checkout under `~/Code/`.
 - [ ] Test stale, current, missing, and offline cases with an independent
@@ -126,6 +136,23 @@ existing corpus and mutation patterns.
 
 Curiosity poke: a sandboxed reproducible build cannot silently equate an
 unreachable network with proof that a pin is current.
+
+The existing mechanisms differ. `tiffz/tools/check_dependency_freshness` is
+upstream-first, falls back to the adjacent sibling, and fails when both are
+unavailable. `validate/scripts/check-dep-freshness` defaults to sibling-first,
+resolves local mainline and ancestry, and treats unresolvable dependencies as
+advisory. Both run before Nix and have explicit stale-pin overrides. Preserve
+the requested source order and fail-closed policy when porting; also test
+feature-branch checkouts and pins ahead of a sibling to avoid false alarms.
+
+Read-only tiffz-gate runs against this manifest, with no stale override, failed
+in both upstream-first and local-first modes at 12:11–12:12 EDT. Both sources
+agreed on these heads; pins were not changed:
+
+- jp2z: pinned `1b29e0cdbe43da145294a05fc263bce56c1d5a88`,
+  observed `5ae6bcd5a0741080744f47d380ffb527a34f60a9`.
+- libjxlz: pinned `5e8f9d68152ae8a70cb823061f4b6c733eb09166`,
+  observed `d3ebb07c779283b5524d2f643d152bab830292c5`.
 
 ## Brotli and Windows
 

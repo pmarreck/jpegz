@@ -51,6 +51,8 @@ explicitly requests automatic selection; larger values are budgets. Actual
 parallelism depends on the decoder. JP2's current wrapper ignores this option.
 `lenient` defaults to false. Opt-in recovery can return partial pixels;
 attach a `FindingsSink` to retain the recovery diagnostics.
+The public dispatcher currently drops these options for progressive and
+lossless decoding; forwarding them is an open item in PLAN.md.
 
 ## 3. Validation contract
 
@@ -75,9 +77,9 @@ Strict validation must account for decoded entropy and surface recovery.
 The implementation still has accounting gaps; the active work order requires
 both corruption-detection gains and zero new rejects on the known-good corpus.
 Sequential and lossless Huffman scans check padding and exact entropy
-consumption at scan ends and restart intervals. Progressive boundary checks
-remain pending. Lossless restart-row cadence and predictor-reset gaps are
-tracked separately in PLAN.md.
+consumption at scan ends and restart intervals. Supported lossless scans also
+enforce whole-row restart intervals and reset prediction for each interval's
+first row. Progressive boundary checks remain pending.
 Do not advertise complete corruption detection from pixel-oracle equality.
 
 ## 4. Artifacts and dependencies

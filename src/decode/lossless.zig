@@ -332,6 +332,10 @@ fn decodeScan(
 ) Error![]u8 {
     const width: usize = frame.width;
     const height: usize = frame.height;
+    if (width == 0) return error.InvalidMarker;
+    // T.81 H.1.1: lossless restarts span whole MCU rows. All supported
+    // components use 1x1 sampling, so an MCU row contains width MCUs.
+    if (restart_interval % width != 0) return error.InvalidMarker;
     const nc: usize = scan.num_components;
     const sample_bytes: usize = if (frame.precision <= 8) 1 else 2;
     // Output is interleaved per-pixel: pixel(x,y) starts at
@@ -437,7 +441,7 @@ fn decodeScan(
             while (ci_scan < nc) : (ci_scan += 1) {
                 const pred: i32 = if ((x == 0 and y == 0) or rst.force_initial)
                     initial_pred
-                else if (y == 0)
+                else if (rst.samples_since < width)
                     sampleAt(out, sample_bytes, y, x - 1, width, nc, ci_scan)
                 else if (x == 0)
                     sampleAt(out, sample_bytes, y - 1, x, width, nc, ci_scan)

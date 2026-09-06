@@ -115,6 +115,7 @@ test "lossless entropy boundaries classify complete samples and restart interval
 		height: u8 = 1,
 		restart: ?u8 = null,
 		recoverable_boundary_error: bool = false,
+		decode_error: jpegz.DecodeError = error.BackendError,
 	}{
 		.{ .entropy = &.{0x7f}, .valid = true },
 		.{ .entropy = &.{0x00}, .width = 8, .valid = true },
@@ -136,6 +137,11 @@ test "lossless entropy boundaries classify complete samples and restart interval
 		.{ .entropy = &.{ 0x7e, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = false, .recoverable_boundary_error = true },
 		.{ .entropy = &.{ 0x7f, 0x00, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = false },
 		.{ .entropy = &.{ 0x7f, 0xff, 0x00, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = false },
+		// H.1.1 requires whole MCU rows, even if Ri exceeds the image size.
+		.{ .entropy = &.{0x3f}, .width = 2, .restart = 4, .valid = true },
+		.{ .entropy = &.{0x3f}, .width = 2, .restart = 3, .valid = false, .decode_error = error.InvalidMarker },
+		.{ .entropy = &.{ 0x7f, 0xff, 0xd0, 0x7f }, .width = 2, .restart = 1, .valid = false, .decode_error = error.InvalidMarker },
+		.{ .entropy = &.{ 0x1f, 0xff, 0xd0, 0x7f }, .width = 2, .height = 2, .restart = 3, .valid = false, .decode_error = error.InvalidMarker },
 	};
 	const allocator = std.testing.allocator;
 	for (cases) |case| {
@@ -162,7 +168,11 @@ test "lossless entropy boundaries classify complete samples and restart interval
 			defer oracle.deinit(allocator);
 			try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
 		} else {
-			try std.testing.expectError(error.BackendError, jpegz.decode(allocator, data));
+			if (jpegz.decode(allocator, data)) |image| {
+				var unexpected = image;
+				unexpected.deinit(allocator);
+				return error.ExpectedDecodeFailure;
+			} else |err| try std.testing.expectEqual(case.decode_error, err);
 		}
 		if (case.recoverable_boundary_error) {
 			var sink = jpegz.FindingsSink.init(allocator);
