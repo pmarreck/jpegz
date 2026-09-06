@@ -1,82 +1,68 @@
-# jpegz — project overview
+# jpegz project overview
 
 ## Mission
 
-Spec-complete JPEG family decoder library in Zig, with a single ABI
-surface covering every variant the published JPEG standards define:
+jpegz provides one JPEG-family validation API for validate, tiffz, and other
+consumers, alongside pixel decoding. The goal is full coverage of classic JPEG
+(T.81), JPEG-LS (T.87), JPEG 2000 (T.800), and JPEG XL (ISO/IEC 18181).
+Coverage is still incomplete; a successful decode alone does not establish
+complete corruption detection.
 
-- **Baseline JPEG** (T.81 sequential DCT, 8-bit and 12-bit)
-- **Progressive JPEG** (T.81 progressive DCT)
-- **Lossless JPEG** (T.81 §13 — DICOM, early DNG)
-- **Arithmetic coding** (T.81 §F — rare but spec-mandatory)
-- **JPEG-LS** (T.87 — eventually)
-- **JPEG 2000** (T.800 — separate ABI namespace, same project)
+The current code implements baseline and extended sequential JPEG, progressive
+JPEG, predictive lossless JPEG, arithmetic DCT modes, and JPEG-LS decoding in
+Zig. JPEG 2000 pixel decoding uses OpenJPEG. Strict JP2 and JXL validation
+delegates to pinned Zig modules from jp2z and libjxlz. jpegz does not expose
+JPEG XL pixel decoding.
 
 ## Architecture
 
-```
-Any consumer (validate / tiffz / image tools) ──► C FFI ──► jpegz Zig core
-```
+Zig consumers import jpegz directly. jpegz imports jp2z and libjxlz as Zig
+modules, preserving one instance of each module in a consumer build graph.
+The C CLI calls the published C ABI in `include/jpegz_core.h`.
 
-- **Zig core** does NO I/O. Pure decode logic over `[]const u8` and
-  reader-shaped interfaces.
-- **C FFI (`include/jpegz_core.h`)** is the real public API. Even the
-  C CLI dogfoods it.
-- Two consumers: `validate` (file-integrity tool) and `tiffz`
-  (TIFF library; needs JPEG-in-TIFF compression=7).
+The core accepts byte buffers and an allocator; callers own I/O. Pixel images
+and validation results must be freed through their matching API. The row
+callback API currently decodes a whole image before delivering its rows, so it
+does not reduce peak pixel memory.
 
-## Two-phase plan
+C consumers link exactly one archive: `libjpegz-validate.a` for validation,
+or `libjpegz.a` for validation plus pixel decoding. The validation archive
+excludes external JPEG-family decoders. Brotli remains required for JXL
+container metadata. See [SPEC.md](SPEC.md) for build options and ownership.
 
-**Phase 1 (weeks):** wrap libjpeg-turbo (BSD-3) + openjpeg (BSD-2);
-lift validate's pure-Zig lossless decoder. Ship a working ABI day one
-so validate + tiffz unblock immediately.
+## Provenance
 
-**Phase 2 (months):** reimplement each codec in Zig. Cleanroom (from ITU-T
-spec): entropy/structural parsing, lossless (T.81 §H), JPEG-LS (T.87),
-arithmetic (T.81 Annex D). PORTS (pure-Zig, BSD-attributed, byte-identical for
-oracle testing): the DCT DSP kernels — islow IDCT, YCbCr→RGB color conversion,
-chroma upsampling — from libjpeg-turbo (IJG License, inherited libjpeg code);
-and JPEG 2000 (T.800) from
-openjpeg (BSD-2) via the sibling `jp2z`. Keep libjpeg-turbo + openjpeg as test
-oracles. End state: JPEG/JPEG-LS decode is pure Zig (no required libjpeg/CharLS runtime
-dep); the **JP2 path still links a vendored openjpeg (BSD-2) at runtime** until
-the jp2z cutover — so a default build is NOT zero-C-deps yet. NOTE: jp2z's production decode is still
-openjpeg today; dropping it is jp2z Phases 2-3 (unstarted), so the JP2 cutover
-is a ways out. Canonical provenance: `LICENSING_NOTES.md`.
+JPEG entropy, marker parsing, lossless, arithmetic, and JPEG-LS layers were
+written from the ITU-T specifications. Production integer IDCT, color
+conversion, and upsampling are Zig ports of IJG/libjpeg-turbo code and retain
+IJG attribution. OpenJPEG remains the JP2 pixel decoder in this repository;
+the JP2 validator is the pinned jp2z Zig implementation.
+
+[LICENSING_NOTES.md](LICENSING_NOTES.md) owns provenance descriptions;
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) retains attribution texts.
 
 ## Key terminology
 
-- **MCU** — Minimum Coded Unit. A row of 8×8 (sometimes 16×16)
-  blocks across all components, the natural decode granularity for
-  baseline JPEG.
-- **DCT** — Discrete Cosine Transform, the lossy compression step at
-  the heart of T.81 baseline/progressive.
-- **Spectral selection / successive approximation** — the two
-  axes along which progressive JPEG splits its scans.
-- **EBCOT** — Embedded Block Coding with Optimized Truncation, the
-  bitplane coder used inside JPEG 2000's tier-1.
-- **LOCO-I** — JPEG-LS's predictor + context model (HP, expired 2018).
-- **Q-coder** — IBM's binary arithmetic coder used by T.81 §F.
+- MCU: minimum coded unit. In an interleaved DCT scan it groups component
+  blocks according to sampling factors; in a non-interleaved DCT scan it is
+  one block. It is not a whole row of blocks.
+- DCT: discrete cosine transform used by classic lossy JPEG.
+- Spectral selection: the coefficient band carried by a progressive scan.
+- Successive approximation: progressive refinement of coefficient precision.
+- EBCOT: JPEG 2000's embedded block coding with optimized truncation.
+- LOCO-I: the predictive coding algorithm used by JPEG-LS.
+- Q-coder: the binary arithmetic coder used by arithmetic JPEG.
+- Strict verdict: valid, corrupt, unsupported, or indeterminate. Unsupported
+  features and inconclusive checks must remain distinguishable from validity.
 
-## Rules of engagement
+## Current work
 
-1. **No silent skip.** If a file is JPEG, jpegz decodes it. If decode
-   fails, jpegz reports the specific failure. Never degrade silently.
-   `validate` will fail any consumer that violates this.
-2. **No I/O in core.** Caller-allocates pixel buffer when size is
-   known; streaming variant uses callbacks.
-3. **Cleanroom Phase 2.** ITU-T specs are primary; libjpeg-turbo source
-   is a secondary reference only (cite in source comments where used).
-   Avoid GPL-contaminated implementations entirely (no ffmpeg).
-4. **TDD throughout.** Failing test before each wrap-impl step.
-   Oracle-equality (`djpeg`/`opj_decompress` byte-for-byte) is the
-   gold-standard assertion.
+[PLAN.md](PLAN.md) owns priorities and measurements. The immediate correctness
+work is entropy accounting: scan termination, MCU counts, restart cadence,
+AC run bounds, and progressive constraints. The August 27 consumer experiment
+reported only 37/154 detected single-byte mutations on one scanned JPEG;
+that result is a fixture-specific baseline, not a universal detection rate.
 
-## Status
-
-Phase 1 milestone 1 complete (scaffold). Phase 1 milestone 2
-(brainstorm SPEC §9 design questions) is the next entry point.
-
-**i18n phase: prepare.** The resolver handles all 50 canonical locales;
-only English has a catalog, and a recognized locale with none warns rather
-than failing. See `docs/I18N.md` and `RULES.md` § Internationalization.
+Dependency freshness, Brotli vendoring for Windows JXL, and CLI progress
+follow. Internationalization is in prepare phase; its decision and scope live
+in [RULES.md](RULES.md) and [docs/I18N.md](docs/I18N.md).

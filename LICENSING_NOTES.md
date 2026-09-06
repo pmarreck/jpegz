@@ -1,9 +1,13 @@
 # Licensing notes (jpegz)
 
-**Date:** 2026-05-04
+**Created:** 2026-05-04; implementation descriptions reconciled 2026-09-06.
 **Project license:** MIT (see `LICENSE`)
 
-## Short answer
+## Historical patent notes
+
+The patent discussion here is a retained planning snapshot from May 2026. It
+was not revalidated during the September documentation cleanup and should not
+be treated as a current legal determination.
 
 JPEG (the format family covered by ISO/IEC 10918, 14495, and 15444) is
 freely implementable. Patents on the core DCT-based codec expired
@@ -12,9 +16,8 @@ JPEG-LS (HP LOCO-I) expired in 2018; JPEG 2000 has a complex history
 but is widely-implemented in open source today. Specs are freely
 downloadable from ITU-T.
 
-Phase 1 transitively pulls in two C deps (libjpeg-turbo, openjpeg).
-Both are MIT-compatible. Phase 2 retires them in favor of pure-Zig
-implementations.
+Current linkage depends on the selected artifact and build options, described
+below. Attribution for ported code remains after binary dependencies are removed.
 
 ## Provenance: cleanroom vs. port (CANONICAL — source of truth)
 
@@ -27,9 +30,11 @@ shape was adapted from libjpeg-turbo/openjpeg source.
 **Universal claim (accurate, use where one line is needed):**
 > **JPEG / JPEG-LS decode is pure Zig** — no *required* libjpeg-turbo or CharLS
 > runtime dependency (both are droppable: `-Dwith-libjpeg-oracle=false`,
-> `-Dwith-charls=false`). **JPEG 2000 (T.800) links a vendored openjpeg
-> (BSD-2) at runtime** until the jp2z cutover — so a default build is NOT
-> "zero C deps"; the JP2 codec is openjpeg.
+> `-Dwith-charls=false`). **JPEG 2000 pixel decoding uses OpenJPEG**
+> (system library through Nix or compiled from source). JP2 validation uses
+> jp2z's Zig validator and stays available with `-Dwith-jp2-decode=false`.
+> The validation-only archive excludes JPEG-family C decoders; enabled JXL
+> validation still needs Brotli for container metadata.
 
 **Cleanroom — written from ITU-T T.81 / T.87 (claim "cleanroom" freely, scoped):**
 - Marker / segment parsing (T.81 Annex B)
@@ -38,7 +43,7 @@ shape was adapted from libjpeg-turbo/openjpeg source.
 - Dequantization
 - Lossless predictive decode (T.81 §H, SOF3)
 - Arithmetic Q-coder (T.81 Annex D / Table D.3, §F.1.4) — spec-primary
-- JPEG-LS / LOCO-I (T.87) — see `docs/.../2026-05-16-jpegls-cleanroom-design.md`
+- JPEG-LS / LOCO-I (T.87) — see `docs/superpowers/specs/2026-05-16-jpegls-cleanroom-design.md`
 - `idct8x8_fpd` — reference IDCT from T.81 Annex A (**test oracle only**, not
   the production path)
 
@@ -59,17 +64,17 @@ plus D. R. Commander for libjpeg-turbo modifications. Full text in
 - CMYK / YCCK assembly — mirrors libjpeg-turbo
 
 **Port — pure-Zig port of openjpeg (BSD-2), via the sibling `jp2z`:**
-- JPEG 2000 (T.800), the `jpegz.jpeg2000` re-export. (Today still delegates to
-  the openjpeg C wrapper at runtime; jp2z's Zig port is not yet its production
-  path — see the cutover plan.)
+- JPEG 2000 validation delegates to the pinned jp2z Zig module. jpegz's
+  `jpeg2000.decode` separately calls `src/ffi/openjpeg_wrapper.zig`; the current
+  implementation in this repository has not switched pixel decoding to jp2z.
 
 **Approved phrasings:**
 - ✅ "pure-Zig JPEG / JPEG-LS decoder — no required libjpeg/CharLS runtime dep"
 - ✅ "cleanroom entropy, lossless, JPEG-LS and arithmetic layers (ITU-T T.81/T.87)"
 - ✅ "DCT DSP kernels are pure-Zig ports of libjpeg-turbo, under the IJG License"
-- ✅ "JPEG 2000 links a vendored openjpeg (BSD-2) at runtime until the jp2z cutover"
+- ✅ "JPEG 2000 pixel decoding uses OpenJPEG; strict validation uses jp2z"
 - ❌ "100% cleanroom JPEG" / "cleanroom across all formats"
-- ❌ "no openjpeg runtime dependency" / "zero C deps" (openjpeg backs JP2 today)
+- ❌ Unqualified "zero C deps" (OpenJPEG backs enabled JP2 pixels; Brotli backs JXL metadata)
 - ❌ crediting the ported IDCT/color kernels to BSD-3 (they are IJG-licensed)
 
 **Reclaim path (tracked, future):** switching production to `idct8x8_fpd` +
@@ -79,23 +84,19 @@ downstream tiffz/validate impact). Evaluate separately — see PLAN.md.
 
 ## License compatibility
 
-- **libjpeg-turbo** — BSD-3-Clause. MIT-compatible. Phase 1 vendored
-  via `chearon/libjpeg-turbo` Zig-build fork (same license). Phase 2:
-  used as ambiguity-resolution reference and binary oracle ONLY; if
-  any algorithm shape is adapted from libjpeg-turbo source, include
-  the BSD-3 attribution in a source comment + entry in
-  `THIRD_PARTY_NOTICES.md`.
+- **libjpeg-turbo** — follow the source-specific license described above:
+  IJG for the inherited DSP code ported here, BSD-3 for the TurboJPEG API.
+  The binary wrapper is an optional oracle. Attribute any adapted algorithm
+  to its actual source and license in `THIRD_PARTY_NOTICES.md`.
 - **openjpeg** — BSD-2-Clause. MIT-compatible. Same rule.
-- **libjpeg (the original IJG)** — BSD-3-style with attribution-required
-  clause. Older; superseded by libjpeg-turbo. If consulted, include
-  the IJG attribution.
+- **libjpeg (the original IJG)** — IJG License; retain its attribution for
+  derived code. The production DSP ports remain covered by these terms.
 - **charls** — BSD-3-Clause (per upstream `SPDX-License-Identifier`).
   MIT-compatible. Added 2026-05-15 for JPEG-LS (T.87) support;
-  libjpeg-turbo does not implement JPEG-LS, so charls is currently
-  the only runtime path. Used as the runtime decoder via
-  `src/ffi/charls_wrapper.zig` and (later) as the oracle for the
-  cleanroom B2 milestone. C++ implementation with a C ABI; linked
-  via `link_libcpp = true` in `build.zig`.
+  The optional `src/ffi/charls_wrapper.zig` is a differential oracle through
+  `jpegz.internal.charlsDecode`. Public JPEG-LS decoding uses Zig and returns
+  `NotImplemented` for unhandled modes; it does not fall back to CharLS.
+  CharLS is C++ with a C ABI and links libc++ when enabled.
 - **zigimg's `src/formats/jpeg.zig`** — MIT. Reference reading allowed
   (322 lines, baseline-only). Phase 2 reference reading expressly
   permitted.
@@ -154,14 +155,14 @@ is clear.
 
 ## Implementation approach (style discipline, not legal posture)
 
-**Phase 1:** wrap libjpeg-turbo and openjpeg via FFI. The Zig core
+**Historical Phase 1:** wrapped libjpeg-turbo and openjpeg via FFI. The Zig core
 is thin — input validation, error mapping, ABI marshalling — most
 work happens in C.
 
-**Phase 2:** rewrite each codec in pure Zig.
+**Continuing implementation:** replace remaining codec dependencies with Zig.
 
 - Primary source: ITU-T specs (T.81, T.87, T.800).
-- Secondary source: libjpeg-turbo source (BSD-3) for ambiguity
+- Secondary source: libjpeg-turbo source (file-specific license) for ambiguity
   resolution. Cite in source comments when an algorithm shape is
   clarified by libjpeg-turbo.
 - Verification: libjpeg-turbo + openjpeg binaries (`djpeg`,
@@ -177,12 +178,10 @@ choice in a source comment.
 
 `jpegz` ships under MIT.
 
-**Phase 1:** when libjpeg-turbo and openjpeg are linked, distribution
-must include their license texts (BSD-3 and BSD-2 respectively).
-Create `THIRD_PARTY_NOTICES.md` with full text.
-
-**Phase 2:** as each C dep is retired, drop its entry from
-`THIRD_PARTY_NOTICES.md`.
+Retain notices for components linked into a distribution and for source ported
+into Zig. Removing a C library alone does not justify removing its notice:
+the production IDCT, color, and upsampling ports still require IJG attribution.
+See `THIRD_PARTY_NOTICES.md` for the recorded texts, including Brotli and libjxlz.
 
 ## Questions
 

@@ -2,10 +2,16 @@
 
 Recorded 2026-08-05 EDT for the Mecha Validate v1 gate.
 
-## Exact leaf pins
+## Exact leaf pins for the August 5 measurements
 
 - `jp2z@d3754cfcfe3980daecb90de12d82ef4bdf100ce6`
 - `libjxlz@5e8f9d68152ae8a70cb823061f4b6c733eb09166`
+
+These are historical measurement inputs. The current manifest is
+[`build.zig.zon`](../build.zig.zon): on 2026-09-06 it pins
+`jp2z@1b29e0cdbe43da145294a05fc263bce56c1d5a88` and the same libjxlz revision.
+This document does not establish upstream freshness or CI status for a later
+commit; re-run the corresponding gates when changing pins or code.
 
 The facade calls only jp2z's public pure-Zig `deepValidate(..., true)` and
 libjxlz's strict `validation.validate`. Every leaf finding keeps its source,

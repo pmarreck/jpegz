@@ -3,14 +3,14 @@
 [![Mechatron Prime CI](https://img.shields.io/endpoint?url=https%3A%2F%2Fthelio-nixos.tail66c90.ts.net%2Fbadges%2Fjpegz.json&style=for-the-badge)](https://thelio-nixos.tail66c90.ts.net/mechatron-prime/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Spec-complete JPEG family decoder library in Zig. One project, one ABI surface,
-covering:
+JPEG-family decoding and validation in Zig, working toward full specification
+coverage. One facade covers:
 
 - **Baseline JPEG** (ISO/IEC 10918-1, T.81) — DCT, sequential
 - **Progressive JPEG** (ISO/IEC 10918-1)
 - **Lossless JPEG** (ISO/IEC 10918-1, T.81 §13) — used by DICOM, some early DNG
 - **Arithmetic coding** (ISO/IEC 10918-1, T.81 §F)
-- **JPEG-LS** (ISO/IEC 14495-1, T.87) — eventually
+- **JPEG-LS** (ISO/IEC 14495-1, T.87) — Zig decoding, including line-interleaved RGB
 - **JPEG 2000** (ISO/IEC 15444, T.800) — wavelet codec, separate ABI namespace
   in the same project (different math, but same problem domain)
 - **JPEG XL** (ISO/IEC 18181) — strict validation delegated to exact-pinned
@@ -23,13 +23,9 @@ This is a sibling project to [`validate`](../validate),
 
 ## Why jpegz exists
 
-`validate` has been carrying three things:
-- A C-FFI dep on `libjpeg-turbo` (BSD-3) for baseline + progressive
-- A pure-Zig 698-line lossless JPEG decoder (`jpeg_lossless_decoder.zig`)
-- A C-FFI dep on `openjpeg` (BSD-2) for JPEG 2000
-
-`tiffz` (greenfield) needs JPEG-in-TIFF (compression=7). Both projects need
-a unified, focused JPEG home.
+validate and tiffz need a shared implementation for standalone JPEGs,
+PDF-embedded images, and JPEG-in-TIFF. jpegz provides their JPEG-family
+interface and translates the sibling validators' findings into one vocabulary.
 
 ## Architecture
 
@@ -80,7 +76,7 @@ error set through one be read as empty through the other.
 | Archive | Provides | C dependencies |
 |---|---|---|
 | `libjpegz-validate.a` | validation + the strict facade | Brotli only |
-| `libjpegz.a` | the above **plus** decode (pixels) | libjpeg-turbo, OpenJPEG, CharLS |
+| `libjpegz.a` | the above plus decode (pixels) | Brotli; OpenJPEG for JP2 pixels; optional libjpeg-turbo/CharLS oracles |
 
 A validator, integrity checker, or triage tool wants the small one; only
 something that needs actual pixels needs the large one. The `jpegz` CLI links
@@ -91,29 +87,23 @@ OpenJPEG, CharLS, upstream libjxl, and djxl; libjxlz uses Brotli only for JXL
 container metadata. See `docs/VALIDATION_FACADE_EVIDENCE.md` for the exact pins,
 classifier matrix, and closure gate.
 
-## Phasing
+## Implementation and build
 
-**Phase 1 (MVP, libjpeg-turbo wrapper).** Wrap `libjpeg-turbo` for baseline +
-progressive. Lift validate's `jpeg_lossless_decoder.zig` directly. Add an
-`openjpeg` wrapper for JPEG 2000. One unified Zig API + C ABI; the
-implementation is mostly FFI-into-C-libs in this phase. Both validate and
-tiffz can depend on jpegz the day it's stood up.
+Classic JPEG and JPEG-LS decoding use Zig code. Entropy, structural, lossless,
+JPEG-LS, and arithmetic layers are spec-derived; IDCT, color conversion, and
+upsampling are IJG-attributed ports. See [LICENSING_NOTES.md](LICENSING_NOTES.md).
+JP2 pixel decoding uses OpenJPEG, supplied by Nix or compiled from source;
+JP2 validation uses jp2z independently of that decoder.
 
-**Phase 2 (self-contained Zig decoders).** Reimplement each codec in Zig,
-keeping the C deps as test oracles only. The **entropy, structural, lossless
-(T.81 §H), JPEG-LS (T.87) and arithmetic (T.81 Annex D) layers are cleanroom**
-Zig, written from the ITU-T specs. The DCT **DSP kernels** — islow IDCT,
-YCbCr→RGB color conversion, chroma upsampling — are pure-Zig **ports of
-libjpeg-turbo** (IJG License — inherited libjpeg code, attributed in
-`THIRD_PARTY_NOTICES.md`), kept
-byte-identical for oracle testing, **not** cleanroom. **JPEG 2000 (T.800)** is
-a pure-Zig **port of openjpeg** (BSD-2) via the sibling `jp2z` (openjpeg is
-still the JP2 runtime path until jp2z's port is feature-complete). JPEG /
-JPEG-LS decode needs **no required libjpeg / CharLS runtime dependency** (both
-droppable); the **JP2 path links a vendored openjpeg (BSD-2) at runtime** until
-the jp2z cutover. Canonical provenance: `LICENSING_NOTES.md`. See `SPEC.md` §6 for the order (baseline first, then
-progressive, then lossless rewrite, then arithmetic, then JPEG-LS, then
-JPEG 2000 wavelet pipeline).
+Run `./build` for the production build and `./test` for the full suite.
+Builds default to ReleaseFast; tests default to ReleaseSafe. Nix supplies the
+dependencies. `./bm` and `./fuzz` run the separate benchmark and fuzz suites.
+Build options and memory ownership are documented in [SPEC.md](SPEC.md).
+
+The libjpeg-turbo and CharLS oracles are optional. Disabling JP2 pixel decoding
+with `-Dwith-jp2-decode=false` removes OpenJPEG while retaining JP2 validation.
+Windows JXL validation remains disabled in the cross check pending Brotli
+vendoring; unavailable JXL validation returns indeterminate.
 
 ## Goals
 
@@ -124,19 +114,22 @@ JPEG 2000 wavelet pipeline).
    conventions; separate ABI namespace because the codec internals are
    completely different (wavelet, EBCOT, T2/T1 packets).
 3. **No I/O in the core.** Pure Zig core operates on `[]const u8`
-   buffers and `std.io.Reader`-shaped interfaces.
-4. **Hexagonal architecture.** Zig core + C FFI + (optional) C CLI, per
+   buffers. The row callback API currently materializes the full image.
+4. **Hexagonal architecture.** Zig core + C FFI + C validation CLI, per
    project convention.
-5. **Cleanroom replacement targeted by Phase 2.** Until then, libjpeg-
-   turbo / openjpeg do the heavy lifting and are honest about it (see
-   `LICENSING_NOTES.md`).
+5. **Self-contained decoding.** Finish the Zig implementations while retaining
+   attribution for ported code and independent oracles for verification.
 
 ## Status
 
-The JPEG-family validators and C CLI are implemented. Decoder coverage remains
-in progress; see `PLAN.md` for the measured state and remaining milestones.
+The JPEG-family validators and C CLI are implemented. Decoder coverage and
+entropy validation remain incomplete. JPEG-LS restart handling, uncommon T.81
+variants, and exact entropy accounting need further work. See [PLAN.md](PLAN.md)
+for measurements and acceptance criteria; pixel parity is not evidence of
+complete corruption detection.
 
 ## License
 
-MIT (see `LICENSE`). Phase 1 transitively pulls in libjpeg-turbo (BSD-3)
-and openjpeg (BSD-2) — both MIT-compatible. Phase 2 retires those deps.
+MIT (see `LICENSE`), with third-party attribution retained in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Removing a C binary dependency
+does not remove the attribution required by code ported into Zig.

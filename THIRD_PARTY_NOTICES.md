@@ -7,9 +7,10 @@ tiers; obligations differ per tier. Canonical provenance: `LICENSING_NOTES.md`.
 - **JPEG / JPEG-LS decode is pure Zig** with no *required* C runtime dependency:
   libjpeg-turbo is a droppable test oracle (`-Dwith-libjpeg-oracle=false`) and
   CharLS is a droppable JPEG-LS build-time oracle (`-Dwith-charls=false`).
-- **JPEG 2000 (T.800) links a vendored openjpeg at runtime** (BSD-2) — this is a
-  genuine runtime dependency today, until the `jp2z` cutover. So jpegz is NOT
-  "zero C deps" in a default build; the JP2 codec is openjpeg.
+- **JPEG 2000 pixel decoding uses OpenJPEG** (BSD-2), supplied by Nix or
+  compiled from source. JP2 validation uses the pinned jp2z Zig module and is
+  available without OpenJPEG. The validation archive excludes JPEG-family C
+  decoders; enabled JXL validation still depends on Brotli.
 
 ---
 
@@ -138,9 +139,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-**OpenJPEG — BSD-2-Clause.** The JPEG 2000 (T.800) path (`jpegz.jpeg2000`) links
-a vendored `libopenjp2` at runtime (`deps/openjpeg`, uclouvain 2.5.4). This is a
-real runtime dependency in the shipped binary until the `jp2z` cutover.
+**OpenJPEG — BSD-2-Clause.** The JPEG 2000 pixel path (`jpegz.jpeg2000.decode`)
+uses `libopenjp2` (system or `deps/openjpeg`, uclouvain 2.5.4). Strict validation
+uses jp2z separately. OpenJPEG can be disabled with `-Dwith-jp2-decode=false`.
 
 ```
 Copyright (c) 2002-2014, Universite catholique de Louvain (UCL), Belgium
@@ -172,7 +173,7 @@ see deps/openjpeg upstream LICENSE.]
 ## Tier 3 — TEST-ORACLE ONLY (NO code adapted — courtesy)
 
 No jpegz code was adapted from these; they are differential oracles only. The
-production `decode()` dispatcher is cleanroom-only at runtime and never calls
+production `decode()` dispatcher uses Zig code at runtime and never calls
 them (it surfaces `error.NotImplemented` rather than falling back to a C lib).
 Listed for completeness / distribution when linked as oracles.
 
