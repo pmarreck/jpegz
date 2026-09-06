@@ -481,9 +481,8 @@ pub const sniff = facade.sniff;
 
 /// Translate the severity-rated T.81 / T.87 report into the family-wide
 /// four-way result, so a caller reading `validateAny` never has to know which
-/// leg answered. `.warn` and `.info` stay `.valid`: a spec deviation the
-/// decoder recovers from is not corruption, and collapsing the two would make
-/// every JFIF/Adobe quirk in the wild read as damage.
+/// leg answered. Recovered entropy truncation and restart faults are corrupt;
+/// legal fill and metadata warnings do not invalidate an otherwise sound file.
 fn strictFromReport(
     allocator: Allocator,
     data: []const u8,
@@ -501,6 +500,10 @@ fn strictFromReport(
     errdefer result.deinit(allocator);
     try result.findings.ensureTotalCapacity(allocator, report.findings.items.len);
     for (report.findings.items) |finding| {
+        switch (finding.code) {
+            .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => result.verdict = .corrupt,
+            else => {},
+        }
         const detail = if (finding.detail) |value| try allocator.dupe(u8, value) else null;
         result.findings.appendAssumeCapacity(.{
             .source = .jpegz,

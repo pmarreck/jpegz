@@ -1,6 +1,52 @@
 const std = @import("std");
 const jpegz = @import("jpegz");
 
+test "classic facade rejects recovered entropy damage but accepts legal fill" {
+	const allocator = std.testing.allocator;
+	const baseline = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	const restart = @embedFile("fixtures/baseline_128x128_dri4.jpg");
+	const legal_fill = baseline[0..2].* ++ [_]u8{ 0xff, 0xff } ++ baseline[2..].*;
+	// Keep EOI intact: only the codec check can detect the missing entropy.
+	const truncated = baseline[0 .. baseline.len - 26].* ++ [_]u8{ 0xff, 0xd9 };
+	var wrong_restart = restart.*;
+	var missing_restart = restart.*;
+	try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xd0 }, restart[652..654]);
+	wrong_restart[653] = 0xd5;
+	@memcpy(missing_restart[652..654], &[_]u8{ 0xaa, 0xbb });
+	const cases = [_]struct {
+		bytes: []const u8,
+		verdict: jpegz.StrictVerdict,
+		warning: ?jpegz.FindingCode = null,
+	}{
+		.{ .bytes = baseline, .verdict = .valid },
+		.{ .bytes = restart, .verdict = .valid },
+		.{ .bytes = @embedFile("fixtures/progressive_8x8_rgb.jpg"), .verdict = .valid },
+		.{ .bytes = @embedFile("fixtures/lossless_4x4_gray8.jpg"), .verdict = .valid },
+		.{ .bytes = @embedFile("fixtures/arith_baseline_8x8_gray.jpg"), .verdict = .valid },
+		.{ .bytes = &legal_fill, .verdict = .valid, .warning = .entropy_fill_bytes },
+		.{ .bytes = &truncated, .verdict = .corrupt, .warning = .insufficient_data },
+		.{ .bytes = &wrong_restart, .verdict = .corrupt, .warning = .restart_marker_unexpected },
+		.{ .bytes = &missing_restart, .verdict = .corrupt, .warning = .restart_marker_missing },
+	};
+	for (cases) |case| {
+		var legacy = try jpegz.validate(allocator, case.bytes);
+		defer legacy.deinit(allocator);
+		var strict = try jpegz.validateAny(allocator, case.bytes);
+		defer strict.deinit(allocator);
+		if (case.warning) |code| {
+			var found = false;
+			for (strict.findings.items) |finding| {
+				if (finding.code == code and finding.severity == .warn) found = true;
+			}
+			try std.testing.expect(found);
+			// Pin the legacy API's recovery behavior separately from the verdict.
+			if (code == .entropy_fill_bytes or code == .insufficient_data)
+				try std.testing.expect(legacy.isValid());
+		}
+		try std.testing.expectEqual(case.verdict, strict.verdict);
+	}
+}
+
 test "JPEG XL mapping is exhaustive and unknown future codes fail closed" {
     const Case = struct {
         leaf_verdict: i32,

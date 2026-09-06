@@ -61,10 +61,11 @@ raw leaf code, and available location information.
 
 The older severity report remains available through `validate` and
 `jpeg2000.validate`. Its `isValid()` accepts warnings. The facade supplies
-the four-way vocabulary, but the classic-JPEG adapter currently maps every
-non-failing report to valid, including recovered entropy truncation and
-unchecked codec variants. Correcting that classification is pending; the
-facade's name does not establish strict coverage for this leg.
+the four-way vocabulary and classifies recovered entropy truncation and
+missing/misordered restart markers as corrupt, even when their findings have
+warning severity. Legal fill and metadata warnings remain valid. Unchecked
+classic-JPEG codec variants can still map to valid; correcting that gap is
+pending. The facade's name does not establish complete coverage for this leg.
 
 Registry values are append-only and shared with sibling validators.
 Use `jpegz_finding_code_name()` for display; do not duplicate the name table.

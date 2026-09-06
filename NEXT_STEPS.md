@@ -19,9 +19,9 @@ need the deviations reported.
 The current API defaults to strict decoding. Recovery is opt-in through
 `DecodeOptions.lenient`, with a `FindingsSink` for diagnostics.
 The older `ValidationReport` accepts warning-level findings in `isValid()`.
-`validateAny` supplies the four-way verdict, but its classic-JPEG adapter
-currently preserves that permissive classification. The entropy work must
-distinguish recovered damage and unchecked variants from benign warnings.
+`validateAny` classifies recovered entropy truncation and restart faults as
+corrupt while preserving legal fill warnings. Classification of unchecked
+variants and remaining entropy-accounting gaps stays in PLAN.md.
 
 The original review list included premature entropy exhaustion, absent or
 misordered restart markers, DC predictor reset errors, entropy fill handling,

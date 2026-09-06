@@ -7,9 +7,10 @@ An unchecked historical box does not create a second work order.
 
 ## Current baseline
 
-- Branch `yolo`; documentation cleanup `187248d` passed `./test` on
-  2026-08-27, including package build, 71 FFI assertions, 49 CLI cases, and
-  three consumer controls. Those counts are dated evidence.
+- Branch `yolo`; September 6 documentation and entropy checkpoints passed
+  `./test` and `./build`, including unit tests, package build, 71 FFI
+  assertions, 49 CLI cases, and three consumer controls. Latest verification:
+  2026-09-06 11:23 EDT. No new upstream CI or consumer remeasurement is claimed.
 - `validateAny`, JP2/JXL delegation, split C archives, the C validation CLI,
   and prepare-phase locale resolution are implemented.
 - JPEG/JPEG-LS pixel dispatch stays in Zig. CharLS and libjpeg-turbo are
@@ -50,10 +51,19 @@ on one input, not measured performance of a later revision.
   passed libjpeg-turbo pixel comparisons. The one-line bounds fix passed
   `./test`, including package build and consumer controls.
   _(2026-09-06 EDT)_
-- [ ] Correct classic-JPEG facade classification of recovered entropy damage
-  and unchecked variants. Preserve benign warnings and the legacy report API.
+- [x] Correct classic-JPEG facade classification of recovered entropy damage.
+  The nine-case regression went red on recovered truncation (valid instead of
+  corrupt); the adapter fix passed `./test` and `./build`. All three damaged
+  cases are corrupt; all six valid controls pass. Legal fill warnings and
+  the legacy report API are preserved. _(2026-09-06 11:23 EDT)_
+- [ ] Classify unchecked classic-JPEG codec variants separately from validity.
 - [ ] Enforce exact scan consumption and all-one final padding bits, with
   correct accounting for lookahead and stuffed bytes.
+  Source checkpoint: baseline `decodeScanT` returns after its geometry-driven
+  MCU loop without checking scan termination. `BitReader.seekToMarker`
+  discards the entire lookahead buffer, which can hold more than seven bits;
+  it cannot itself prove that only legal padding remained. It is shared with
+  other decoders, so changes need mode-specific boundary tests.
 - [ ] Enforce MCU counts implied by frame dimensions and sampling, including
   non-interleaved scans and partial edge MCUs.
 - [ ] Enforce DRI restart cadence, modulo-eight marker order, and predictor
