@@ -160,8 +160,11 @@ on one input, not measured performance of a later revision.
   and remeasure full-PDF acceptance (seed 1787878036, 400 rounds; historical
   baseline 303/400, sniper 52.5%). Keep originals and mutants local-only.
   Requested consumer-owned promotion of CI-green source checkpoint `e8f9982`
-  from validate by durable inbox note at 14:00 EDT on September 6; receipt,
-  promoted pins, and full-PDF results remain pending.
+  from validate by durable inbox note at 14:00 EDT on September 6. Validate
+  acknowledged and routed the pin work to tiffz's owning session. It reports
+  a separate z7z duplicate-bzip2z-module build blocker, already under repair
+  by z7z. Scratch full-PDF measurement at `e8f9982` is running meanwhile;
+  promoted pins, Nix-built replay, and full-PDF results remain pending.
 
 Start in `src/decode/baseline.zig`, `bitstream.zig`, `huffman.zig`, and
 `progressive.zig`. Existing restart seeds include
