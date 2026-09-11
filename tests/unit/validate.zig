@@ -11,6 +11,127 @@ const fixture_progressive_8x8 = @embedFile("fixtures/progressive_8x8_rgb.jpg");
 const fixture_lossless_4x4_gray8 = @embedFile("fixtures/lossless_4x4_gray8.jpg");
 const fixture_arith_8x8_gray = @embedFile("fixtures/arith_baseline_8x8_gray.jpg");
 
+test "progressive early completion with EOI matches libjpeg" {
+	const allocator = std.testing.allocator;
+	const early_complete = fixture_progressive_8x8[0..441].* ++ [_]u8{ 0xff, 0xd9 };
+	for ([_][]const u8{ fixture_progressive_8x8, &early_complete }) |data| {
+		var decoded = try jpegz.decode(allocator, data);
+		defer decoded.deinit(allocator);
+		var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+		defer oracle.deinit(allocator);
+		try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+	}
+}
+
+test "progressive DC first-pass categories obey sample precision" {
+	const allocator = std.testing.allocator;
+	for ([_]u8{ 8, 12 }) |precision| {
+		for (0..17) |size| {
+			// Code0 followed by amplitude 0 then size-1 ones gives -2^(size-1).
+			// The remaining bits are all-one padding; FF entropy bytes are stuffed.
+			const payload: []const u8 = if (size == 0) &.{0x7f} else if (size <= 7) &.{0x3f} else if (size <= 15) &.{ 0x3f, 0xff, 0 } else &.{ 0x3f, 0xff, 0, 0xff, 0 };
+			const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{1} ** 64) ++
+				[_]u8{ 0xff, 0xc2, 0, 11, precision, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+				[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{@intCast(size)} ++
+				[_]u8{ 0xff, 0xc4, 0, 20, 0x10, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+				[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 0, 0 };
+			const data = try std.mem.concat(allocator, u8, &.{ &header, payload, &.{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, 63, 0, 0x7f, 0xff, 0xd9 } });
+			defer allocator.free(data);
+			const valid = size <= precision + 3;
+			if (valid) {
+				var decoded = jpegz.decode(allocator, data) catch |err| {
+					std.debug.print("rejected progressive DC category{d} at precision{d}: {s}\n", .{ size, precision, @errorName(err) });
+					return err;
+				};
+				defer decoded.deinit(allocator);
+				var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+				defer oracle.deinit(allocator);
+				try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+			} else {
+				try std.testing.expectError(error.BackendError, jpegz.decode(allocator, data));
+			}
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try std.testing.expectEqual(valid, report.isValid());
+		}
+	}
+}
+
+test "progressive DC illegal categories remain errors after marker lookahead" {
+	const allocator = std.testing.allocator;
+	for ([_]u8{ 8, 12 }) |precision| {
+		for ([_]bool{ true, false }) |valid| {
+			// Two blocks: DC0 code0, then code10 and positive amplitude1.
+			// The second lookup sees the marker with seven entropy bits buffered.
+			const size: u8 = if (valid) 1 else precision + 4;
+			const data = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{1} ** 64) ++
+				[_]u8{ 0xff, 0xc2, 0, 11, precision, 0, 8, 0, 16, 1, 1, 0x11, 0 } ++
+				[_]u8{ 0xff, 0xc4, 0, 21, 0, 1, 1 } ++ ([_]u8{0} ** 14) ++ [_]u8{ 0, size } ++
+				[_]u8{ 0xff, 0xc4, 0, 20, 0x10, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+				[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 0, 0, 0x5f, 0xff, 0xda, 0, 8, 1, 1, 0, 1, 63, 0, 0x3f, 0xff, 0xd9 };
+			for ([_]bool{ false, true }) |lenient| {
+				if (jpegz.decodeWithOptions(allocator, &data, .{ .lenient = lenient })) |image| {
+					var decoded = image;
+					defer decoded.deinit(allocator);
+					try std.testing.expect(valid);
+					var oracle = try jpegz.internal.wrapperDecode(allocator, &data);
+					defer oracle.deinit(allocator);
+					try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+				} else |err| {
+					try std.testing.expect(!valid);
+					try std.testing.expectEqual(error.BackendError, err);
+				}
+			}
+			var report = try jpegz.validate(allocator, &data);
+			defer report.deinit(allocator);
+			try std.testing.expectEqual(valid, report.isValid());
+		}
+	}
+}
+
+test "progressive AC first-pass categories obey sample precision" {
+	// T.81 Tables F.2/F.7 as used by G.1.2.2: AC sizes0..10(P8),0..14(P12).
+	// Codes0/10 mean EOB/size. Each nonzero is +2^(size-1), then EOB.
+	// Literal bytes keep the test independent of jpegz's encoder/bit writer.
+	const payloads = [_][]const u8{
+		&.{0x7f}, &.{0xaf}, &.{0xa7}, &.{0xa3}, &.{0xa1}, &.{0xa0},
+		&.{ 0xa0, 0x7f }, &.{ 0xa0, 0x3f }, &.{ 0xa0, 0x1f }, &.{ 0xa0, 0x0f },
+		&.{ 0xa0, 0x07 }, &.{ 0xa0, 0x03 }, &.{ 0xa0, 0x01 }, &.{ 0xa0, 0x00 },
+		&.{ 0xa0, 0x00, 0x7f }, &.{ 0xa0, 0x00, 0x3f },
+	};
+	const allocator = std.testing.allocator;
+	for ([_]u8{ 8, 12 }) |precision| {
+		for (payloads, 0..) |payload, size| {
+			const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{1} ** 64) ++
+				[_]u8{ 0xff, 0xc2, 0, 11, precision, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+				[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+				[_]u8{ 0xff, 0xc4, 0, 21, 0x10, 1, 1 } ++ ([_]u8{0} ** 14) ++
+				[_]u8{ 0, @intCast(if (size == 0) 1 else size) } ++
+				[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 0, 0, 0x7f, 0xff, 0xda, 0, 8, 1, 1, 0, 1, 63, 0 };
+			const data = try std.mem.concat(allocator, u8, &.{ &header, payload, &.{ 0xff, 0xd9 } });
+			defer allocator.free(data);
+			const valid = size <= precision + 2;
+			if (jpegz.decode(allocator, data)) |image| {
+				var decoded = image;
+				defer decoded.deinit(allocator);
+				if (!valid) {
+					std.debug.print("accepted progressive AC category{d} at precision{d}\n", .{ size, precision });
+					return error.ExpectedDecodeFailure;
+				}
+				var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+				defer oracle.deinit(allocator);
+				try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+			} else |err| {
+				try std.testing.expect(!valid);
+				try std.testing.expectEqual(error.BackendError, err);
+			}
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try std.testing.expectEqual(valid, report.isValid());
+		}
+	}
+}
+
 test "progressive refinement rejects illegal decoded sizes even after marker lookahead" {
 	// T.81 G.1.2.3: size1 introduces a coefficient; sizes2..15 are illegal.
 	// Sweep the complete size domain before and after lookahead sees a marker.

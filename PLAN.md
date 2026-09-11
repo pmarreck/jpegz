@@ -7,6 +7,14 @@ An unchecked historical box does not create a second work order.
 
 ## Current baseline
 
+- September 11 checkpoint: precision-aware progressive DC/AC categories and
+  missing-EOI strict classification pass `./test` (unit/CLI/FFI, package and
+  consumer checks) and `./build`. Windows cross-build and validator closure
+  passed for the same production changes; final exact-commit CI follows push.
+  [New measurements](docs/measurements/jpeg-probe-2026-09-11.md) reproduce two
+  specific false accepts and one false reject in pinned jpeg-fragments.
+  Paired corruption-probe runs improve truncation49/50 to50/50 on one fixture;
+  other mutation outcomes are unchanged and all three valid controls pass both.
 - Branch `yolo`; September 6 documentation and entropy checkpoints passed
   `./test` and `./build`, including unit tests, package build, 71 FFI
   assertions, 49 CLI cases, and three consumer controls. Latest verification:
@@ -32,6 +40,56 @@ An unchecked historical box does not create a second work order.
 
 ## Active order
 
+- [ ] Peter approved implementation of the prior-art comparison direction on
+  September 11. First finish the pending coefficient checks with independent
+  review and green builds; then compare labeled edge fixtures and expand scan
+  history checks. Preserve legal changes and report unmeasured coverage candidly.
+- [x] Process inbox notes and acknowledge validate/corruption_probe. Try corruption-probe on a public JPEG fixture
+  using seed 0x1234, explicit mutation settings and pristine controls; preserve
+  events for replay. Its rates measure mutation rejection, not proven invalidity.
+  First 200-case run accepted a 520-byte progressive fixture cut to 441 bytes.
+  Exit3 was excluded, then explicitly mapped to the probe's warning bucket;
+  this means unsupported/indeterminate here. Preserved events; paired rerun
+  after the EOI fix caught that one truncation; no other outcomes changed.
+  Both builds accepted all three specificity controls. _(2026-09-11 EDT)_
+- [x] Assess actionable lessons from JPEG validation prior art and whether
+  jpegz can exceed its corruption detection, per Peter on September 9.
+  Separate source-inferred opportunities from measured wins; define a paired
+  comparison with valid controls and an unresolved-label bucket. This research
+  supplements the coefficient/scan work without changing its priority.
+  [Assessment and proposed experiment](docs/JPEG_VALIDATION_PRIOR_ART.md#actionable-comparison-september-9)
+  identify value tracking, padding and scan-history candidates. No new runtime
+  comparison or superiority measurement. _(2026-09-09 EDT)_
+- [ ] Before the next consumer promotion, investigate validate's September 9
+  request to update jp2z from `1b29e0cd` to `93696272ee23` or a verified successor.
+  Validate reports Britannica JPX streams with TNsot=5 and six tile-parts,
+  rejected by the old pin and decoded by OpenJPEG/new jp2z; `f957ea7` reportedly
+  downgrades this nonconformance to a warning with offset/detail. Reproduce and
+  review strict-conformance versus recoverable-compatibility semantics before
+  accepting the severity change. Consumer evidence and CI status are reported,
+  not independently verified here. Acknowledged September 11; promotion remains
+  pending, and the request is retained here after recoverable inbox cleanup.
+- [x] Migrate the overview to INTENT.md and TERMINOLOGY.md. Architecture/status
+  survives in SPEC.md/PLAN.md; provenance remains in LICENSING_NOTES.md. Updated
+  active references and retained the exact old overview in Git and the September
+  11 Trash directory. _(2026-09-11 EDT)_
+- [x] Repeat the prior-art search for strict JPEG corruption detection.
+  Found jpeginfo, JHOVE/Bad Peggy comparisons, and the 2024 jpeg-fragments
+  paper with source and corpus. [Findings](docs/JPEG_VALIDATION_PRIOR_ART.md)
+  separate published fragmentation rates from our mutation measurements and
+  source-inferred limitations from runtime reproduction. No novelty claim or
+  corpus import. _(2026-09-06 15:18 EDT)_
+- [ ] Preserve Peter's explicit evidence distinction throughout this work:
+  demonstrated detection (reproduced and tested), theoretically detectable
+  invalidity (spec-derived but not yet demonstrated here), and valid changes
+  that cannot be diagnosed as invalid from the file alone. Label measurements,
+  hypotheses, and limits separately; never promise an unmeasured detection rate.
+- [ ] Peter's September 6 15:06 EDT direction: approach the specification's
+  validity boundary by rejecting provably malformed streams while preserving
+  valid-but-different images. Start with precision-aware coefficient categories
+  and progressive scan sequencing; use independent contract review, failing
+  regressions, and valid boundary controls. Then classify surviving mutations
+  and expand semantic/corpus coverage. Do not equate every mutation with damage.
 - [x] Complete the next three scoped units from Peter's 12:32 EDT request:
   unchecked-variant classification, public decoder-option forwarding, and
   progressive entropy boundaries. Individual evidence is below; broader
@@ -137,9 +195,24 @@ on one input, not measured performance of a later revision.
     that recovery branch preserves actual missing-bit handling; four valid
     controls match libjpeg pixels. Independent review, native tests, `./test`,
     and `./build` pass. _(2026-09-06 14:15 EDT)_
-  Legacy DC-category guards still treat size>11 as insufficient data when
-  lookahead has seen a marker. Check precision-dependent category limits before
-  changing this behavior, especially valid 12-bit streams.
+  - [x] Finish precision-aware category checkpoint: AC32-case red reproduced
+    accepted P8 size11; DC34-case red reproduced rejected P12 size12, and four
+    marker-adjacent cases reproduced forbidden-symbol recovery. P+2/P+3 guards
+    pass native and canonical tests with independent static approval. Production
+    build, Windows cross-build and validator closure pass. Coefficient magnitude
+    and scan-history coverage remain separate. _(2026-09-11 EDT)_
+- [x] Finish missing-EOI strict-verdict checkpoint found by corruption-probe.
+  Persistent red reproduced accepted progressive prefix at byte441. Ten-case
+  set preserves legal early completion with EOI and covers missing EOI in three
+  codecs, embedded FFD9 in COM, and a dangling FF. Strict verdict now follows
+  the parsed missing_eoi finding; legacy warning/offset remain intact.
+  Independent static approval, full tests and paired probe rerun pass.
+  _(2026-09-11 EDT)_
+  Initial test placement incorrectly called disabled decoders from the facade
+  test target and failed with NotImplemented. Moved pixel controls to validate's
+  oracle-enabled target, removed the fix and reran: the corrected persistent red
+  explicitly reports len441 expected corrupt, found valid. That run also passed
+  the separate early-completion libjpeg pixel controls.
 - [ ] Classify the known-good corpus as a set, with zero new rejects.
 - [ ] Run reproducible entropy-interior mutation sweeps before and after;
   distinguish must-detect malformed streams from mutations that remain legal.

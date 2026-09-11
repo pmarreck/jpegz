@@ -23,6 +23,8 @@ This is a sibling project to [`validate`](../validate),
 
 ## Why jpegz exists
 
+Project purpose and success criteria live in [INTENT.md](INTENT.md).
+
 validate and tiffz need a shared implementation for standalone JPEGs,
 PDF-embedded images, and JPEG-in-TIFF. jpegz provides their JPEG-family
 interface and translates the sibling validators' findings into one vocabulary.

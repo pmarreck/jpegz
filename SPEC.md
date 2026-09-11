@@ -14,6 +14,11 @@ and libjxlz modules. Pixel decoding supports a growing subset of T.81/T.87
 and uses OpenJPEG for T.800. JPEG XL pixel decoding is outside the current
 jpegz API.
 
+Classic decoding currently includes baseline/extended sequential, progressive,
+predictive lossless and arithmetic DCT modes. JPEG-LS decoding is also in Zig.
+Consumers import jp2z and libjxlz through the facade, preserving one instance
+of each Zig module. Project purpose lives in [INTENT.md](INTENT.md).
+
 Spec completeness is the goal. Unsupported variants, incomplete checks, and
 corruption must remain distinguishable. No fallback may turn an unchecked
 stream into a valid result.
@@ -70,7 +75,7 @@ raw leaf code, and available location information.
 
 The older severity report remains available through `validate` and
 `jpeg2000.validate`. Its `isValid()` accepts warnings. The facade supplies
-the four-way vocabulary and classifies recovered entropy truncation and
+the four-way vocabulary and classifies missing EOI, recovered entropy truncation and
 missing/misordered restart markers as corrupt, even when their findings have
 warning severity. Legal fill and metadata warnings remain valid. A codec check
 that returns `NotImplemented` maps to unsupported; a skipped check maps to
@@ -88,7 +93,8 @@ both corruption-detection gains and zero new rejects on the known-good corpus.
 Sequential and lossless Huffman scans check padding and exact entropy
 consumption at scan ends and restart intervals. Supported lossless scans also
 enforce whole-row restart intervals and reset prediction for each interval's
-first row. Progressive boundary checks remain pending.
+first row. Progressive scans also check padding and EOB-run exhaustion;
+remaining coefficient and scan-history constraints are tracked in PLAN.md.
 Do not advertise complete corruption detection from pixel-oracle equality.
 
 ## 4. Artifacts and dependencies

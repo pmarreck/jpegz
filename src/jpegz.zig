@@ -513,7 +513,7 @@ fn strictFromReport(
     try result.findings.ensureTotalCapacity(allocator, report.findings.items.len);
     for (report.findings.items) |finding| {
         switch (finding.code) {
-            .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => result.verdict = .corrupt,
+            .missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => result.verdict = .corrupt,
             else => {},
         }
         const detail = if (finding.detail) |value| try allocator.dupe(u8, value) else null;

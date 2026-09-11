@@ -598,7 +598,7 @@ fn decodeOneScan(
                             const block = coefs[comp_idx][off .. off + 64];
                             try decodeProgressiveBlock(
                                 &br, comp, dc_tables, ac_tables,
-                                &prev_dc, &eob_run, comp_idx, block, scan, &recovery,
+                                &prev_dc, &eob_run, comp_idx, block, scan, frame.precision, &recovery,
                             );
                         }
                     }
@@ -642,7 +642,7 @@ fn decodeOneScan(
                 const block = coefs[comp_idx][off .. off + 64];
                 try decodeProgressiveBlock(
                     &br, comp, dc_tables, ac_tables,
-                    &prev_dc, &eob_run, comp_idx, block, scan, &recovery,
+                    &prev_dc, &eob_run, comp_idx, block, scan, frame.precision, &recovery,
                 );
                 units_since_rst += 1;
             }
@@ -674,6 +674,7 @@ fn decodeProgressiveBlock(
     comp_idx: usize,
     block: []i16,
     scan: *const ScanInfo,
+    precision: u8,
     recovery: *ScanRecovery,
 ) Error!void {
     // Marker lookahead can precede a valid EOB run's remaining zero blocks.
@@ -681,11 +682,11 @@ fn decodeProgressiveBlock(
     if (recovery.truncated) return;
     if (scan.ss == 0) {
         // DC scan
-        if (scan.ah == 0) try decodeProgressiveDcFirst(br, comp, dc_tables, prev_dc, comp_idx, block, scan, recovery)
+        if (scan.ah == 0) try decodeProgressiveDcFirst(br, comp, dc_tables, prev_dc, comp_idx, block, scan, precision, recovery)
         else try decodeProgressiveDcRefine(br, block, scan, recovery);
     } else {
         // AC scan (single-component)
-        if (scan.ah == 0) try decodeProgressiveAcFirst(br, comp, ac_tables, eob_run, block, scan, recovery)
+        if (scan.ah == 0) try decodeProgressiveAcFirst(br, comp, ac_tables, eob_run, block, scan, precision, recovery)
         else try decodeProgressiveAcRefine(br, comp, ac_tables, eob_run, block, scan, recovery);
     }
 }
@@ -701,6 +702,7 @@ fn decodeProgressiveDcFirst(
     comp_idx: usize,
     block: []i16,
     scan: *const ScanInfo,
+    precision: u8,
     recovery: *ScanRecovery,
 ) Error!void {
     const dc_t = dc_tables[comp.dc_table] orelse return error.InvalidMarker;
@@ -712,14 +714,7 @@ fn decodeProgressiveDcFirst(
         dbg("[prog:dc_first] huff fail comp={d} dc_table={d} byte_pos={d} bits_valid={d} buf=0x{x} err={s}\n", .{ comp_idx, comp.dc_table, br.byte_pos, br.bits_valid, br.buf, @errorName(e) });
         return error.BackendError;
     };
-    if (dc_size > 11) {
-        if (br.markerHit()) {
-            try emitInsufficientData(recovery, br.byte_pos);
-            return; // garbage bits from past-marker buffer
-        }
-        dbg("[prog:dc_first] dc_size>11 ({d}) comp={d} byte_pos={d}\n", .{ dc_size, comp_idx, br.byte_pos });
-        return error.BackendError;
-    }
+    if (dc_size > precision + 3) return error.BackendError;
     var dc_diff: i16 = 0;
     if (dc_size > 0) {
         const bits = br.readBits(@intCast(dc_size)) catch {
@@ -766,6 +761,7 @@ fn decodeProgressiveAcFirst(
     eob_run: *u32,
     block: []i16,
     scan: *const ScanInfo,
+    precision: u8,
     recovery: *ScanRecovery,
 ) Error!void {
     if (eob_run.* > 0) {
@@ -786,6 +782,7 @@ fn decodeProgressiveAcFirst(
         };
         const run: u8 = rs >> 4;
         const size: u8 = rs & 0x0F;
+        if (size > precision + 2) return error.BackendError;
         if (size == 0) {
             if (run == 15) {
                 // ZRL — 16 zeros

@@ -1,6 +1,50 @@
 const std = @import("std");
 const jpegz = @import("jpegz");
 
+test "classic facade requires EOI even after a complete progressive scan" {
+	const allocator = std.testing.allocator;
+	const progressive = @embedFile("fixtures/progressive_8x8_rgb.jpg");
+	const baseline = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	const lossless = @embedFile("fixtures/lossless_4x4_gray8.jpg");
+	// corruption-probe seed0x1234, truncation round46: 520 bytes cut to441.
+	// The next SOS starts at441. Earlier completed scans plus EOI remain legal.
+	try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xda }, progressive[441..443]);
+	const early_complete = progressive[0..441].* ++ [_]u8{ 0xff, 0xd9 };
+	const embedded_eoi = progressive[0..441].* ++ [_]u8{ 0xff, 0xfe, 0, 4, 0xff, 0xd9 };
+	const dangling_ff = progressive[0..441].* ++ [_]u8{0xff};
+	const cases = [_]struct { bytes: []const u8, valid: bool }{
+		.{ .bytes = progressive, .valid = true },
+		.{ .bytes = baseline, .valid = true },
+		.{ .bytes = lossless, .valid = true },
+		.{ .bytes = &early_complete, .valid = true },
+		.{ .bytes = progressive[0..441], .valid = false },
+		.{ .bytes = progressive[0 .. progressive.len - 2], .valid = false },
+		.{ .bytes = baseline[0 .. baseline.len - 2], .valid = false },
+		.{ .bytes = lossless[0 .. lossless.len - 2], .valid = false },
+		.{ .bytes = &embedded_eoi, .valid = false },
+		.{ .bytes = &dangling_ff, .valid = false },
+	};
+	for (cases) |case| {
+		var result = try jpegz.validateAny(allocator, case.bytes);
+		defer result.deinit(allocator);
+		if (result.verdict != (if (case.valid) jpegz.StrictVerdict.valid else .corrupt)) {
+			std.debug.print("EOI case len{d} valid{} got{s}\n", .{ case.bytes.len, case.valid, @tagName(result.verdict) });
+		}
+		try std.testing.expectEqual(if (case.valid) jpegz.StrictVerdict.valid else .corrupt, result.verdict);
+	}
+	// Preserve legacy recovery and the original finding's severity/location.
+	var legacy = try jpegz.validate(allocator, progressive[0..441]);
+	defer legacy.deinit(allocator);
+	try std.testing.expect(legacy.isValid());
+	var strict = try jpegz.validateAny(allocator, progressive[0..441]);
+	defer strict.deinit(allocator);
+	var found = false;
+	for (strict.findings.items) |finding| {
+		if (finding.code == .missing_eoi and finding.severity == .warn and finding.offset == 441) found = true;
+	}
+	try std.testing.expect(found);
+}
+
 test "classic facade distinguishes unchecked and unsupported codecs from validity" {
 	const allocator = std.testing.allocator;
 	const cases = [_]struct { sof: u8, sampling: u8 = 0x11, width: u8 = 1, verdict: jpegz.StrictVerdict }{

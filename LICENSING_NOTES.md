@@ -22,7 +22,7 @@ below. Attribution for ported code remains after binary dependencies are removed
 ## Provenance: cleanroom vs. port (CANONICAL — source of truth)
 
 This section is the single source of truth for how jpegz may describe its
-codecs. Other docs (README, PROJECT_OVERVIEW, PLAN, SPEC, design notes) must
+codecs. Other docs (README, INTENT, PLAN, SPEC, design notes) must
 be consistent with it. "Cleanroom" is a legal/marketing term of art — claim it
 ONLY where the code was written from the ITU-T spec, never where an algorithm
 shape was adapted from libjpeg-turbo/openjpeg source.
