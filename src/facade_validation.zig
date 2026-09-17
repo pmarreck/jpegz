@@ -154,6 +154,12 @@ fn jxlCode(raw: i32) ?FindingCode {
         6 => .jxl_out_of_memory,
         7 => .jxl_invalid_argument,
         8 => .jxl_unclassified_decoder_error,
+        9 => .jxl_nonzero_padding,
+        10 => .jxl_invalid_context_map,
+        11 => .jxl_invalid_ma_tree,
+        12 => .jxl_invalid_ans_state,
+        13 => .jxl_truncated_box_header,
+        14 => .jxl_invalid_ac_nonzero_count,
         else => null,
     };
 }
@@ -166,21 +172,22 @@ pub fn mapJxlFinding(raw_verdict: i32, raw_code: i32) MappedFinding {
     }
     const code = jxlCode(raw_code) orelse
         return .{ .verdict = .indeterminate, .code = null, .severity = .warn };
+    const expected_raw_verdict: i32 = switch (raw_code) {
+        1, 2, 3, 9, 10, 11, 12, 13, 14 => 1,
+        4 => 2,
+        5, 6, 7, 8 => 3,
+        else => unreachable,
+    };
+    if (raw_verdict != expected_raw_verdict) {
+        return .{ .verdict = .indeterminate, .code = code, .severity = .warn };
+    }
     const expected_verdict: StrictVerdict = switch (raw_code) {
-        1, 2, 3 => .corrupt,
+        9, 13 => .valid,
+        1, 2, 3, 10, 11, 12, 14 => .corrupt,
         4 => .unsupported,
         5, 6, 7, 8 => .indeterminate,
         else => unreachable,
     };
-    const expected_raw: i32 = switch (expected_verdict) {
-        .valid => 0,
-        .corrupt => 1,
-        .unsupported => 2,
-        .indeterminate => 3,
-    };
-    if (raw_verdict != expected_raw) {
-        return .{ .verdict = .indeterminate, .code = code, .severity = .warn };
-    }
     return .{
         .verdict = expected_verdict,
         .code = code,

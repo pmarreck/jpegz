@@ -143,25 +143,39 @@ test "JPEG XL mapping is exhaustive and unknown future codes fail closed" {
         leaf_code: i32,
         verdict: jpegz.StrictVerdict,
         code: ?jpegz.FindingCode,
+        severity: jpegz.Severity,
     };
     const cases = [_]Case{
-        .{ .leaf_verdict = 0, .leaf_code = 0, .verdict = .valid, .code = null },
-        .{ .leaf_verdict = 1, .leaf_code = 1, .verdict = .corrupt, .code = .jxl_invalid_signature },
-        .{ .leaf_verdict = 1, .leaf_code = 2, .verdict = .corrupt, .code = .jxl_truncated },
-        .{ .leaf_verdict = 1, .leaf_code = 3, .verdict = .corrupt, .code = .jxl_malformed },
-        .{ .leaf_verdict = 2, .leaf_code = 4, .verdict = .unsupported, .code = .jxl_unsupported_feature },
-        .{ .leaf_verdict = 3, .leaf_code = 5, .verdict = .indeterminate, .code = .jxl_resource_limit },
-        .{ .leaf_verdict = 3, .leaf_code = 6, .verdict = .indeterminate, .code = .jxl_out_of_memory },
-        .{ .leaf_verdict = 3, .leaf_code = 7, .verdict = .indeterminate, .code = .jxl_invalid_argument },
-        .{ .leaf_verdict = 3, .leaf_code = 8, .verdict = .indeterminate, .code = .jxl_unclassified_decoder_error },
-        .{ .leaf_verdict = 0, .leaf_code = 999, .verdict = .indeterminate, .code = null },
+        .{ .leaf_verdict = 0, .leaf_code = 0, .verdict = .valid, .code = null, .severity = .pass },
+        .{ .leaf_verdict = 1, .leaf_code = 1, .verdict = .corrupt, .code = .jxl_invalid_signature, .severity = .fail },
+        .{ .leaf_verdict = 1, .leaf_code = 2, .verdict = .corrupt, .code = .jxl_truncated, .severity = .fail },
+        .{ .leaf_verdict = 1, .leaf_code = 3, .verdict = .corrupt, .code = .jxl_malformed, .severity = .fail },
+        .{ .leaf_verdict = 2, .leaf_code = 4, .verdict = .unsupported, .code = .jxl_unsupported_feature, .severity = .warn },
+        .{ .leaf_verdict = 3, .leaf_code = 5, .verdict = .indeterminate, .code = .jxl_resource_limit, .severity = .warn },
+        .{ .leaf_verdict = 3, .leaf_code = 6, .verdict = .indeterminate, .code = .jxl_out_of_memory, .severity = .warn },
+        .{ .leaf_verdict = 3, .leaf_code = 7, .verdict = .indeterminate, .code = .jxl_invalid_argument, .severity = .warn },
+        .{ .leaf_verdict = 3, .leaf_code = 8, .verdict = .indeterminate, .code = .jxl_unclassified_decoder_error, .severity = .warn },
+        .{ .leaf_verdict = 1, .leaf_code = 9, .verdict = .valid, .code = .jxl_nonzero_padding, .severity = .warn },
+        .{ .leaf_verdict = 1, .leaf_code = 10, .verdict = .corrupt, .code = .jxl_invalid_context_map, .severity = .fail },
+        .{ .leaf_verdict = 1, .leaf_code = 11, .verdict = .corrupt, .code = .jxl_invalid_ma_tree, .severity = .fail },
+        .{ .leaf_verdict = 1, .leaf_code = 12, .verdict = .corrupt, .code = .jxl_invalid_ans_state, .severity = .fail },
+        .{ .leaf_verdict = 1, .leaf_code = 13, .verdict = .valid, .code = .jxl_truncated_box_header, .severity = .warn },
+        .{ .leaf_verdict = 1, .leaf_code = 14, .verdict = .corrupt, .code = .jxl_invalid_ac_nonzero_count, .severity = .fail },
+        .{ .leaf_verdict = 0, .leaf_code = 999, .verdict = .indeterminate, .code = null, .severity = .warn },
     };
 
     for (cases) |case| {
         const mapped = jpegz.facade.mapJxlFinding(case.leaf_verdict, case.leaf_code);
         try std.testing.expectEqual(case.verdict, mapped.verdict);
         try std.testing.expectEqual(case.code, mapped.code);
-        if (case.code) |code| try std.testing.expectEqual(@as(u32, @intCast(179 + case.leaf_code)), @intFromEnum(code));
+        try std.testing.expectEqual(case.severity, mapped.severity);
+        if (case.code) |code| {
+            const expected_facade_code: u32 = if (case.leaf_code <= 8)
+                @intCast(179 + case.leaf_code)
+            else
+                @intCast(180 + case.leaf_code);
+            try std.testing.expectEqual(expected_facade_code, @intFromEnum(code));
+        }
     }
 }
 

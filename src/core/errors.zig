@@ -152,6 +152,15 @@ pub const FindingCode = enum(u32) {
     // file was recognized as JXL and then not checked, which is
     // `.indeterminate`, never `.valid` and never `.corrupt`.
     jxl_validator_unavailable = 188,
+    // Raw libjxlz code 9 cannot use the original `179 + raw` relation because
+    // 188 was already assigned above. Keep this append-only continuation and
+    // retain the raw leaf code separately in StrictFinding.leaf_code.
+    jxl_nonzero_padding = 189,
+    jxl_invalid_context_map = 190,
+    jxl_invalid_ma_tree = 191,
+    jxl_invalid_ans_state = 192,
+    jxl_truncated_box_header = 193,
+    jxl_invalid_ac_nonzero_count = 194,
 
     // ── Informational (severity = .info) (200..249) ──────────────
     arithmetic_coding_used = 200,
