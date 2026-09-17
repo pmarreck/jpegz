@@ -83,6 +83,9 @@ pub const StrictFinding = struct {
     leaf_code: u32,
     code: ?FindingCode,
     severity: Severity,
+    /// False when the leaf identified a terminal condition but has not yet
+    /// audited whether that condition is a recoverable warning or hard error.
+    is_assessed: bool = true,
     offset: ?u64 = null,
     host_offset: ?u64 = null,
     offset_is_exact: bool = false,
@@ -101,6 +104,11 @@ pub const StrictValidationResult = struct {
     width: ?u32 = null,
     height: ?u32 = null,
     frames_validated: u32 = 0,
+    /// Leaf-reported decode state. Null means that leaf version did not expose
+    /// the field, rather than guessing completion from its aggregate verdict.
+    decode_complete: ?bool = null,
+    reported_finding_count: ?u64 = null,
+    reported_warning_count: ?u64 = null,
     findings: std.ArrayList(StrictFinding) = .empty,
 
     pub fn isValid(self: StrictValidationResult) bool {
@@ -253,6 +261,100 @@ pub const JxlOptions = if (with_jxl) libjxlz.validation.Options else struct {
 pub const default_jxl_options: JxlOptions =
     if (with_jxl) libjxlz.validation.default_options else .{};
 
+fn validateJxlWithFindings(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    original_options: JxlOptions,
+) error{OutOfMemory}!StrictValidationResult {
+    const api = libjxlz.ffi.decode;
+    const Callback = @TypeOf(original_options.finding_callback);
+    const Collector = struct {
+        allocator: std.mem.Allocator,
+        findings: *std.ArrayList(StrictFinding),
+        prior_callback: Callback,
+        prior_opaque: ?*anyopaque,
+        out_of_memory: bool = false,
+        saw_unknown: bool = false,
+
+        fn collect(context: ?*anyopaque, finding: *const api.JxlValidationFinding) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            const raw_verdict: i32 = @intCast(@intFromEnum(finding.verdict));
+            const raw_code: i32 = @intCast(@intFromEnum(finding.code));
+            const raw_severity: i32 = @intCast(@intFromEnum(finding.severity));
+            const mapped = mapJxlFinding(raw_verdict, raw_code);
+            if (mapped.code == null) self.saw_unknown = true;
+            self.findings.append(self.allocator, .{
+                .source = .libjxlz,
+                .leaf_code = @intCast(raw_code),
+                .code = mapped.code,
+                .severity = switch (raw_severity) {
+                    1 => .warn,
+                    2 => .fail,
+                    else => mapped.severity,
+                },
+                .is_assessed = raw_severity == 1 or raw_severity == 2,
+                .offset = finding.byte_offset,
+                .host_offset = finding.host_byte_offset,
+                .offset_is_exact = finding.offset_is_exact != 0,
+            }) catch {
+                self.out_of_memory = true;
+            };
+            if (self.prior_callback) |callback| callback(self.prior_opaque, finding);
+        }
+    };
+
+    var result = StrictValidationResult{
+        .verdict = .valid,
+        .format = .jpeg_xl,
+        .variant = .jpeg_xl,
+    };
+    errdefer result.deinit(allocator);
+
+    var options = original_options;
+    var collector = Collector{
+        .allocator = allocator,
+        .findings = &result.findings,
+        .prior_callback = options.finding_callback,
+        .prior_opaque = options.finding_opaque,
+    };
+    options.finding_callback = Collector.collect;
+    options.finding_opaque = &collector;
+
+    const leaf = libjxlz.validation.validate(data, options);
+    if (collector.out_of_memory) return error.OutOfMemory;
+
+    const raw_verdict: i32 = @intCast(@intFromEnum(leaf.verdict));
+    const raw_code: i32 = @intCast(@intFromEnum(leaf.code));
+    const mapped = mapJxlFinding(raw_verdict, raw_code);
+    result.verdict = if (collector.saw_unknown) .indeterminate else mapped.verdict;
+    result.frames_validated = leaf.frames_validated;
+    result.decode_complete = leaf.decode_complete != 0;
+    result.reported_finding_count = leaf.finding_count;
+    result.reported_warning_count = leaf.warning_count;
+
+    // A caller may deliberately pass the prefix size of an older options
+    // struct. In that case libjxlz ignores the callback fields, so retain the
+    // terminal scalar finding as the compatibility fallback.
+    if (result.findings.items.len == 0 and raw_code != 0) {
+        const raw_severity: i32 = @intCast(@intFromEnum(leaf.severity));
+        try result.findings.append(allocator, .{
+            .source = .libjxlz,
+            .leaf_code = @intCast(raw_code),
+            .code = mapped.code,
+            .severity = switch (raw_severity) {
+                1 => .warn,
+                2 => .fail,
+                else => mapped.severity,
+            },
+            .is_assessed = raw_severity == 1 or raw_severity == 2,
+            .offset = leaf.byte_offset,
+            .host_offset = leaf.host_byte_offset,
+            .offset_is_exact = leaf.offset_is_exact != 0,
+        });
+    }
+    return result;
+}
+
 /// Runs libjxlz strict validation and preserves its verdict, code, and offsets.
 pub fn validateJxl(
     allocator: std.mem.Allocator,
@@ -276,6 +378,9 @@ pub fn validateJxl(
         });
         return stub;
     }
+    if (comptime @hasField(JxlOptions, "finding_callback")) {
+        return validateJxlWithFindings(allocator, data, options);
+    }
     const leaf = libjxlz.validation.validate(data, options);
     const raw_verdict: i32 = @intCast(@intFromEnum(leaf.verdict));
     const raw_code: i32 = @intCast(@intFromEnum(leaf.code));
@@ -293,6 +398,7 @@ pub fn validateJxl(
             .leaf_code = @intCast(raw_code),
             .code = mapped.code,
             .severity = mapped.severity,
+            .is_assessed = false,
             .offset = leaf.byte_offset,
             .host_offset = leaf.host_byte_offset,
             .offset_is_exact = leaf.offset_is_exact != 0,

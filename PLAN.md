@@ -40,17 +40,25 @@ An unchecked historical box does not create a second work order.
 
 ## Active order
 
-- [ ] September 17 libjxlz evidence adapter: preserve all current leaf codes,
+- [x] September 17 libjxlz evidence adapter: preserve all current leaf codes,
   warning/fatal ordering, completion, counts and exact offsets through the
   strict facade. First slice DONE 2026-09-17 3:08 PM EDT: raw leaf codes 9–14
   map to append-only facade codes 189–194 without colliding with
   `jxl_validator_unavailable=188`; padding and truncated box-header findings
   remain `.warn`, while context-map, MA-tree, ANS-state and AC-count failures
   remain `.fail`. The set test covers all 14 leaf codes, numeric identities,
-  severities and an unknown future code. `./test` and `./build` pass. Next:
-  capture callbacks and completion against the new private libjxlz pin.
-  Curiosity poke: a recoverable warning followed by a stopping error must retain
-  both findings and the fatal aggregate verdict.
+  severities and an unknown future code. Second slice DONE 2026-09-17 3:21 PM
+  EDT: the facade captures every callback finding in order, preserves assessed
+  versus unaudited severity, exposes decode completion and leaf-reported counts,
+  chains caller callbacks, and retains scalar fallback compatibility with the
+  pinned older leaf. The newest local libjxlz passed the full jpegz suite after
+  accounting for two fixtures it now accepts; the repository's exact pinned
+  state passes `./test` (199 Zig tests, 49 CLI cases, 71 C FFI assertions and
+  three consumer controls) and `./build`. The callback regression remains
+  compile-time skipped until the private dependency can be pinned to the newer
+  commit. _(2026-09-17 3:21 PM EDT)_
+  Curiosity poke resolved: a recoverable warning followed by a stopping error
+  retains both findings in order and the fatal aggregate verdict.
 - [ ] Peter approved implementation of the prior-art comparison direction on
   September 11. First finish the pending coefficient checks with independent
   review and green builds; then compare labeled edge fixtures and expand scan

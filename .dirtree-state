@@ -47,7 +47,7 @@ annotate=[
 	src/decode/progressive.zig = SOF2 progressive multi-scan DCT decode incl. DRI and AC refinement
 	src/decode/segment.zig = Shared parseSegmentLength marker-length primitive
 	src/decode/thread_pool.zig = Minimal worker thread pool (spawnWg/waitAndWork) for parallel IDCT + color convert
-	src/facade_validation.zig = Translates strict JP2/JXL leaf reports into the shared JPEG-family result without losing verdicts, codes, severity, or offsets
+	src/facade_validation.zig = Four-way JP2/JXL adapter preserving ordered leaf findings, assessment, completion, counts and offsets
 	src/ffi/c_api.zig = C ABI export fn for every public API; exhaustive toCStatus switch fails the build on an unmapped error
 	src/ffi/c_api_validate.zig = Validation half of the C ABI: validate/validate_any/sniff/verdict names — root of the C-library-free libjpegz-validate.a
 	src/ffi/c_common.zig = Shared C-ABI marshalling helpers (allocator, last-error, status/finding conversion) for both ABI archives
@@ -62,7 +62,7 @@ annotate=[
 	tests/cli/lib/capture.bash = Vendored capture() helper (Peter, MIT) — stdout/stderr/rc capture; vendored so CLI tests are hermetic in the Nix sandbox
 	tests/cli/no_c_consumer.bash = Gate: pure-Zig consumer must import jpegz + call validate() with zero C deps (has negative control)
 	tests/cli/validate_cli.bash = Bash CLI surface suite (22 assertions): arg discipline, exit codes, rich errors, JSON, stdin, spaced paths, ANSI suppression
-	tests/unit/facade_validation.zig = Exhaustive mapping, labeled corpus, and sniper/bolter/shotgun facade classifier tests.
+	tests/unit/facade_validation.zig = Set-based strict facade tests, including JPEG XL warning/fatal ordering and completion metadata
 	tests/unit/fixtures/JXL_VALIDATION_PROVENANCE.md = Exact libjxlz source paths, SHA-256 values, and expected four-way fixture outcomes.
 	tests/unit/fixtures/baseline_16x16_rgb_marked.jpg = RGB-marked baseline JPEG (Adobe APP14 transform=0) — gap-D cleanroom RGB-passthrough test fixture
 	tools/facade_validator_probe.zig = Production-shaped validation-only ELF used for dependency-closure proof.

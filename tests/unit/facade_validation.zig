@@ -302,9 +302,59 @@ test "JPEG XL facade preserves leaf identity and exact host-relative offset" {
     try std.testing.expectEqual(jpegz.ValidatorSource.libjxlz, finding.source);
     try std.testing.expectEqual(@as(u32, 1), finding.leaf_code);
     try std.testing.expectEqual(jpegz.FindingCode.jxl_invalid_signature, finding.code.?);
+    try std.testing.expect(!finding.is_assessed);
     try std.testing.expectEqual(@as(?u64, 0), finding.offset);
     try std.testing.expectEqual(@as(?u64, 91), finding.host_offset);
     try std.testing.expect(finding.offset_is_exact);
+}
+
+test "JPEG XL facade preserves warning then fatal findings and completion" {
+    if (comptime !@hasField(jpegz.jpegxl.Options, "finding_callback")) return error.SkipZigTest;
+
+    const clean = [_]u8{
+        255, 10, 0, 0, 0, 128, 160, 184, 17, 8, 2, 1, 0, 64, 0, 137,
+        160, 86, 21, 64, 2, 0, 194, 141, 120, 155, 2, 255, 170, 50, 0,
+    };
+    var options = jpegz.jpegxl.default_options;
+    options.host_byte_offset = 1000;
+
+    var valid = try jpegz.jpegxl.validate(std.testing.allocator, &clean, options);
+    defer valid.deinit(std.testing.allocator);
+    try std.testing.expectEqual(jpegz.StrictVerdict.valid, valid.verdict);
+    try std.testing.expectEqual(@as(?bool, true), valid.decode_complete);
+    try std.testing.expectEqual(@as(?u64, 0), valid.reported_finding_count);
+    try std.testing.expectEqual(@as(?u64, 0), valid.reported_warning_count);
+    try std.testing.expectEqual(@as(usize, 0), valid.findings.items.len);
+
+    var warning_bytes = clean;
+    warning_bytes[8] |= 32;
+    var warning = try jpegz.jpegxl.validate(std.testing.allocator, &warning_bytes, options);
+    defer warning.deinit(std.testing.allocator);
+    try std.testing.expectEqual(jpegz.StrictVerdict.valid, warning.verdict);
+    try std.testing.expectEqual(@as(?bool, true), warning.decode_complete);
+    try std.testing.expectEqual(@as(?u64, 1), warning.reported_finding_count);
+    try std.testing.expectEqual(@as(?u64, 1), warning.reported_warning_count);
+    try std.testing.expectEqual(@as(usize, 1), warning.findings.items.len);
+    try std.testing.expectEqual(jpegz.FindingCode.jxl_nonzero_padding, warning.findings.items[0].code.?);
+    try std.testing.expectEqual(jpegz.Severity.warn, warning.findings.items[0].severity);
+    try std.testing.expect(warning.findings.items[0].is_assessed);
+    try std.testing.expectEqual(@as(?u64, 8), warning.findings.items[0].offset);
+    try std.testing.expectEqual(@as(?u64, 1008), warning.findings.items[0].host_offset);
+
+    var stopped = try jpegz.jpegxl.validate(std.testing.allocator, warning_bytes[0..9], options);
+    defer stopped.deinit(std.testing.allocator);
+    try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, stopped.verdict);
+    try std.testing.expectEqual(@as(?bool, false), stopped.decode_complete);
+    try std.testing.expectEqual(@as(?u64, 2), stopped.reported_finding_count);
+    try std.testing.expectEqual(@as(?u64, 1), stopped.reported_warning_count);
+    try std.testing.expectEqual(@as(usize, 2), stopped.findings.items.len);
+    try std.testing.expectEqual(jpegz.FindingCode.jxl_nonzero_padding, stopped.findings.items[0].code.?);
+    try std.testing.expectEqual(jpegz.Severity.warn, stopped.findings.items[0].severity);
+    try std.testing.expectEqual(jpegz.FindingCode.jxl_truncated, stopped.findings.items[1].code.?);
+    try std.testing.expectEqual(jpegz.Severity.fail, stopped.findings.items[1].severity);
+    try std.testing.expect(stopped.findings.items[1].is_assessed);
+    try std.testing.expectEqual(@as(?u64, 9), stopped.findings.items[1].offset);
+    try std.testing.expect(stopped.findings.items[1].offset_is_exact);
 }
 
 // ── U2: family-wide container sniffing + one-call validation ──────────
