@@ -40,6 +40,14 @@ An unchecked historical box does not create a second work order.
 
 ## Active order
 
+- [x] Map libjxlz entropy findings 15 and 16 to append-only facade codes 195
+  and 196, preserving names and indeterminate outcomes for inconsistent verdicts.
+  Prove the mapping before changing it, then run the complete suite and build.
+  Dependency promotion remains held. Curiosity poke: unknown future codes must
+  stay indeterminate even when the leaf supplies a corrupt verdict. RED/GREEN
+  witnessed; focused facade tests, complete `./test` and production `./build`
+  passed September 18, 2026, approximately 09:15 EDT.
+
 - [x] September 17 libjxlz evidence adapter: preserve all current leaf codes,
   warning/fatal ordering, completion, counts and exact offsets through the
   strict facade. First slice DONE 2026-09-17 3:08 PM EDT: raw leaf codes 9–14

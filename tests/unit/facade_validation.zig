@@ -179,6 +179,25 @@ test "JPEG XL mapping is exhaustive and unknown future codes fail closed" {
     }
 }
 
+test "JPEG XL entropy findings preserve names and reject inconsistent verdicts" {
+    const cases = .{
+        .{ @as(i32, 15), @as(u32, 195), "jxl_invalid_hybrid_uint_config" },
+        .{ @as(i32, 16), @as(u32, 196), "jxl_invalid_histogram" },
+    };
+    inline for (cases) |case| {
+        for (0..4) |raw_verdict| {
+            const mapped = jpegz.facade.mapJxlFinding(@intCast(raw_verdict), case[0]);
+            try std.testing.expectEqual(
+                if (raw_verdict == 1) jpegz.StrictVerdict.corrupt else jpegz.StrictVerdict.indeterminate,
+                mapped.verdict,
+            );
+            try std.testing.expect(mapped.code != null);
+            try std.testing.expectEqual(case[1], @intFromEnum(mapped.code.?));
+            try std.testing.expectEqualStrings(case[2], @tagName(mapped.code.?));
+        }
+    }
+}
+
 test "JPEG 2000 mapping preserves every public leaf code and fails closed" {
     const known_codes = [_]u32{
         1,   2,   3,   4,   5,

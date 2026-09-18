@@ -161,6 +161,8 @@ pub const FindingCode = enum(u32) {
     jxl_invalid_ans_state = 192,
     jxl_truncated_box_header = 193,
     jxl_invalid_ac_nonzero_count = 194,
+    jxl_invalid_hybrid_uint_config = 195,
+    jxl_invalid_histogram = 196,
 
     // ── Informational (severity = .info) (200..249) ──────────────
     arithmetic_coding_used = 200,

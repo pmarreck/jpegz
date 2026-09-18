@@ -168,6 +168,8 @@ fn jxlCode(raw: i32) ?FindingCode {
         12 => .jxl_invalid_ans_state,
         13 => .jxl_truncated_box_header,
         14 => .jxl_invalid_ac_nonzero_count,
+        15 => .jxl_invalid_hybrid_uint_config,
+        16 => .jxl_invalid_histogram,
         else => null,
     };
 }
@@ -181,7 +183,7 @@ pub fn mapJxlFinding(raw_verdict: i32, raw_code: i32) MappedFinding {
     const code = jxlCode(raw_code) orelse
         return .{ .verdict = .indeterminate, .code = null, .severity = .warn };
     const expected_raw_verdict: i32 = switch (raw_code) {
-        1, 2, 3, 9, 10, 11, 12, 13, 14 => 1,
+        1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16 => 1,
         4 => 2,
         5, 6, 7, 8 => 3,
         else => unreachable,
@@ -191,7 +193,7 @@ pub fn mapJxlFinding(raw_verdict: i32, raw_code: i32) MappedFinding {
     }
     const expected_verdict: StrictVerdict = switch (raw_code) {
         9, 13 => .valid,
-        1, 2, 3, 10, 11, 12, 14 => .corrupt,
+        1, 2, 3, 10, 11, 12, 14, 15, 16 => .corrupt,
         4 => .unsupported,
         5, 6, 7, 8 => .indeterminate,
         else => unreachable,
