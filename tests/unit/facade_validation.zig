@@ -1,6 +1,31 @@
 const std = @import("std");
 const jpegz = @import("jpegz");
 
+test "JP2 dependency findings retain wire identities and severities" {
+	const cases = [_]struct { raw: u32, name: []const u8, severity: jpegz.Severity, verdict: jpegz.StrictVerdict }{
+		.{ .raw = 255, .name = "zero_bitplane_overflow", .severity = .fail, .verdict = .corrupt },
+		.{ .raw = 256, .name = "packed_headers_mismatch", .severity = .fail, .verdict = .corrupt },
+		.{ .raw = 257, .name = "jp2_trailing_bytes", .severity = .fail, .verdict = .corrupt },
+		.{ .raw = 258, .name = "segmentation_symbol_mismatch", .severity = .fail, .verdict = .corrupt },
+		.{ .raw = 259, .name = "profile_violation", .severity = .fail, .verdict = .corrupt },
+		// E.2's encoder formula is informative, not a normative constraint.
+		.{ .raw = 260, .name = "reversible_exponent_mismatch", .severity = .warn, .verdict = .valid },
+	};
+	for (cases) |case| {
+		const mapped = jpegz.facade.mapJp2Finding(case.raw, case.severity, true);
+		try std.testing.expectEqual(case.verdict, mapped.verdict);
+		try std.testing.expectEqual(case.severity, mapped.severity);
+		const code = mapped.code orelse return error.MissingJp2Finding;
+		try std.testing.expectEqual(case.raw, @intFromEnum(code));
+		try std.testing.expectEqualStrings(case.name, @tagName(code));
+	}
+	for ([_]u32{ 261, 299, 999 }) |raw| {
+		const mapped = jpegz.facade.mapJp2Finding(raw, .fail, true);
+		try std.testing.expectEqual(jpegz.StrictVerdict.indeterminate, mapped.verdict);
+		try std.testing.expectEqual(@as(?jpegz.FindingCode, null), mapped.code);
+	}
+}
+
 test "classic facade requires EOI even after a complete progressive scan" {
 	const allocator = std.testing.allocator;
 	const progressive = @embedFile("fixtures/progressive_8x8_rgb.jpg");
@@ -155,11 +180,11 @@ test "JPEG XL mapping is exhaustive and unknown future codes fail closed" {
         .{ .leaf_verdict = 3, .leaf_code = 6, .verdict = .indeterminate, .code = .jxl_out_of_memory, .severity = .warn },
         .{ .leaf_verdict = 3, .leaf_code = 7, .verdict = .indeterminate, .code = .jxl_invalid_argument, .severity = .warn },
         .{ .leaf_verdict = 3, .leaf_code = 8, .verdict = .indeterminate, .code = .jxl_unclassified_decoder_error, .severity = .warn },
-        .{ .leaf_verdict = 1, .leaf_code = 9, .verdict = .valid, .code = .jxl_nonzero_padding, .severity = .warn },
+        .{ .leaf_verdict = 1, .leaf_code = 9, .verdict = .corrupt, .code = .jxl_nonzero_padding, .severity = .warn },
         .{ .leaf_verdict = 1, .leaf_code = 10, .verdict = .corrupt, .code = .jxl_invalid_context_map, .severity = .fail },
         .{ .leaf_verdict = 1, .leaf_code = 11, .verdict = .corrupt, .code = .jxl_invalid_ma_tree, .severity = .fail },
         .{ .leaf_verdict = 1, .leaf_code = 12, .verdict = .corrupt, .code = .jxl_invalid_ans_state, .severity = .fail },
-        .{ .leaf_verdict = 1, .leaf_code = 13, .verdict = .valid, .code = .jxl_truncated_box_header, .severity = .warn },
+        .{ .leaf_verdict = 1, .leaf_code = 13, .verdict = .corrupt, .code = .jxl_truncated_box_header, .severity = .warn },
         .{ .leaf_verdict = 1, .leaf_code = 14, .verdict = .corrupt, .code = .jxl_invalid_ac_nonzero_count, .severity = .fail },
         .{ .leaf_verdict = 0, .leaf_code = 999, .verdict = .indeterminate, .code = null, .severity = .warn },
     };
@@ -237,7 +262,7 @@ test "strict facade rejects mandatory JPEG-family signature mutations" {
     try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, jxl_result.verdict);
 }
 
-test "JPEG XL labeled corpus preserves valid unsupported and indeterminate" {
+test "JPEG XL formerly unsupported corpus now validates completely" {
     const Case = struct {
         label: []const u8,
         bytes: []const u8,
@@ -245,8 +270,8 @@ test "JPEG XL labeled corpus preserves valid unsupported and indeterminate" {
     };
     const cases = [_]Case{
         .{ .label = "delta_palette known-good", .bytes = @embedFile("fixtures/jxl_delta_palette_valid.jxl"), .expected = .valid },
-        .{ .label = "patches_lossless known-unsupported", .bytes = @embedFile("fixtures/jxl_patches_lossless_unsupported.jxl"), .expected = .unsupported },
-        .{ .label = "bicycles known-indeterminate", .bytes = @embedFile("fixtures/jxl_bicycles_indeterminate.jxl"), .expected = .indeterminate },
+        .{ .label = "patches_lossless now supported", .bytes = @embedFile("fixtures/jxl_patches_lossless_unsupported.jxl"), .expected = .valid },
+        .{ .label = "bicycles now supported", .bytes = @embedFile("fixtures/jxl_bicycles_indeterminate.jxl"), .expected = .valid },
     };
     for (cases) |case| {
         var result = try jpegz.jpegxl.validate(std.testing.allocator, case.bytes, jpegz.jpegxl.default_options);
@@ -255,6 +280,8 @@ test "JPEG XL labeled corpus preserves valid unsupported and indeterminate" {
             std.debug.print("{s}: expected {t}, found {t}\n", .{ case.label, case.expected, result.verdict });
             return error.TestExpectedEqual;
         }
+        try std.testing.expectEqual(@as(?bool, true), result.decode_complete);
+        try std.testing.expectEqual(@as(?u64, 0), result.reported_finding_count);
     }
 }
 
@@ -328,8 +355,6 @@ test "JPEG XL facade preserves leaf identity and exact host-relative offset" {
 }
 
 test "JPEG XL facade preserves warning then fatal findings and completion" {
-    if (comptime !@hasField(jpegz.jpegxl.Options, "finding_callback")) return error.SkipZigTest;
-
     const clean = [_]u8{
         255, 10, 0, 0, 0, 128, 160, 184, 17, 8, 2, 1, 0, 64, 0, 137,
         160, 86, 21, 64, 2, 0, 194, 141, 120, 155, 2, 255, 170, 50, 0,
@@ -349,7 +374,7 @@ test "JPEG XL facade preserves warning then fatal findings and completion" {
     warning_bytes[8] |= 32;
     var warning = try jpegz.jpegxl.validate(std.testing.allocator, &warning_bytes, options);
     defer warning.deinit(std.testing.allocator);
-    try std.testing.expectEqual(jpegz.StrictVerdict.valid, warning.verdict);
+    try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, warning.verdict);
     try std.testing.expectEqual(@as(?bool, true), warning.decode_complete);
     try std.testing.expectEqual(@as(?u64, 1), warning.reported_finding_count);
     try std.testing.expectEqual(@as(?u64, 1), warning.reported_warning_count);
@@ -374,6 +399,48 @@ test "JPEG XL facade preserves warning then fatal findings and completion" {
     try std.testing.expect(stopped.findings.items[1].is_assessed);
     try std.testing.expectEqual(@as(?u64, 9), stopped.findings.items[1].offset);
     try std.testing.expect(stopped.findings.items[1].offset_is_exact);
+}
+
+test "JPEG XL trailing header invalidity survives recovery and resource limits" {
+    const clean = [_]u8{
+        255, 10, 0, 0, 0, 128, 160, 184, 17, 8, 2, 1, 0, 64, 0, 137,
+        160, 86, 21, 64, 2, 0, 194, 141, 120, 155, 2, 255, 170, 50, 0,
+    };
+    // Signature, ftyp and a length-delimited jxlc box containing the control.
+    const header = [_]u8{
+        0, 0, 0, 12, 'J', 'X', 'L', ' ', 13, 10, 135, 10,
+        0, 0, 0, 20, 'f', 't', 'y', 'p', 'j', 'x', 'l', ' ',
+        0, 0, 0, 0, 'j', 'x', 'l', ' ',
+        0, 0, 0, 8 + clean.len, 'j', 'x', 'l', 'c',
+    };
+    const boxed = header ++ clean;
+    const input = boxed ++ [_]u8{ 0, 0, 0, 8, 't', 'e', 's', 't' };
+    var options = jpegz.jpegxl.default_options;
+    options.host_byte_offset = 1000;
+    for (0..9) |tail| {
+        var result = try jpegz.jpegxl.validate(std.testing.allocator, input[0 .. boxed.len + tail], options);
+        defer result.deinit(std.testing.allocator);
+        const valid = tail == 0 or tail == 8;
+        try std.testing.expectEqual(if (valid) jpegz.StrictVerdict.valid else .corrupt, result.verdict);
+        try std.testing.expectEqual(@as(?bool, true), result.decode_complete);
+        try std.testing.expectEqual(@as(usize, if (valid) 0 else 1), result.findings.items.len);
+        if (!valid) {
+            const finding = result.findings.items[0];
+            try std.testing.expectEqual(jpegz.FindingCode.jxl_truncated_box_header, finding.code.?);
+            try std.testing.expectEqual(jpegz.Severity.warn, finding.severity);
+            try std.testing.expectEqual(@as(?u64, boxed.len), finding.offset);
+            try std.testing.expectEqual(@as(?u64, 1000 + boxed.len), finding.host_offset);
+            try std.testing.expect(finding.offset_is_exact);
+        }
+    }
+    options.max_pixels = 0;
+    var limited = try jpegz.jpegxl.validate(std.testing.allocator, input[0 .. boxed.len + 1], options);
+    defer limited.deinit(std.testing.allocator);
+    try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, limited.verdict);
+    try std.testing.expectEqual(@as(?bool, false), limited.decode_complete);
+    try std.testing.expectEqual(@as(usize, 2), limited.findings.items.len);
+    try std.testing.expectEqual(jpegz.FindingCode.jxl_truncated_box_header, limited.findings.items[0].code.?);
+    try std.testing.expectEqual(jpegz.FindingCode.jxl_resource_limit, limited.findings.items[1].code.?);
 }
 
 // ── U2: family-wide container sniffing + one-call validation ──────────
@@ -453,7 +520,7 @@ test "validateAny routes each family member to the validator that owns it" {
 		.{ .label = "baseline JPEG", .bytes = @embedFile("fixtures/baseline_4x4_rgb_444.jpg"), .format = .jpeg, .verdict = .valid },
 		.{ .label = "JP2", .bytes = @embedFile("fixtures/jp2_8x8_rgb.jp2"), .format = .jpeg2000, .verdict = .valid },
 		.{ .label = "JXL known-good", .bytes = @embedFile("fixtures/jxl_delta_palette_valid.jxl"), .format = .jpeg_xl, .verdict = .valid },
-		.{ .label = "JXL known-unsupported", .bytes = @embedFile("fixtures/jxl_patches_lossless_unsupported.jxl"), .format = .jpeg_xl, .verdict = .unsupported },
+		.{ .label = "JXL patches supported", .bytes = @embedFile("fixtures/jxl_patches_lossless_unsupported.jxl"), .format = .jpeg_xl, .verdict = .valid },
 	};
 	for (cases) |case| {
 		var result = try jpegz.validateAny(std.testing.allocator, case.bytes);

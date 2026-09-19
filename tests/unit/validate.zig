@@ -1071,14 +1071,39 @@ const fixture_jp2_lossless = @embedFile("fixtures/jp2_8x8_lossless_5x3.jp2");
 const fixture_jp2_lossy97 = @embedFile("fixtures/jp2_8x8_lossy_9x7.jp2");
 const fixture_jp2_subsampled = @embedFile("fixtures/jp2_8x8_subsampled.jp2");
 const fixture_jp2_yuv420 = @embedFile("fixtures/jp2_8x8_yuv420_asym.jp2");
+// The original ffmpeg fixture declares BPC=8 (9 bits) but Ssiz=7 (8 bits).
+// T.800 I.5.3.1 requires agreement. Preserve the original decoder fixture;
+// correct only its container declaration for the validation specificity set.
+const fixture_jp2_yuv420_matching_depth = blk: {
+    var bytes = fixture_jp2_yuv420.*;
+    bytes[58] = 7;
+    break :blk bytes;
+};
 
 const jp2_specificity_corpus = [_][]const u8{
     fixture_jp2_rgb,
     fixture_jp2_lossless,
     fixture_jp2_lossy97,
     fixture_jp2_subsampled,
-    fixture_jp2_yuv420,
+    &fixture_jp2_yuv420_matching_depth,
 };
+
+test "jpeg2000.validate: decodable YUV fixture has inconsistent container depth" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectEqual(@as(u8, 8), fixture_jp2_yuv420[58]);
+    for ([_]usize{ 127, 130, 133 }) |offset| {
+        try std.testing.expectEqual(@as(u8, 7), fixture_jp2_yuv420[offset]);
+    }
+    var malformed = try jpegz.jpeg2000.validate(allocator, fixture_jp2_yuv420);
+    defer malformed.deinit(allocator);
+    try std.testing.expectEqual(jpegz.Severity.fail, malformed.overall);
+    try std.testing.expect(reportHasCode(malformed, .jp2_invalid_codestream));
+
+    var corrected = try jpegz.jpeg2000.validate(allocator, &fixture_jp2_yuv420_matching_depth);
+    defer corrected.deinit(allocator);
+    try std.testing.expect(corrected.overall != .fail);
+    try std.testing.expect(!reportHasCode(corrected, .jp2_invalid_codestream));
+}
 
 /// Offset of the JPEG 2000 SOC+SIZ marker pair (`FF4F FF51`) — the start
 /// of the codestream inside the `jp2c` box. T.800 §A.4.1.

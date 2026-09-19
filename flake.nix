@@ -4,6 +4,12 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    # Private source is fetched by Nix using the caller's SSH credentials,
+    # before sandboxed builds. Never put credentials in a derivation or URL.
+    libjxlz-src = {
+      url = "git+ssh://git@github.com/pmarreck/libjxlz?ref=yolo";
+      flake = false;
+    };
     # We pin Zig explicitly via mitchellh/zig-overlay. Now targeting 0.16.0
     # (the "Juicy Main" release). See ZIG_RECENT_API_CHANGES.md for the
     # patterns applied during the migration.
@@ -13,12 +19,12 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, zig-overlay }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs = { self, nixpkgs, flake-utils, zig-overlay, libjxlz-src }:
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        isDarwin = pkgs.stdenv.isDarwin;
-        isLinux = pkgs.stdenv.isLinux;
+        isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
+        isLinux = pkgs.stdenv.hostPlatform.isLinux;
 
         zigPkg = zig-overlay.packages.${system}."0.16.0";
 
@@ -79,8 +85,8 @@
         charlsSrc = pkgs.fetchFromGitHub {
           owner = "team-charls";
           repo = "charls";
-          rev = "2.4.3";
-          sha256 = "1zhfz5qn22fh0qznh8wrzq68l77wv36wi3ji0hwx4g2kaism4vak";
+          rev = "2.4.4";
+          hash = "sha256-0NfTQfGw89SksrLRX81moj6uFrh1I67JMeT16Wcus1c=";
         };
 
         # When cross-targeting (musl on Linux), Zig's host NIX_LDFLAGS /
@@ -106,26 +112,17 @@
         commonNativeBuildInputs = [ zigPkg pkgs.git pkgs.cacert ];
         commonBuildInputs = [ libjpegTurbo openjpegPkg brotliPkg ];
 
-        # Fixed-output derivation pre-fetching every Zig dependency tarball
-        # (CLAUDE.md Strategy 1). The only network dep is the vendored
-        # openjpeg source (`deps/openjpeg/build.zig.zon` → uclouvain v2.5.4),
-        # pulled when the build links openjpeg from source rather than the
-        # system lib — i.e. the windows cross-check below, which has no
-        # `-Dopenjpeg-lib` to short-circuit it.
-        #
-        # As of 2026-08-01 the NATIVE checks need this tree too: `jpeg2000.
-        # validate` delegates to the sibling `jp2z` module, which is an eager
-        # URL dependency in build.zig.zon. The sandbox has no network, so
-        # every build phase seeds ZIG_GLOBAL_CACHE_DIR from here. (The older
-        # note claiming the native checks "never touch this" was already
-        # inaccurate — all three phases have always copied it — and jp2z makes
-        # it plainly wrong.) Single hash covers the whole tree; bump it when
+        # Prefetch jp2z, private libjxlz and the optional OpenJPEG source used
+        # by Windows cross-builds. All native and cross builds seed their
+        # offline Zig cache from this source-bearing output; never publish
+        # it to a public binary cache. A single hash covers the tree; bump when
         # `build.zig.zon` (or deps/) changes:
         #   1. set zigDepsHash = pkgs.lib.fakeHash
         #   2. nix build .#checks.<system>.cross-windows  → prints real hash
         #   3. paste it back here.
-        zigDepsHash = "sha256-O6Ag9WM7XUnohx2+sQZQ0JwRlUbMNaPhii+Is2l+5A4=";
-        zigDeps = pkgs.stdenv.mkDerivation {
+        zigDepsHash = "sha256-m2EALq5lS735lA/DGg2QPM/ov6VqkJAsocBxydctHqc=";
+        zigDeps = assert pkgs.lib.hasInfix "archive/${libjxlz-src.rev}.tar.gz"
+          (builtins.readFile ./build.zig.zon); pkgs.stdenv.mkDerivation {
           pname = "jpegz-zig-deps";
           version = "0.1.0";
           src = ./.;
@@ -139,6 +136,7 @@
             export ZIG_GLOBAL_CACHE_DIR=$out
             export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
             export GIT_SSL_CAINFO=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+            zig fetch ${libjxlz-src}
             zig build --fetch=all
           '';
           dontInstall = true;
@@ -323,7 +321,10 @@
           BROTLI_INCLUDE_DIR = "${pkgs.brotli.dev}/include";
           BROTLI_LIB_DIR = "${pkgs.brotli.lib}/lib";
           shellHook = ''
-            echo "jpegz devShell — zig $(zig version), libjpeg-turbo ${pkgs.libjpeg.version}, openjpeg ${pkgs.openjpeg.version}, charls 2.4.3 (vendored)"
+            # Zig cannot authenticate a private archive URL itself. Seed the
+            # exact package from the locked SSH input for native builds too.
+            zig fetch ${libjxlz-src} >/dev/null || exit 1
+            echo "jpegz devShell — zig $(zig version), libjpeg-turbo ${pkgs.libjpeg.version}, openjpeg ${pkgs.openjpeg.version}, charls 2.4.4 (vendored)"
           '';
         };
 

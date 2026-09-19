@@ -192,8 +192,7 @@ pub fn mapJxlFinding(raw_verdict: i32, raw_code: i32) MappedFinding {
         return .{ .verdict = .indeterminate, .code = code, .severity = .warn };
     }
     const expected_verdict: StrictVerdict = switch (raw_code) {
-        9, 13 => .valid,
-        1, 2, 3, 10, 11, 12, 14, 15, 16 => .corrupt,
+        1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16 => .corrupt,
         4 => .unsupported,
         5, 6, 7, 8 => .indeterminate,
         else => unreachable,
@@ -201,7 +200,9 @@ pub fn mapJxlFinding(raw_verdict: i32, raw_code: i32) MappedFinding {
     return .{
         .verdict = expected_verdict,
         .code = code,
-        .severity = if (expected_verdict == .corrupt) .fail else .warn,
+        .severity = if (raw_code == 9 or raw_code == 13)
+            .warn
+        else if (expected_verdict == .corrupt) .fail else .warn,
     };
 }
 
@@ -277,6 +278,7 @@ fn validateJxlWithFindings(
         prior_opaque: ?*anyopaque,
         out_of_memory: bool = false,
         saw_unknown: bool = false,
+        saw_corrupt: bool = false,
 
         fn collect(context: ?*anyopaque, finding: *const api.JxlValidationFinding) callconv(.c) void {
             const self: *@This() = @ptrCast(@alignCast(context.?));
@@ -285,6 +287,7 @@ fn validateJxlWithFindings(
             const raw_severity: i32 = @intCast(@intFromEnum(finding.severity));
             const mapped = mapJxlFinding(raw_verdict, raw_code);
             if (mapped.code == null) self.saw_unknown = true;
+            if (mapped.verdict == .corrupt) self.saw_corrupt = true;
             self.findings.append(self.allocator, .{
                 .source = .libjxlz,
                 .leaf_code = @intCast(raw_code),
@@ -328,15 +331,19 @@ fn validateJxlWithFindings(
     const raw_verdict: i32 = @intCast(@intFromEnum(leaf.verdict));
     const raw_code: i32 = @intCast(@intFromEnum(leaf.code));
     const mapped = mapJxlFinding(raw_verdict, raw_code);
-    result.verdict = if (collector.saw_unknown) .indeterminate else mapped.verdict;
+    result.verdict = if (collector.saw_corrupt)
+        .corrupt
+    else if (collector.saw_unknown)
+        .indeterminate
+    else
+        mapped.verdict;
     result.frames_validated = leaf.frames_validated;
     result.decode_complete = leaf.decode_complete != 0;
     result.reported_finding_count = leaf.finding_count;
     result.reported_warning_count = leaf.warning_count;
 
-    // A caller may deliberately pass the prefix size of an older options
-    // struct. In that case libjxlz ignores the callback fields, so retain the
-    // terminal scalar finding as the compatibility fallback.
+    // Options rejected before callback setup can report only a scalar finding.
+    // Preserve that diagnostic even when no callback ran.
     if (result.findings.items.len == 0 and raw_code != 0) {
         const raw_severity: i32 = @intCast(@intFromEnum(leaf.severity));
         try result.findings.append(allocator, .{

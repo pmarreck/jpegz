@@ -83,6 +83,11 @@ indeterminate. Known corruption takes precedence. The Zig legacy report's
 `codec_check` records whether decoding ran; its `isValid()` stays severity-based.
 This does not establish complete codec coverage for every decoded variant.
 
+JPEG XL findings keep validity, severity and completion separate. Nonzero
+padding and incomplete trailing box headers are corrupt even when libjxlz
+reports warning severity and completes decoding. Callback findings retain
+their order and offsets; later resource limits cannot erase proven invalidity.
+
 Registry values are append-only and shared with sibling validators.
 Use `jpegz_finding_code_name()` for display; do not duplicate the name table.
 Code-number changes require the coordination recorded in PLAN.md.

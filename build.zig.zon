@@ -21,12 +21,13 @@
         // build (no network). Pairs with b.lazyDependency in build.zig.
         .openjpeg = .{ .path = "deps/openjpeg", .lazy = true },
         .jp2z = .{
-            .url = "https://github.com/pmarreck/jp2z/archive/1b29e0cdbe43da145294a05fc263bce56c1d5a88.tar.gz",
-            .hash = "jp2z-0.0.1-yLLHxXIHXgBlUoMZD3KOSJsgVZbaiWddF55BpqbpsQXm",
+            .url = "https://github.com/pmarreck/jp2z/archive/77dbeaa9686275282b01315f2c19f658c8770515.tar.gz",
+            .hash = "jp2z-0.0.1-yLLHxVA2bgAw5WGQdx-2dxSPLyAOQjDw03jxJOAbsEzV",
         },
         .libjxlz = .{
-            .url = "https://github.com/pmarreck/libjxlz/archive/5e8f9d68152ae8a70cb823061f4b6c733eb09166.tar.gz",
-            .hash = "libjxlz-0.1.0-H-8wm8uGFwCaw6ZEz37LxZX_7_UMPqRBcUWQrnQ-ONRq",
+            // Private: Nix seeds this package from its locked SSH input.
+            .url = "https://github.com/pmarreck/libjxlz/archive/93b29e86281ea4ba9c681f4879318c87e8a800a4.tar.gz",
+            .hash = "libjxlz-0.1.0-H-8wmybdlgGIAgb2uW_qaia2B-pT2b3JqHev4t6f_6Bb",
         },
     },
 }

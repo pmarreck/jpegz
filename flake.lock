@@ -34,13 +34,30 @@
         "type": "github"
       }
     },
+    "libjxlz-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1789739381,
+        "narHash": "sha256-kM/3SNFrwURU8rnTJ/iGL07yA3lCFHfvJ41Br2qqCzs=",
+        "ref": "yolo",
+        "rev": "93b29e86281ea4ba9c681f4879318c87e8a800a4",
+        "revCount": 3563,
+        "type": "git",
+        "url": "ssh://git@github.com/pmarreck/libjxlz"
+      },
+      "original": {
+        "ref": "yolo",
+        "type": "git",
+        "url": "ssh://git@github.com/pmarreck/libjxlz"
+      }
+    },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1778443072,
-        "narHash": "sha256-zi7/fsqM/kFdNuED//4WOCUtezGtKKqRNORjMvfwjnA=",
+        "lastModified": 1789684949,
+        "narHash": "sha256-ZKhUe/2IJUq1JhKxKMu8rbkgSGmPP2ZCqlIPn40aGCM=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "da5ad661ba4e5ef59ba743f0d112cbc30e474f32",
+        "rev": "e554fab72f81915600f3f449b786fd9af40439a5",
         "type": "github"
       },
       "original": {
@@ -53,6 +70,7 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "libjxlz-src": "libjxlz-src",
         "nixpkgs": "nixpkgs",
         "zig-overlay": "zig-overlay"
       }
@@ -97,11 +115,11 @@
         "systems": "systems_2"
       },
       "locked": {
-        "lastModified": 1778677054,
-        "narHash": "sha256-kWQdh1J6PMoJrKBhDoqpGGMmE6NNMqU/2BOTLw/s7uA=",
+        "lastModified": 1789734414,
+        "narHash": "sha256-AJdpzt4HgoSlqx7sfPcRYngKZFlpiT/ek8D+r2dC20Y=",
         "owner": "mitchellh",
         "repo": "zig-overlay",
-        "rev": "81011163d2336ac9ae2e157c7f42d5e13fa99ac0",
+        "rev": "635b215cbff7dba8adb52585a2b212722dfe6cf4",
         "type": "github"
       },
       "original": {

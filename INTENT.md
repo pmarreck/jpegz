@@ -28,6 +28,10 @@ valid input and demonstrated corruption.
 - Do not treat visual implausibility, successful recovery or decoder agreement
   as proof of strict validity. Do not promise detection of every altered file
   without independent trusted reference information.
+- Proven format violations must fail validation and be reported. Successful
+  recovery or continued inspection must not turn that failure into a passing
+  verdict. Peter reaffirmed this priority on September 12, 2026, in response
+  to the JP2 tile-part-count warning downgrade.
 
 ## Verification
 

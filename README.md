@@ -98,6 +98,13 @@ JP2 pixel decoding uses OpenJPEG, supplied by Nix or compiled from source;
 JP2 validation uses jp2z independently of that decoder.
 
 Run `./build` for the production build and `./test` for the full suite.
+libjxlz is private. Builds require GitHub SSH access to
+`git@github.com:pmarreck/libjxlz`; Nix fetches its locked source before entering
+the build sandbox and seeds Zig's package cache. `nix develop -c zig build`
+also seeds that cache. Direct Zig consumers must prefetch the same private
+revision themselves; the archive URL alone cannot authenticate. Never put
+tokens in dependency URLs or publish source-bearing Nix outputs to a public
+cache. `flake.lock` and `build.zig.zon` must name the same libjxlz revision.
 Builds default to ReleaseFast; tests default to ReleaseSafe. Nix supplies the
 dependencies. `./bm` and `./fuzz` run the separate benchmark and fuzz suites.
 Build options and memory ownership are documented in [SPEC.md](SPEC.md).

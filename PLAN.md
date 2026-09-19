@@ -32,14 +32,79 @@ An unchecked historical box does not create a second work order.
 - JPEG/JPEG-LS pixel dispatch stays in Zig. CharLS and libjpeg-turbo are
   optional oracles; JP2 pixel decode still uses OpenJPEG. JXL validation
   requires Brotli; Windows JXL remains disabled pending vendoring.
-- Current leaf pins are in `build.zig.zon`: jp2z `1b29e0c`, libjxlz
-  `5e8f9d6`. Both trail upstream and sibling HEADs as checked September 6;
-  exact observations are recorded under Dependency freshness.
+- September 19 leaf pins are jp2z `77dbeaa` and callback-capable libjxlz
+  `93b29e86`. The latter is now published to its private repository;
+  `build.zig.zon` and the authenticated SSH flake input agree on its revision.
+  Canonical `./test` and `./build` passed at 10:52 EDT: 52 CLI assertions,
+  71 C FFI assertions and three zero-C consumer controls. Windows cross-build,
+  validator closure and all-system flake evaluation passed as well.
+  Exact-commit remote CI is tracked separately from these local results.
 - Tests default to ReleaseSafe in both build.zig and Nix; builds and
   benchmarks default to ReleaseFast.
 
 ## Active order
 
+- [x] September 19: Peter authorized verification and publication of the 11
+  existing libjxlz commits through `93b29e86`. Suite/build passed; all five
+  Nix targets also passed against the exact committed tree. Published that
+  revision and independently verified origin/yolo at 10:47 EDT; CI queued.
+  Its remote CI outcome remains to be observed. The uncommitted benchmark
+  log is unchanged (SHA-256 `3e7b42191359de69231e34e4f235480f655b6a632fbd033599c50a60fbe83195`).
+  Initial `./test` run completed with one failure out of 113 CLI scripts:
+  inherited native `BROTLI_LIB_DIR` made its Windows smoke skip cross-library
+  resolution. Its Nix Windows check passed. The complete rerun with the two
+  inherited Brotli path variables removed passed all 113 CLI scripts,
+  including Windows cross-compilation. No libjxlz source changes were needed.
+  Coverage evidence from that run: legacy decoder corpus accepted 8/8 good
+  and rejected 4/5 externally labeled corrupt inputs; `bicycles_corrupt_5`
+  is the recorded acceptance (upstream djxl also accepts it). Its label alone
+  does not establish spec invalidity. Separate strict mutation matrix:
+  15 bases, 270 mutations, 264 corrupt and 6 valid. No universal rate claim.
+  _(Publication completed 2026-09-19 10:47 EDT)_
+- [ ] Follow-up from jp2z's September 18 inbox: evaluate replacing OpenJPEG
+  decode with pure-Zig jp2z after the pin update. Agent reports `77dbeaa`
+  supports decode, u16/multichannel layouts, and a 57-file conformance sweep
+  (33 exact, 4 within lossy tolerance, no FAIL/ERROR). Its September 19 reply
+  at `830b745` accounts for the other 20 as decoded but oracle comparisons
+  skipped for subsampling, signed components or dimensions; no crash/timeout.
+  Those 20 need component-resolution oracle comparisons, not acceptance claims.
+  Independently verify API/layout, decode coverage and pixel-oracle tests
+  before removing the wrapper or dependency. This is separate from pin refresh.
+- [x] Correct JXL recoverable-invalidity mapping during pin integration:
+  leaf CORRUPT codes 9/13 retain `.corrupt`, `.warn` severity and completion.
+  Later resource limits cannot erase earlier corruption. Mapping, callback
+  and CLI regressions witnessed RED/GREEN. _(2026-09-19 10:08 EDT)_
+  September 19, 10:02 EDT: mapping and resource-limit precedence regressions
+  each failed before their fixes. All 19 facade tests now pass without skips
+  against committed `93b29e86` fetched locally pending publication. The old
+  CLI binary fails the new recoverable-corruption exit/verdict assertions.
+- [x] September 18 pin-update regressions resolved September 19: six newly
+  mapped JP2 codes pass; two historical JXL fixtures now assert successful
+  complete decode with zero findings. The malformed YUV420 JP2 control has
+  ihdr BPC=8 versus Ssiz=7, contrary to T.800 I.5.3.1. Preserve the original
+  and prove a one-byte correction passes. JXL CLI checks now assert the JSON
+  verdict and exact exit code rather than matching a word in the filename.
+  Callback tests no longer skip. All four Nix targets passed using the exact
+  local `93b29e86` source override: suite (52 CLI and 71 FFI assertions), build,
+  Windows cross-build and validator closure. Three zero-C consumer controls
+  passed separately. Canonical commands against the published lock subsequently
+  passed at 10:52 EDT. _(2026-09-19 EDT)_
+- [ ] September 18 follow-up: jp2z has further work in progress, per Peter.
+  Pin the published `77dbeaa` checkpoint for this update; do not claim it
+  includes the forthcoming changes. Revisit its pin after that work ships.
+- [x] Resolve libjxlz publication: Peter authorized the 11 existing commits;
+  verified and pushed `93b29e86`, then refreshed only its SSH flake input.
+  This replaces provisional scalar-only `97a2851`. The final dependency set
+  enables callback and completion regressions. _(2026-09-19 10:47 EDT)_
+- [x] Update dependency pins per Peter's September 18 request. JP2/JXL pins
+  above, nixpkgs `e554fab`, zig-overlay `635b215`, CharLS 2.4.4 and dependency
+  hashes refreshed. Zig remains 0.16.0; OpenJPEG 2.5.4 and the remaining flake
+  inputs were already current at inventory. Private libjxlz SSH fetch and
+  offline sandboxed builds succeeded without embedded credentials or private
+  source copied into jpegz. Cold CI-identity SSH access is not established by
+  a warmed local Nix store. Suite/build and four local manifest targets passed;
+  preserve the three completed local JXL adapter commits when shipping.
+  _(2026-09-19 10:52 EDT)_
 - [x] Map libjxlz entropy findings 15 and 16 to append-only facade codes 195
   and 196, preserving names and indeterminate outcomes for inconsistent verdicts.
   Prove the mapping before changing it, then run the complete suite and build.
@@ -67,6 +132,66 @@ An unchecked historical box does not create a second work order.
   commit. _(2026-09-17 3:21 PM EDT)_
   Curiosity poke resolved: a recoverable warning followed by a stopping error
   retains both findings in order and the fatal aggregate verdict.
+- [ ] September 16, 22:06 EDT: Peter reports ongoing JPEG 2000 refinement in
+  jp2z and JPEG XL refinement in libjxlz, and has made libjxlz private. Before
+  future pin updates, reconcile leaf changes and verify authorized private
+  source access for local/Nix/CI builds without exposing credentials or private
+  source. Do not treat old jpegz pins or measurements as current leaf coverage.
+  Keep leaf improvements separate from jpegz facade integration/probe evidence.
+- [x] September 16 coverage inventory: saved corruption-probe runs cover one
+  520-byte progressive JPEG (200 mutations per run, four modes). Baseline and
+  lossless JPEG were clean acceptance controls, not additional probe sweeps.
+  No jpegz probe sweep is recorded for JPEG-LS, JPEG 2000 or JPEG XL. Broader
+  cross-format measurement remains undone. _(2026-09-16 EDT)_
+- [x] Process jp2z's September 12 follow-up on September 16. Agent recommends
+  `6057a760c143c25a7a25412601a3e4cce244fa5e` after `c06983c`; reports local
+  tests green on all three revisions, exact CI green on `0e578aa`/`c06983c`,
+  and recommended-pin CI queued at send time. Reports combined later-fault
+  regression and exact TNsot offset assertions, reserved-value corrections,
+  and palette unsupported-notice removal. These remain agent-reported until
+  integration verification. Reply folded here; envelope moved recoverably to
+  Trash. No new reply requested. _(2026-09-16 EDT)_
+- [x] Resolve the JP2 pin's former OpenJPEG-only basis for amendment Rsiz
+  ranges. Pinned `77dbeaa` includes `docs/T800_PROFILES.md`, attributed to
+  Peter's September 16 transcription of T.800 (2015) and amendment tables.
+  This replaces the earlier implementation-only inference. New codes 255–260
+  match the leaf registry and pass facade tests; exact `77dbeaa` Mechatron
+  success was independently queried September 18 (124 seconds).
+  _(2026-09-19 EDT)_
+- [ ] Retain the JP2 edition limit: `T800_PROFILES.md` explicitly does not
+  audit additions in the paid T.800 (2024) edition. Do not claim that pin's
+  profile validation covers later extensions; revisit with normative evidence.
+- [x] Process jp2z's September 12 correction reply. Inspected commit
+  `0e578aab701c309bae84774a1ad42286c5c11fc7`: TNsot under-declaration and
+  conflicting counts now FAIL with detail while traversal continues. Tests
+  cover both errors and correct/zero-count controls. Full suite and 57 ISO
+  conformance inputs passing are agent-reported, not independently rerun here;
+  CI was queued when sent. Acknowledged and retained follow-ups below.
+  _(2026-09-12 EDT)_
+- [ ] September 12: explain the normative basis for the AC fixture labels,
+  including valid boundary controls and disagreement with jpeg-fragments.
+  Pursue Peter's broader superiority goal through labeled, paired comparisons
+  of missed invalidity and false rejects; do not infer overall superiority
+  from the current three counterexamples. Continue scan-history coverage next.
+- [ ] September 12 follow-up: explain the pending JP2 count-warning policy
+  and verify the adapter mapping before dependency or consumer promotion.
+  Peter resolved the policy at 11:38 EDT: priority is failing and reporting
+  errors, not tolerating them. Proven nonconformance must fail validation;
+  continuing a safe scan for more findings must preserve that failure.
+- [x] Relay Peter's September 12 strict-failure decision to the jp2z agent,
+  with the TNsot mismatch, normative clause and jpegz adapter consequence.
+  Durable inbox note delivered and acknowledgement/tested correction requested.
+  _(2026-09-12 EDT)_
+- [ ] Verify jp2z integration before dependency/consumer promotion. Ack/fix
+  received at `0e578aa`; request exact-commit CI, exact TNsot-offset assertions,
+  and a combined count-error-plus-later-fault regression (walked_to_end alone
+  does not prove the last claim). Review intervening changes and new finding
+  codes, including segmentation_symbol_mismatch (258), then run jpegz tests.
+- [ ] Track remaining jp2z warning-only classes reported September 12: Scod
+  reserved bits, cblksty bit7, undefined Rsiz, Stlm reserved bits, Rcom>1, and
+  too few QCD/QCC entries. Reiterated Peter's existing strict-failure rule;
+  requested clause/edition evidence and valid extension controls before changes.
+  These labels are agent-reported and not independently adjudicated here.
 - [ ] Peter approved implementation of the prior-art comparison direction on
   September 11. First finish the pending coefficient checks with independent
   review and green builds; then compare labeled edge fixtures and expand scan
@@ -92,8 +217,9 @@ An unchecked historical box does not create a second work order.
   Validate reports Britannica JPX streams with TNsot=5 and six tile-parts,
   rejected by the old pin and decoded by OpenJPEG/new jp2z; `f957ea7` reportedly
   downgrades this nonconformance to a warning with offset/detail. Reproduce and
-  review strict-conformance versus recoverable-compatibility semantics before
-  accepting the severity change. Consumer evidence and CI status are reported,
+  preserve strict-conformance failure semantics when updating the dependency.
+  Peter rejected error tolerance as the priority on September 12 at 11:38 EDT.
+  Consumer evidence and CI status are reported,
   not independently verified here. Acknowledged September 11; promotion remains
   pending, and the request is retained here after recoverable inbox cleanup.
 - [x] Migrate the overview to INTENT.md and TERMINOLOGY.md. Architecture/status

@@ -193,4 +193,11 @@ pub const FindingCode = enum(u32) {
     entropy_under_read = 252,
     coding_pass_overflow = 253,
     jp2_packets_walked_to_end = 254,
+    zero_bitplane_overflow = 255,
+    packed_headers_mismatch = 256,
+    jp2_trailing_bytes = 257,
+    segmentation_symbol_mismatch = 258,
+    profile_violation = 259,
+    // T.800 E.2's encoder formula is informative; the leaf reports WARN.
+    reversible_exponent_mismatch = 260,
 };
