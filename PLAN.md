@@ -38,7 +38,9 @@ An unchecked historical box does not create a second work order.
   Canonical `./test` and `./build` passed at 10:52 EDT: 52 CLI assertions,
   71 C FFI assertions and three zero-C consumer controls. Windows cross-build,
   validator closure and all-system flake evaluation passed as well.
-  Exact-commit remote CI is tracked separately from these local results.
+  Exact-commit Mechatron CI passed `82111d7` at 11:18:51 EDT (9 seconds).
+  Its previously built exact-commit outputs were available locally; this is
+  not evidence of a cold private-input fetch under the CI service identity.
 - Tests default to ReleaseSafe in both build.zig and Nix; builds and
   benchmarks default to ReleaseFast.
 
@@ -47,8 +49,8 @@ An unchecked historical box does not create a second work order.
 - [x] September 19: Peter authorized verification and publication of the 11
   existing libjxlz commits through `93b29e86`. Suite/build passed; all five
   Nix targets also passed against the exact committed tree. Published that
-  revision and independently verified origin/yolo at 10:47 EDT; CI queued.
-  Its remote CI outcome remains to be observed. The uncommitted benchmark
+  revision and independently verified origin/yolo at 10:47 EDT. Exact-commit
+  Mechatron CI passed at 11:18:41 EDT (9 seconds). The uncommitted benchmark
   log is unchanged (SHA-256 `3e7b42191359de69231e34e4f235480f655b6a632fbd033599c50a60fbe83195`).
   Initial `./test` run completed with one failure out of 113 CLI scripts:
   inherited native `BROTLI_LIB_DIR` made its Windows smoke skip cross-library
