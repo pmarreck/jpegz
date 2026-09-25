@@ -272,13 +272,10 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                     report.width = @as(u32, width);
                     report.height = @as(u32, height);
 
-                    // T.81 §B.2.2: a SOF declaring zero width or height is not
-                    // a decodable image (Y=0 needs DNL, which we, like libjpeg,
-                    // reject). Fail structurally at the marker walk so it fires
-                    // for every variant and so the fail-verdict skips the codec
-                    // decode-through below (a zero dimension was an OOB crash in
-                    // color.fancyUpsample on an empty plane).
-                    if (width == 0 or height == 0) {
+                    // SOF3 Y=0 needs DNL and remains unsupported by its entropy
+                    // validator. Other pixel decoders still require both sizes
+                    // to prevent indexing empty planes.
+                    if (width == 0 or (height == 0 and variant != .lossless_huffman)) {
                         try addFinding(&report, allocator, .fail, .invalid_dimensions,
                             seg_body_start + 1, "SOF declares zero width or height");
                     }
@@ -300,9 +297,10 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                         }
                     }
 
-                    if (precision != 8 and precision != 12 and precision != 16) {
+                    const lossless_precision = variant == .lossless_huffman or variant == .lossless_arithmetic;
+                    if (if (lossless_precision) precision < 2 or precision > 16 else precision != 8 and precision != 12 and precision != 16) {
                         try addFinding(&report, allocator, .fail, .invalid_sof_precision,
-                            seg_body_start, "SOF precision must be 8, 12, or 16");
+                            seg_body_start, if (lossless_precision) "lossless SOF precision must be 2..16" else "SOF precision must be 8, 12, or 16");
                     } else if (precision == 12) {
                         try addFinding(&report, allocator, .info, .twelve_bit_precision,
                             seg_body_start, null);
@@ -431,8 +429,9 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     }
 
     // ── Step 4: Codec-level integrity ──────────────────────────
-    // Run the cleanroom decoder end-to-end against the file with
-    // `lenient = true` + `FindingsSink`. The marker walker catches
+    // SOF3 consumes Huffman syntax without pixels or recovery. Other supported
+    // variants run the cleanroom decoder with `lenient = true` + FindingsSink.
+    // The marker walker catches
     // structural problems (missing markers, bad segment lengths,
     // truncation); decoding-through is the ground truth for
     // coefficient-level corruption — corrupt Huffman tables, bad
@@ -456,10 +455,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         var sink = types.FindingsSink.init(allocator);
         defer sink.deinit();
 
-        const result = types.decodeWithOptions(allocator, data, .{
-            .lenient = true,
-            .findings_sink = &sink,
-        });
+        const result = checkCodec(allocator, data, report.variant, &sink);
 
         // Drain sink → report findings (extraneous_bytes,
         // insufficient_data, etc.). Same severity/code/offset/detail
@@ -468,12 +464,9 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             try addFinding(&report, allocator, f.severity, f.code, f.offset, f.detail);
         }
 
-        if (result) |img| {
-            // Decode completed; findings may still report recovered damage.
+        if (result) |_| {
+            // Codec traversal completed; decoder findings may report recovery.
             report.codec_check = .decoded;
-            // Discard pixels (we only care about the integrity signal).
-            var img_mut = img;
-            img_mut.deinit(allocator);
         } else |err| switch (err) {
             error.NotImplemented => {
                 report.codec_check = .unsupported;
@@ -493,6 +486,12 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     }
 
     return report;
+}
+
+fn checkCodec(allocator: Allocator, data: []const u8, variant: Variant, sink: *types.FindingsSink) errors.DecodeError!void {
+    if (variant == .lossless_huffman) return @import("../decode/lossless.zig").validate(data, sink);
+    var image = try types.decodeWithOptions(allocator, data, .{ .lenient = true, .findings_sink = sink });
+    image.deinit(allocator);
 }
 
 /// Map a public `DecodeError` from the codec-integrity decode-through

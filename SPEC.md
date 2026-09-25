@@ -102,6 +102,15 @@ first row. Progressive scans also check padding and EOB-run exhaustion;
 remaining coefficient and scan-history constraints are tracked in PLAN.md.
 Do not advertise complete corruption detection from pixel-oracle equality.
 
+SOF3 validation also accepts single full-component scans with two or four
+components and non-1x1 sampling. It consumes differences, MCU edge padding,
+restart intervals and the marker chain through EOI without constructing
+pixels. DNL, separated component scans and frames with more than four
+components remain unsupported. Pixel decoding retains its narrower layouts.
+Entropy finding offsets are payload-relative detection cursors, not exact
+mutation locations. Trailing bytes after EOI remain an informational finding.
+See [Canon evidence and limits](docs/measurements/canon-sof3-2026-09-24.md).
+
 ## 4. Artifacts and dependencies
 
 Link exactly one C archive. Each carries its own thread-local last-error state.

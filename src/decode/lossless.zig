@@ -228,6 +228,138 @@ pub fn decodeWithOptions(allocator: Allocator, data: []const u8, options: Decode
 
 const parseSegmentLength = @import("segment.zig").parseSegmentLength;
 
+/// Validate lossless Huffman syntax without allocating or upsampling pixels.
+/// Supports a single full-component scan (1..4 components), including unequal
+/// sampling. DNL and separated component scans remain explicitly unsupported.
+/// Offsets identify the payload-relative detection cursor, not the byte whose
+/// mutation caused desynchronization. No sample-domain or image-content claim.
+pub fn validate(data: []const u8, sink: *findings_mod.FindingsSink) Error!void {
+	var offset: usize = 0;
+	validateSyntax(data, &offset) catch |err| {
+		if (err != error.NotImplemented) {
+			try sink.emit(.fail, if (err == error.TruncatedStream) .truncated_stream else .huffman_table_corrupt,
+				@intCast(@min(offset, data.len)), @errorName(err));
+		}
+		return err;
+	};
+}
+
+fn validateSyntax(data: []const u8, offset: *usize) Error!void {
+	if (data.len < 2) return error.TruncatedStream;
+	if (data[0] != 0xff or data[1] != 0xd8) return error.InvalidMarker;
+	var pos: usize = 2;
+	var frame: ?FrameInfo = null;
+	var tables: [4]?huffman.HuffmanTable = .{ null, null, null, null };
+	var restart: u16 = 0;
+	var scanned = false;
+	while (true) {
+		offset.* = pos;
+		if (pos + 1 >= data.len) return error.TruncatedStream;
+		if (data[pos] != 0xff) return error.InvalidMarker;
+		while (pos + 1 < data.len and data[pos + 1] == 0xff) pos += 1;
+		if (pos + 1 >= data.len) return error.TruncatedStream;
+		const marker = data[pos + 1];
+		pos += 2;
+		if (marker == 0xd9) {
+			if (!scanned) return error.TruncatedStream;
+			// The public marker walker separately reports bytes after EOI.
+			return;
+		}
+		if (marker == 0xdc) return error.NotImplemented; // DNL may redefine Y.
+		// These have no length field; none is legal here in a SOF3 frame.
+		if (marker == 0x00 or marker == 0x01 or marker == 0xd8 or
+			(marker >= 0xd0 and marker <= 0xd7)) return error.InvalidMarker;
+		const len = parseSegmentLength(data, pos);
+		if (len < 2 or pos + len > data.len) return error.TruncatedStream;
+		switch (marker) {
+			0xc3 => {
+				if (frame != null) return error.InvalidMarker;
+				if (len >= 8 and data[pos + 7] > 4) return error.NotImplemented;
+				frame = try parseSof(data, pos);
+				if (frame.?.precision < 2 or frame.?.precision > 16 or frame.?.width == 0)
+					return error.InvalidMarker;
+				if (frame.?.height == 0) return error.NotImplemented;
+			},
+			0xc4 => try parseDht(data, pos, &tables),
+			0xdd => {
+				if (len != 4) return error.InvalidMarker;
+				restart = (@as(u16, data[pos + 2]) << 8) | data[pos + 3];
+			},
+			0xda => {
+				if (frame == null or scanned) return error.InvalidMarker;
+				const scan = try parseSos(data, pos, &frame.?);
+				if (scan.num_components != frame.?.num_components) return error.NotImplemented;
+				if (scan.predictor < 1 or scan.predictor > 7) return error.InvalidMarker;
+				if (scan.point_transform >= frame.?.precision) return error.NotImplemented;
+				pos += len;
+				pos = try validateEntropy(data, pos, &frame.?, &scan, &tables, restart, offset);
+				scanned = true;
+				continue;
+			},
+			0xdb, 0xe0...0xef, 0xfe => {}, // Unused DQT, application data, comments.
+			else => return error.NotImplemented,
+		}
+		pos += len;
+	}
+}
+
+fn validateEntropy(data: []const u8, start: usize, frame: *const FrameInfo, scan: *const ScanInfo,
+	tables: *const [4]?huffman.HuffmanTable, restart: u16, offset: *usize) Error!usize
+{
+	var max_h: usize = 1;
+	var max_v: usize = 1;
+	var samples_per_mcu: usize = 0;
+	for (frame.components[0..frame.num_components]) |comp| {
+		max_h = @max(max_h, comp.h_factor);
+		max_v = @max(max_v, comp.v_factor);
+		samples_per_mcu += @as(usize, comp.h_factor) * comp.v_factor;
+	}
+	const interleaved = scan.num_components > 1;
+	if (interleaved and samples_per_mcu > 10) return error.InvalidMarker;
+	const columns = if (interleaved) std.math.divCeil(usize, frame.width, max_h) catch unreachable else frame.width;
+	const rows = if (interleaved) std.math.divCeil(usize, frame.height, max_v) catch unreachable else frame.height;
+	if (restart % columns != 0) return error.InvalidMarker;
+	for (scan.comp_indices[0..scan.num_components]) |ci| {
+		if (tables[frame.components[ci].dc_table] == null) return error.InvalidMarker;
+	}
+	var br = bitstream.BitReader.init(data[start..]);
+	// Update the cursor even when lookahead encountered an early marker.
+	errdefer offset.* = start + br.byte_pos;
+	var expected_rst: u8 = 0xd0;
+	for (0..columns * rows) |mcu| {
+		if (restart != 0 and mcu != 0 and mcu % restart == 0) {
+			const marker = br.finishHuffmanSegment() catch return entropyError(&br);
+			if (marker == 0xdc) return error.NotImplemented;
+			if (marker != expected_rst) return error.InvalidMarker;
+			br.skipPastMarker();
+			expected_rst = 0xd0 + ((expected_rst - 0xd0 + 1) & 7);
+		}
+		for (scan.comp_indices[0..scan.num_components]) |ci| {
+			const comp = frame.components[ci];
+			const count = if (interleaved) @as(usize, comp.h_factor) * comp.v_factor else 1;
+			for (0..count) |_| {
+				const category = tables[comp.dc_table].?.decode(&br) catch return entropyError(&br);
+				if (category > 16) return error.BackendError;
+				// H.1.2.2: category16 carries no amplitude; other nonzero
+				// categories carry that many bits. Predictor4 can exceed P.
+				if (category > 0 and category < 16)
+					_ = br.readBits(@intCast(category)) catch return entropyError(&br);
+			}
+		}
+	}
+	const marker = br.finishHuffmanSegment() catch return entropyError(&br);
+	if (marker == 0xdc) return error.NotImplemented;
+	if (marker >= 0xd0 and marker <= 0xd7) return error.InvalidMarker;
+	return start + br.byte_pos;
+}
+
+fn entropyError(br: *const bitstream.BitReader) Error {
+	var boundary = br.*;
+	if (boundary.marker_seen) boundary.seekToMarker();
+	if (boundary.marker_seen and boundary.marker_byte == 0xdc) return error.NotImplemented;
+	return if (br.byte_pos >= br.data.len) error.TruncatedStream else error.BackendError;
+}
+
 fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
     const seg_len = parseSegmentLength(data, pos);
     if (seg_len < 8 or pos + seg_len > data.len) return error.TruncatedStream;
@@ -237,7 +369,7 @@ fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
     fi.width = (@as(u16, data[pos + 5]) << 8) | data[pos + 6];
     fi.num_components = data[pos + 7];
     if (fi.num_components == 0 or fi.num_components > 4) return error.InvalidMarker;
-    if (seg_len < 8 + @as(usize, fi.num_components) * 3) return error.TruncatedStream;
+    if (seg_len != 8 + @as(usize, fi.num_components) * 3) return error.InvalidMarker;
     var i: usize = 0;
     while (i < fi.num_components) : (i += 1) {
         const off = pos + 8 + i * 3;
@@ -247,6 +379,11 @@ fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
             .v_factor = @intCast(data[off + 1] & 0x0F),
             // qt_index byte is at off+2 but is unused for lossless.
         };
+        if (fi.components[i].h_factor < 1 or fi.components[i].h_factor > 4 or
+            fi.components[i].v_factor < 1 or fi.components[i].v_factor > 4) return error.InvalidMarker;
+        for (fi.components[0..i]) |previous| {
+            if (previous.id == fi.components[i].id) return error.InvalidMarker;
+        }
     }
     return fi;
 }
@@ -276,6 +413,14 @@ fn parseDht(
         off += 16;
         if (off + total > seg_end) return error.TruncatedStream;
         const values = data[off .. off + total];
+        // T.81 C.2: canonical codes may neither overflow their width nor
+        // use the all-one code (reserved for padding). Check before indexing.
+        var code: u32 = 0;
+        for (bits, 1..) |count, width| {
+            code += count;
+            if (code >= @as(u32, 1) << @intCast(width)) return error.InvalidMarker;
+            code <<= 1;
+        }
         const t = huffman.HuffmanTable.buildFromDht(bits, values) catch
             return error.InvalidMarker;
         dc_tables[th] = t;
@@ -290,11 +435,13 @@ fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
     info.num_components = data[pos + 2];
     if (info.num_components == 0 or info.num_components > 4)
         return error.InvalidMarker;
+    if (seg_len != 6 + @as(usize, info.num_components) * 2) return error.InvalidMarker;
     var i: usize = 0;
     while (i < info.num_components) : (i += 1) {
         const off = pos + 3 + i * 2;
         const cs = data[off];
         const td_ta = data[off + 1];
+        if (td_ta >> 4 > 3 or td_ta & 0x0f != 0) return error.InvalidMarker;
         var found: bool = false;
         var j: usize = 0;
         while (j < frame.num_components) : (j += 1) {
@@ -306,11 +453,15 @@ fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
             }
         }
         if (!found) return error.InvalidMarker;
+        for (info.comp_indices[0..i]) |previous| {
+            if (previous >= info.comp_indices[i]) return error.InvalidMarker;
+        }
     }
     const tail_off = pos + 3 + @as(usize, info.num_components) * 2;
     info.predictor = data[tail_off];
-    // Se byte at tail_off+1 is unused per T.81 §H.1.
+    if (data[tail_off + 1] != 0) return error.InvalidMarker;
     const ah_al = data[tail_off + 2];
+    if (ah_al >> 4 != 0) return error.InvalidMarker;
     info.point_transform = @intCast(ah_al & 0x0F);
     return info;
 }

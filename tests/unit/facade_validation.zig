@@ -1,6 +1,174 @@
 const std = @import("std");
 const jpegz = @import("jpegz");
 
+const sof3_pair = [_]u8{ 0xff, 0xd8, 0xff, 0xc3, 0, 14, 12, 0, 1, 0, 1, 2, 1, 0x11, 0, 2, 0x11, 0 } ++
+	[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+	[_]u8{ 0xff, 0xda, 0, 10, 2, 1, 0, 2, 0, 1, 0, 0, 0x3f, 0xff, 0xd9 };
+
+test "SOF3 header constraints preserve lossless precision and bound parser indices" {
+	const allocator = std.testing.allocator;
+	const cases = [_]struct { offset: usize, value: u8, verdict: jpegz.StrictVerdict }{
+		.{ .offset = 6, .value = 2, .verdict = .valid },
+		.{ .offset = 6, .value = 14, .verdict = .valid },
+		.{ .offset = 6, .value = 16, .verdict = .valid },
+		.{ .offset = 6, .value = 1, .verdict = .corrupt },
+		.{ .offset = 13, .value = 0, .verdict = .corrupt },
+		.{ .offset = 13, .value = 0x51, .verdict = .corrupt },
+		.{ .offset = 15, .value = 1, .verdict = .corrupt },
+		.{ .offset = 23, .value = 3, .verdict = .corrupt },
+		.{ .offset = 39, .value = 17, .verdict = .corrupt },
+		.{ .offset = 44, .value = 4, .verdict = .corrupt },
+		.{ .offset = 46, .value = 0x40, .verdict = .corrupt },
+		.{ .offset = 46, .value = 1, .verdict = .corrupt },
+		.{ .offset = 47, .value = 1, .verdict = .corrupt },
+		.{ .offset = 50, .value = 1, .verdict = .corrupt },
+		.{ .offset = 51, .value = 0x10, .verdict = .corrupt },
+	};
+	for (cases) |case| {
+		var bytes = sof3_pair;
+		bytes[case.offset] = case.value;
+		var result = try jpegz.validateAny(allocator, &bytes);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(case.verdict, result.verdict);
+	}
+}
+
+test "SOF3 checks EOI and every byte of a truncated pair" {
+	const allocator = std.testing.allocator;
+	for (2..sof3_pair.len) |end| {
+		var result = try jpegz.validateAny(allocator, sof3_pair[0..end]);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
+	}
+	const surplus = sof3_pair[0..53].* ++ [_]u8{ 0x00, 0xff, 0xd9 };
+	var result = try jpegz.validateAny(allocator, &surplus);
+	defer result.deinit(allocator);
+	try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
+}
+
+test "SOF3 preserves unused DQT and category16 controls" {
+	const allocator = std.testing.allocator;
+	const dqt = [_]u8{ 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{1} ** 64);
+	const with_dqt = sof3_pair[0..2].* ++ dqt ++ sof3_pair[2..].*;
+	var category16 = sof3_pair;
+	category16[6] = 16;
+	category16[39] = 16; // Two code0 symbols, no amplitude bits (H.1.2.2).
+	var point_transform = sof3_pair;
+	point_transform[51] = 1;
+	for ([_][]const u8{ &with_dqt, &category16, &point_transform }) |data| {
+		var result = try jpegz.validateAny(allocator, data);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(jpegz.StrictVerdict.valid, result.verdict);
+	}
+}
+
+test "SOF3 keeps DNL unsupported and rejects reversed scan order" {
+	const allocator = std.testing.allocator;
+	var reversed = sof3_pair;
+	reversed[45] = 2;
+	reversed[47] = 1;
+	var reversed_result = try jpegz.validateAny(allocator, &reversed);
+	defer reversed_result.deinit(allocator);
+	try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, reversed_result.verdict);
+	for ([_]u8{ 0, 1, 2 }) |height| {
+		for ([_][]const u8{ &.{}, &.{0xff} }) |fill| {
+			var prefix = sof3_pair[0..53].*;
+			prefix[8] = height;
+			const data = try std.mem.concat(allocator, u8, &.{ &prefix, fill, &.{ 0xff, 0xdc, 0, 4, 0, 1, 0xff, 0xd9 } });
+			defer allocator.free(data);
+			var result = try jpegz.validateAny(allocator, data);
+			defer result.deinit(allocator);
+			try std.testing.expectEqual(jpegz.StrictVerdict.unsupported, result.verdict);
+		}
+	}
+}
+
+test "SOF3 two-component sampling validates complete MCU groups and rejects boundary damage" {
+	// T.81 A.2.3: each lossless data unit is one sample, including edge
+	// padding. A one-bit code 0 represents difference zero (H.2).
+	const cases = [_]struct {
+		sampling: [2]u8,
+		width: u8,
+		height: u8 = 1,
+		entropy: []const u8,
+		restart: u8 = 0,
+		valid: bool = true,
+	}{
+		.{ .sampling = .{ 0x11, 0x11 }, .width = 1, .entropy = &.{0x3f} },
+		.{ .sampling = .{ 0x21, 0x21 }, .width = 2, .entropy = &.{0x0f} },
+		.{ .sampling = .{ 0x21, 0x21 }, .width = 3, .entropy = &.{0x00} },
+		.{ .sampling = .{ 0x21, 0x11 }, .width = 3, .entropy = &.{0x03} },
+		.{ .sampling = .{ 0x22, 0x11 }, .width = 1, .entropy = &.{0x07} },
+		.{ .sampling = .{ 0x21, 0x21 }, .width = 2, .height = 2, .restart = 1, .entropy = &.{ 0x0f, 0xff, 0xd0, 0x0f } },
+		.{ .sampling = .{ 0x21, 0x21 }, .width = 2, .height = 2, .restart = 1, .entropy = &.{ 0x0f, 0xff, 0xff, 0xd0, 0x0f } },
+		.{ .sampling = .{ 0x21, 0x21 }, .width = 2, .height = 10, .restart = 1, .entropy = &.{ 0x0f, 0xff, 0xd0, 0x0f, 0xff, 0xd1, 0x0f, 0xff, 0xd2, 0x0f, 0xff, 0xd3, 0x0f, 0xff, 0xd4, 0x0f, 0xff, 0xd5, 0x0f, 0xff, 0xd6, 0x0f, 0xff, 0xd7, 0x0f, 0xff, 0xd0, 0x0f } },
+		.{ .sampling = .{ 0x21, 0x21 }, .width = 2, .entropy = &.{0x1f}, .valid = false }, // Missing sample.
+		.{ .sampling = .{ 0x21, 0x21 }, .width = 2, .entropy = &.{0x07}, .valid = false }, // Extra sample.
+		.{ .sampling = .{ 0x21, 0x21 }, .width = 2, .entropy = &.{0x0e}, .valid = false }, // Zero pad bit.
+		.{ .sampling = .{ 0x21, 0x21 }, .width = 2, .entropy = &.{ 0x0f, 0x00 }, .valid = false },
+		.{ .sampling = .{ 0x21, 0x21 }, .width = 2, .height = 2, .restart = 1, .entropy = &.{ 0x0f, 0xff, 0xd1, 0x0f }, .valid = false },
+		.{ .sampling = .{ 0x21, 0x21 }, .width = 3, .restart = 1, .entropy = &.{0x00}, .valid = false }, // Ri not whole rows.
+	};
+	const allocator = std.testing.allocator;
+	for (cases) |case| {
+		const header = [_]u8{ 0xff, 0xd8, 0xff, 0xc3, 0, 14, 12, 0, case.height, 0, case.width, 2, 1, case.sampling[0], 0, 2, case.sampling[1], 0 } ++
+			[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+			[_]u8{ 0xff, 0xdd, 0, 4, 0, case.restart, 0xff, 0xda, 0, 10, 2, 1, 0, 2, 0, 1, 0, 0 };
+		const data = try std.mem.concat(allocator, u8, &.{ &header, case.entropy, &.{ 0xff, 0xd9 } });
+		defer allocator.free(data);
+		var result = try jpegz.validateAny(allocator, data);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(if (case.valid) jpegz.StrictVerdict.valid else .corrupt, result.verdict);
+		if (!case.valid) {
+			var located_failure = false;
+			for (result.findings.items) |finding| {
+				if (finding.severity == .fail and finding.offset != null and finding.offset.? < data.len)
+					located_failure = true;
+			}
+			try std.testing.expect(located_failure);
+		}
+	}
+}
+
+test "SOF3 accepts different legal amplitudes and reports trailing data separately" {
+	const allocator = std.testing.allocator;
+	var header = sof3_pair[0..52].*;
+	header[6] = 8;
+	header[39] = 7; // code0, seven amplitude bits: 128+127=255 or 128+126=254.
+	for ([_]u8{ 0x7f, 0x7e }) |amplitude| {
+		const data = header ++ [_]u8{ amplitude, amplitude, 0xff, 0xd9 };
+		var result = try jpegz.validateAny(allocator, &data);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(jpegz.StrictVerdict.valid, result.verdict);
+	}
+	const trailing = sof3_pair ++ [_]u8{0};
+	var result = try jpegz.validateAny(allocator, &trailing);
+	defer result.deinit(allocator);
+	try std.testing.expectEqual(jpegz.StrictVerdict.valid, result.verdict);
+	var found = false;
+	for (result.findings.items) |finding| {
+		if (finding.code == .trailing_data_after_eoi) {
+			try std.testing.expectEqual(@as(?u64, sof3_pair.len), finding.offset);
+			found = true;
+		}
+	}
+	try std.testing.expect(found);
+}
+
+test "SOF3 standalone markers cannot masquerade as unsupported length-prefixed segments" {
+	const allocator = std.testing.allocator;
+	const tail = [_]u8{0} ** 65536; // FFD9 must not be misread as a plausible length.
+	for ([_]u8{ 0xd8, 0xd0, 0x01, 0x00 }) |marker| {
+		for ([_]usize{ 2, 53 }) |insertion| {
+			const data = try std.mem.concat(allocator, u8, &.{ sof3_pair[0..insertion], &.{ 0xff, marker }, sof3_pair[insertion..], &tail });
+			defer allocator.free(data);
+			var result = try jpegz.validateAny(allocator, data);
+			defer result.deinit(allocator);
+			try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
+		}
+	}
+}
+
 test "JP2 dependency findings retain wire identities and severities" {
 	const cases = [_]struct { raw: u32, name: []const u8, severity: jpegz.Severity, verdict: jpegz.StrictVerdict }{
 		.{ .raw = 255, .name = "zero_bitplane_overflow", .severity = .fail, .verdict = .corrupt },
@@ -74,7 +242,8 @@ test "classic facade distinguishes unchecked and unsupported codecs from validit
 	const allocator = std.testing.allocator;
 	const cases = [_]struct { sof: u8, sampling: u8 = 0x11, width: u8 = 1, verdict: jpegz.StrictVerdict }{
 		.{ .sof = 0xc3, .verdict = .valid },
-		.{ .sof = 0xc3, .sampling = 0x21, .verdict = .unsupported },
+		.{ .sof = 0xc3, .sampling = 0x21, .verdict = .valid },
+		.{ .sof = 0xc3, .sampling = 0x44, .verdict = .valid },
 		.{ .sof = 0xc3, .sampling = 0x21, .width = 0, .verdict = .corrupt },
 		.{ .sof = 0xc7, .verdict = .indeterminate },
 		.{ .sof = 0xc7, .width = 0, .verdict = .corrupt },
