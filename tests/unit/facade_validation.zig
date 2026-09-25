@@ -33,6 +33,21 @@ test "SOF3 header constraints preserve lossless precision and bound parser indic
 	}
 }
 
+test "SOF3 rejects complete DHT bodies with oversubscribed or all-one codes" {
+	const allocator = std.testing.allocator;
+	for ([_]u8{ 1, 2, 3 }) |count| {
+		var header = sof3_pair[0..40].*;
+		header[21] = 19 + count;
+		header[23] = count;
+		const values = [_]u8{ 0, 0 };
+		const data = try std.mem.concat(allocator, u8, &.{ &header, values[0 .. count - 1], sof3_pair[40..] });
+		defer allocator.free(data);
+		var result = try jpegz.validateAny(allocator, data);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(if (count == 1) jpegz.StrictVerdict.valid else .corrupt, result.verdict);
+	}
+}
+
 test "SOF3 checks EOI and every byte of a truncated pair" {
 	const allocator = std.testing.allocator;
 	for (2..sof3_pair.len) |end| {
