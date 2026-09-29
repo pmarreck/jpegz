@@ -93,6 +93,9 @@ Use `jpegz_finding_code_name()` for display; do not duplicate the name table.
 Code-number changes require the coordination recorded in PLAN.md.
 
 Strict validation must account for decoded entropy and surface recovery.
+DHT construction rejects oversubscribed code counts and reserved all-ones
+codes before code narrowing or lookup-table writes (T.81 Annex C). Legal
+near-full tables and tables containing 256 symbols remain accepted.
 The implementation still has accounting gaps; the active work order requires
 both corruption-detection gains and zero new rejects on the known-good corpus.
 Sequential and lossless Huffman scans check padding and exact entropy

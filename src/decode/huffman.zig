@@ -19,7 +19,7 @@ const bitstream = @import("bitstream.zig");
 
 pub const Error = error{
     /// DHT segment body is malformed (length mismatch, > 256 codes,
-    /// invalid HUFFVAL count).
+    /// invalid HUFFVAL count, oversubscribed or reserved all-ones codes).
     InvalidHuffmanTable,
     /// Decoded code didn't match any entry in the table — file is corrupt.
     HuffmanDecodeError,
@@ -70,6 +70,10 @@ pub const HuffmanTable = struct {
         var idx: usize = 0;
         for (bits, 1..) |count, len_plus_1| {
             const len: u8 = @intCast(len_plus_1);
+            // T.81 Annex C reserves the all-ones code at every length.
+            // Check the whole range before narrowing codes or filling lookup tables.
+            if (code + count >= (@as(u32, 1) << @as(u5, @intCast(len))))
+                return error.InvalidHuffmanTable;
             var i: u8 = 0;
             while (i < count) : (i += 1) {
                 if (idx >= 256) return error.InvalidHuffmanTable;
@@ -201,11 +205,58 @@ pub fn extendSign(value: u16, n: u5) i16 {
 
 // ── Tests ────────────────────────────────────────────────────
 
+test "buildFromDht rejects oversubscribed one-bit codes before fast-table writes" {
+	const bits = [_]u8{ 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+	try std.testing.expectError(error.InvalidHuffmanTable, HuffmanTable.buildFromDht(bits, &.{ 0, 1, 2 }));
+}
+
+test "buildFromDht rejects oversubscribed sixteen-bit codes before narrowing" {
+	var bits = [_]u8{1} ** 16;
+	bits[15] = 3;
+	const values = [_]u8{0} ** 18;
+	try std.testing.expectError(error.InvalidHuffmanTable, HuffmanTable.buildFromDht(bits, &values));
+}
+
+test "buildFromDht rejects all-ones codes at every length" {
+	const values = [_]u8{0} ** 17;
+	for (0..16) |last| {
+		var bits = [_]u8{0} ** 16;
+		@memset(bits[0..last], 1);
+		bits[last] = 2;
+		try std.testing.expectError(error.InvalidHuffmanTable, HuffmanTable.buildFromDht(bits, &values));
+	}
+}
+
+test "buildFromDht accepts reported near-full tables and maximum symbol count" {
+	const cases = [_]struct { bits: [16]u8, total: u16, last_code: u16 }{
+		.{ .bits = .{ 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 }, .total = 12, .last_code = 510 },
+		.{ .bits = .{ 0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125 }, .total = 162, .last_code = 65534 },
+		.{ .bits = .{ 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0 }, .total = 12, .last_code = 2046 },
+		.{ .bits = .{ 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119 }, .total = 162, .last_code = 65534 },
+		.{ .bits = [_]u8{1} ** 16, .total = 16, .last_code = 65534 },
+		.{ .bits = .{ 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0 }, .total = 255, .last_code = 254 },
+		.{ .bits = .{ 0, 0, 0, 0, 0, 0, 0, 0, 255, 1, 0, 0, 0, 0, 0, 0 }, .total = 256, .last_code = 510 },
+	};
+	var values: [256]u8 = undefined;
+	for (&values, 0..) |*v, i| v.* = @intCast(i);
+	for (cases) |case| {
+		const table = try HuffmanTable.buildFromDht(case.bits, &values);
+		try std.testing.expectEqual(case.total, table.total);
+		try std.testing.expectEqual(case.last_code, table.codes[case.total - 1]);
+	}
+}
+
+test "buildFromDht rejects more than 256 symbols even with spare code space" {
+	const bits = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 255, 2, 0, 0, 0, 0, 0, 0 };
+	const values = [_]u8{0} ** 257;
+	try std.testing.expectError(error.InvalidHuffmanTable, HuffmanTable.buildFromDht(bits, &values));
+}
+
 test "buildFromDht: tiny 3-symbol table" {
-    // bits = 1, 2 → one length-1 code, two length-2 codes
+    // One code each at lengths 1, 2 and 3; all-ones codes stay reserved.
     // values = 0, 1, 2 (in code-length order)
-    // canonical codes: '0' (length 1), '10' (length 2), '11' (length 2)
-    const bits = [_]u8{ 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    // canonical codes: '0' (length 1), '10' (length 2), '110' (length 3)
+    const bits = [_]u8{ 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     const vals = [_]u8{ 0, 1, 2 };
     const t = try HuffmanTable.buildFromDht(bits, &vals);
     try std.testing.expectEqual(@as(u16, 3), t.total);
@@ -213,17 +264,17 @@ test "buildFromDht: tiny 3-symbol table" {
     try std.testing.expectEqual(@as(u8, 1), t.code_sizes[0]);
     try std.testing.expectEqual(@as(u16, 0b10), t.codes[1]);
     try std.testing.expectEqual(@as(u8, 2), t.code_sizes[1]);
-    try std.testing.expectEqual(@as(u16, 0b11), t.codes[2]);
-    try std.testing.expectEqual(@as(u8, 2), t.code_sizes[2]);
+    try std.testing.expectEqual(@as(u16, 0b110), t.codes[2]);
+    try std.testing.expectEqual(@as(u8, 3), t.code_sizes[2]);
 }
 
 test "decode: round-trip via fast lookup table" {
-    // Same 3-symbol table; encode bits "0 10 11 0" → values 0,1,2,0
-    const bits = [_]u8{ 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    // Same 3-symbol table; encode bits "0 10 110 0" → values 0,1,2,0
+    const bits = [_]u8{ 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     const vals = [_]u8{ 0, 1, 2 };
     const t = try HuffmanTable.buildFromDht(bits, &vals);
 
-    // Encoded bitstream: 0 10 11 0 = 0b01011000 (left-aligned in byte)
+    // Encoded bitstream: 0 10 110 0 = 0b01011000 (left-aligned in byte)
     const data = [_]u8{0b01011000};
     var br = bitstream.BitReader.init(&data);
 

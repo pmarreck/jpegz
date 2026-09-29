@@ -1,6 +1,27 @@
 const std = @import("std");
 const jpegz = @import("jpegz");
 
+test "strict facade rejects Validate's oversubscribed DHT crasher" {
+	// Public synthetic 178-byte reproduction supplied September 26, 2026.
+	const hex = "ffd8ffe000104a46494600010100000100010000ffdb00430003020203020203" ++
+		"03030304030304050805050404050a070706080c0a0c0c0b0a0b0b0d0e12100d" ++
+		"0e110e0b0b1016101113141515150c0f171816141812141514ffc0000b080010" ++
+		"001001011100ffc400160001010100000000000000000000000000000809ffc4" ++
+		"00171003000100000000000000000000000000001864a2ffda0008010100003f" ++
+		"00921639321639326b5ac72642c7264fffd9";
+	var bytes: [178]u8 = undefined;
+	const data = try std.fmt.hexToBytes(&bytes, hex);
+	try std.testing.expectEqual(@as(usize, 178), data.len);
+	var result = try jpegz.validateAny(std.testing.allocator, data);
+	defer result.deinit(std.testing.allocator);
+	try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
+	var found = false;
+	for (result.findings.items) |finding| {
+		if (finding.code == .huffman_table_corrupt and finding.severity == .fail) found = true;
+	}
+	try std.testing.expect(found);
+}
+
 const sof3_pair = [_]u8{ 0xff, 0xd8, 0xff, 0xc3, 0, 14, 12, 0, 1, 0, 1, 2, 1, 0x11, 0, 2, 0x11, 0 } ++
 	[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
 	[_]u8{ 0xff, 0xda, 0, 10, 2, 1, 0, 2, 0, 1, 0, 0, 0x3f, 0xff, 0xd9 };
