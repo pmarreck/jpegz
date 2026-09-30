@@ -12,6 +12,29 @@ const jpegz = @import("jpegz");
 /// red/green/blue/white pixels. Roughly 690 bytes.
 const fixture_baseline_2x2_rgb = @embedFile("fixtures/baseline_2x2_rgb.jpg");
 
+fn decodeAllocationControl(allocator: std.mem.Allocator, data: []const u8, channels: u8) !void {
+	var image = try jpegz.internal.cleanroomDecode(allocator, data);
+	defer image.deinit(allocator);
+	try std.testing.expectEqual(channels, image.channels);
+}
+
+test "baseline frees partial component allocations on every allocation failure" {
+	const cases = [_]struct { data: []const u8, channels: u8 }{
+		.{ .data = fixture_baseline_2x2_rgb, .channels = 3 },
+		.{ .data = fixture_baseline_16x16_rgb_marked, .channels = 3 },
+		.{ .data = fixture_baseline_16x16_rgb12_444, .channels = 3 },
+		.{ .data = fixture_baseline_16x16_rgb12_420, .channels = 3 },
+		.{ .data = fixture_baseline_4x4_cmyk, .channels = 4 },
+	};
+	for (cases) |case| {
+		try std.testing.checkAllAllocationFailures(
+			std.testing.allocator,
+			decodeAllocationControl,
+			.{ case.data, case.channels },
+		);
+	}
+}
+
 test "decode 2x2 baseline RGB JPEG produces a 2x2 RGB Image" {
     const allocator = std.testing.allocator;
 

@@ -3,6 +3,15 @@
 Evidence and earlier request details: [queue context](docs/plan_context/pre-canon-2026-09-24.md).
 Completed history: [plan log](docs/PLAN_LOG.md).
 
+## Priority: Validate September 30 work order
+
+- [x] Fix partial plane/coefficient allocation leaks; sweep every allocation failure in 8/12-bit RGB, RGB passthrough, subsampled RGB and CMYK decodes (done 2026-09-30 02:57 EDT).
+- [ ] Reproduce and fix the non-luma-dominant sampling panic with synthetic inputs and valid sampling controls; return typed failure or support the layout without out-of-bounds access.
+- [ ] Reproduce SOF1 with component ids 0/1/2 and Huffman table pairs 0/1/2; accept legal table ids 0-3 and distinguish any remaining private-stream failure.
+- [ ] Verify JP2 leaf offset semantics; preserve exact in-buffer offsets and represent EOF or declared extents without claiming nonexistent byte locations.
+- [ ] Reproduce zero-bit entropy padding; add its own typed FAIL finding and exact byte offset, retain the excess-entropy FAIL, and verify T.81 F.1.2.3 (Validate's September 30 correction confirms severity).
+- [ ] Publish green bounded fixes and send Validate/tiffz exact SHA, package hash, scope and remaining blockers; preserve 5c5191a and 6ef766c.
+
 ## Priority: DHT memory safety
 
 - [x] Reject oversubscribed and reserved-all-ones DHTs before code assignment; preserve legal near-full and 256-symbol controls; pass ReleaseSafe/ReleaseFast, full tests/build, Windows and closure checks; existing private NRW/AVI JPEG payloads report corrupt without crashing (done 2026-09-29 19:51 EDT).
@@ -14,7 +23,8 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [x] Resolve rawz's two-component SOF3 validation with failing regressions, checked entropy/EOI traversal and payload-relative findings; pixel decoding remains unchanged (done 2026-09-24 22:05 EDT, 6ef766c).
 - [x] Measure Canon mutations: random replacement51/100, bit flips24/100, XOR-FF64/100, truncations100/100, final64 EOF cuts64/64, pristine controls4/4 (done 2026-09-24 22:04 EDT, 6ef766c; context: docs/measurements/canon-sof3-2026-09-24.md).
 - [x] Pass the full suite, build, Windows and closure checks; publish 6ef766c and send rawz/tiffz its exact SHA/API, evidence and limits (done 2026-09-24 22:13 EDT; exact-commit CI status follows in their handoffs).
-- [ ] Confirm tiffz/Validate consumer-owned re-pins to the published DHT-guard revision containing Canon SOF3 6ef766c; rerun their full-container repros without publishing private inputs.
+- [x] Confirm tiffz's single jpegz instance re-pinned to 5c5191a with Canon 6ef766c; tiffz b5e58c46 passed tests and exact-commit CI, and its public DHT repro now reports fail instead of SIGSEGV (done 2026-09-29 20:16 EDT, per tiffz's inbox replies).
+- [ ] Confirm Validate's private full-container NRW/AVI replays after the tiffz re-pin without publishing originals or mutants.
 
 ## Existing ordered follow-ups
 
@@ -29,6 +39,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Complete scan consumption, MCU counts, sampling edges, noninterleaved scans, restart cadence and predictor-reset coverage across supported modes.
 - [ ] Complete progressive scan-history and coefficient-range constraints with independent normative review and valid boundary controls.
 - [ ] Classify the known-good corpus as a set and expand reproducible corruption-probe sweeps across JPEG-LS, JPEG 2000 and JPEG XL.
+- [ ] Align local mutation usage with corruption_probe a43f2cf algorithm v2: sparse shotgun flips 8-16 distinct bits in a contained 32-byte window; dense overwrite is nuke; preserve v1 history and never compare unlike definitions.
 - [ ] Compare proven malformed fixtures and false rejects against prior art; report demonstrated detection, hypothetical detectability and valid changes separately.
 - [ ] Confirm consumer promotion through tiffz.jpegz and rerun the private full-PDF experiment without publishing originals or mutants (context: docs/plan_context/pre-canon-2026-09-24.md).
 

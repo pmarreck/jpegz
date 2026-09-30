@@ -544,16 +544,16 @@ fn decodeScanT(
     }
 
     var planes: [4][]Sample = .{ &.{}, &.{}, &.{}, &.{} };
-    {
-        var i: usize = 0;
-        while (i < channels) : (i += 1) {
-            planes[i] = try allocator.alloc(Sample, plane_w[i] * plane_h[i]);
-        }
-    }
     errdefer {
         var j: usize = 0;
         while (j < channels) : (j += 1) {
             if (planes[j].len > 0) allocator.free(planes[j]);
+        }
+    }
+    {
+        var i: usize = 0;
+        while (i < channels) : (i += 1) {
+            planes[i] = try allocator.alloc(Sample, plane_w[i] * plane_h[i]);
         }
     }
 
@@ -573,17 +573,17 @@ fn decodeScanT(
         }
     }
     var coef_buf: [4][]i32 = .{ &.{}, &.{}, &.{}, &.{} };
+    defer {
+        var j: usize = 0;
+        while (j < channels) : (j += 1) {
+            if (coef_buf[j].len > 0) allocator.free(coef_buf[j]);
+        }
+    }
     {
         var i: usize = 0;
         while (i < channels) : (i += 1) {
             const total_blocks: usize = @as(usize, blocks_w[i]) * @as(usize, blocks_h[i]);
             coef_buf[i] = try allocator.alloc(i32, total_blocks * 64);
-        }
-    }
-    defer {
-        var j: usize = 0;
-        while (j < channels) : (j += 1) {
-            if (coef_buf[j].len > 0) allocator.free(coef_buf[j]);
         }
     }
 
