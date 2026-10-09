@@ -3,6 +3,11 @@
 Evidence and earlier request details: [queue context](docs/plan_context/pre-canon-2026-09-24.md).
 Completed history: [plan log](docs/PLAN_LOG.md).
 
+## Priority: dependency freshness
+
+- [x] Refresh direct codec source pins and the transitive Zig/Nix lock graph against live upstream heads; update hashes, fix CharLS/Brotli build compatibility, pass tests/build and retain the queued strictness work (done 2026-10-08 21:12 EDT).
+- [x] Retain the latest Zig 0.16.x release, refresh the overlay, track nixpkgs-unstable within seven days of its head and treat newer-series requirements as advisory (done 2026-10-08 21:12 EDT).
+
 ## Priority: Validate September 30 work order
 
 - [x] Fix partial plane/coefficient allocation leaks; sweep every allocation failure in 8/12-bit RGB, RGB passthrough, subsampled RGB and CMYK decodes (done 2026-09-30 02:57 EDT).

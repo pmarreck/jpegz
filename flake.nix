@@ -2,7 +2,7 @@
   description = "jpegz — spec-complete JPEG family decoder library in Zig";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     # Private source is fetched by Nix using the caller's SSH credentials,
     # before sandboxed builds. Never put credentials in a derivation or URL.
@@ -53,11 +53,72 @@
         zigTargetFlag = if zigTarget == null then "" else "-Dtarget=${zigTarget}";
 
         # On Linux we need musl-linked C deps to match the Zig target.
-        # nixpkgs provides these via `pkgsStatic` — same source versions,
-        # built against musl + statically linkable.
-        libjpegTurbo = if isLinux then pkgs.pkgsStatic.libjpeg else pkgs.libjpeg;
-        openjpegPkg  = if isLinux then pkgs.pkgsStatic.openjpeg else pkgs.openjpeg;
-        brotliPkg = if isLinux then pkgs.pkgsStatic.brotli else pkgs.brotli;
+        # Use Nixpkgs build recipes with immutable upstream source pins.
+        # Linux libraries use pkgsStatic to match the musl target.
+        libjpegSrc = pkgs.fetchFromGitHub {
+          owner = "libjpeg-turbo";
+          repo = "libjpeg-turbo";
+          rev = "43ea809765004508d8da72ebe562cf570c6a62b2";
+          hash = "sha256-AYNiwtHfxEnfbe6W/SZwWEuyLZaMDmRwBwQFDTEoSaA=";
+        };
+        libjpegTurbo = (if isLinux then pkgs.pkgsStatic.libjpeg else pkgs.libjpeg).overrideAttrs (_: {
+          version = "3.2.1";
+          src = libjpegSrc;
+        });
+        libjpegNativePkg = pkgs.libjpeg.overrideAttrs (_: {
+          version = "3.2.1";
+          src = libjpegSrc;
+        });
+        openjpegSrc = pkgs.fetchFromGitHub {
+          owner = "uclouvain";
+          repo = "openjpeg";
+          rev = "8314119b067c0fc77834731168daaebd379fdb12";
+          hash = "sha256-ER+EMxToPJuwtwl6ImdCEUcILUOIWt99oCfOBVaqAVs=";
+        };
+        openjpegPkg = (if isLinux then pkgs.pkgsStatic.openjpeg else pkgs.openjpeg).overrideAttrs (_: {
+          src = openjpegSrc;
+        });
+        openjpegNativePkg = pkgs.openjpeg.overrideAttrs (_: {
+          src = openjpegSrc;
+        });
+        brotliSrc = pkgs.fetchFromGitHub {
+          owner = "google";
+          repo = "brotli";
+          rev = "392b261debb0f478811ddacb98b118da36b06158";
+          hash = "sha256-YsFJcHjf5MlO5LgpomnzcOVuClOLMm7EcETLGDKSjxw=";
+        };
+        alreadyAppliedBrotliPatch = pkgs.fetchurl {
+          url = "https://github.com/google/brotli/commit/e230f474b87134e8c6c85b630084c612057f253e.patch";
+          hash = "sha256-QERl8RHJz7tFr++hZIYwdj1/ogPpjArC+ia8S/bWxKk=";
+        };
+        brotliAtHead = package: package.overrideAttrs (old: {
+          src = brotliSrc;
+          meta = old.meta // {
+            changelog = "https://github.com/google/brotli/blob/${brotliSrc.rev}/CHANGELOG.md";
+          };
+          # This Nixpkgs platform patch is already in the pinned head.
+          # Keep any other patches supplied by the package recipe.
+          patches = builtins.filter
+            (patch: toString patch != toString alreadyAppliedBrotliPatch)
+            (old.patches or []);
+        });
+        brotliPkg = brotliAtHead (if isLinux then pkgs.pkgsStatic.brotli else pkgs.brotli);
+        brotliNativePkg = brotliAtHead pkgs.brotli;
+        dependencyCompatibilityCheck = let
+          appliedPatch = builtins.head pkgs.brotli.patches;
+          keep = [ "other.patch" "other-e230f474b87134e8c6c85b630084c612057f253e.patch" ];
+          controls = [
+            { input = []; expected = []; }
+            { input = keep; expected = keep; }
+            { input = [ appliedPatch ] ++ keep ++ [ appliedPatch ]; expected = keep; }
+          ];
+          classified = map (control: (brotliAtHead {
+            overrideAttrs = f: f { patches = control.input; meta = {}; };
+          }).patches) controls;
+        in assert classified == map (control: control.expected) controls;
+          builtins.deepSeq (map (package: package.meta.changelog or null)
+            [ libjpegTurbo openjpegPkg brotliPkg ])
+          (pkgs.writeText "jpegz-dependency-compatibility" "Codec metadata and patch-list controls passed.\n");
         # NOTE: there is deliberately no mingw-w64 Brotli here. Both nixpkgs
         # candidates were tried and neither works: `pkgsCross.mingwW64.brotli`
         # ships only `.dll.a` import libraries (Zig searches for
@@ -78,15 +139,13 @@
         #      executable ("cannot find -lgcc_eh") — the libc++/musl
         #      static toolchain in nixpkgs is incomplete.
         #
-        # Vendoring is the robust path: Zig's bundled clang compiles the
-        # 8 charls .cpp files into a static lib, links against Zig's
-        # libc++, end-to-end consistent on every target. The C ABI we
-        # consume is unchanged.
+        # Zig's bundled clang compiles the CharLS sources into a static
+        # library and links against Zig's libc++ on every target.
         charlsSrc = pkgs.fetchFromGitHub {
           owner = "team-charls";
           repo = "charls";
-          rev = "2.4.4";
-          hash = "sha256-0NfTQfGw89SksrLRX81moj6uFrh1I67JMeT16Wcus1c=";
+          rev = "65d912058be87c28f5db3d04081d5305e903bbac";
+          hash = "sha256-2KqHhXkrqevLAbA6SN1i0D6fQrkXg9wB2j8DF3hQtR0=";
         };
 
         # When cross-targeting (musl on Linux), Zig's host NIX_LDFLAGS /
@@ -120,7 +179,7 @@
         #   1. set zigDepsHash = pkgs.lib.fakeHash
         #   2. nix build .#checks.<system>.cross-windows  → prints real hash
         #   3. paste it back here.
-        zigDepsHash = "sha256-m2EALq5lS735lA/DGg2QPM/ov6VqkJAsocBxydctHqc=";
+        zigDepsHash = "sha256-pQdrwSZFBjyE3pBhl8MVaUwLYin/DzrZdEyGD0tLLMQ=";
         zigDeps = assert pkgs.lib.hasInfix "archive/${libjxlz-src.rev}.tar.gz"
           (builtins.readFile ./build.zig.zon); pkgs.stdenv.mkDerivation {
           pname = "jpegz-zig-deps";
@@ -304,6 +363,7 @@
         packages.validator = validatorPackage;
 
         checks = {
+          dependency-compatibility = dependencyCompatibilityCheck;
           build = self.packages.${system}.default;
           test = jpegzTestCheck;
           cross-windows = crossWindowsCheck;
@@ -311,20 +371,18 @@
         };
 
         devShells.default = pkgs.mkShell {
-          # Dev shell uses the host's default libjpeg/openjpeg (glibc on
-          # Linux, native on macOS). The musl pinning above is sandbox-only
-          # — interactive dev doesn't need it. charls is built from
-          # vendored source (Zig compiles 8 .cpp files); CHARLS_SRC tells
-          # build.zig where the source tree is.
-          packages = [ zigPkg pkgs.git pkgs.cacert pkgs.libjpeg pkgs.openjpeg pkgs.brotli pkgs.hyperfine pkgs.pkg-config ];
+          # Interactive builds use native C libraries and the same
+          # codec source pins as sandboxed builds. CHARLS_SRC supplies
+          # the CharLS sources for compilation by Zig.
+          packages = [ zigPkg pkgs.git pkgs.cacert libjpegNativePkg openjpegNativePkg brotliNativePkg pkgs.hyperfine pkgs.pkg-config ];
           CHARLS_SRC = charlsSrc;
-          BROTLI_INCLUDE_DIR = "${pkgs.brotli.dev}/include";
-          BROTLI_LIB_DIR = "${pkgs.brotli.lib}/lib";
+          BROTLI_INCLUDE_DIR = "${brotliNativePkg.dev}/include";
+          BROTLI_LIB_DIR = "${brotliNativePkg.lib}/lib";
           shellHook = ''
             # Zig cannot authenticate a private archive URL itself. Seed the
             # exact package from the locked SSH input for native builds too.
             zig fetch ${libjxlz-src} >/dev/null || exit 1
-            echo "jpegz devShell — zig $(zig version), libjpeg-turbo ${pkgs.libjpeg.version}, openjpeg ${pkgs.openjpeg.version}, charls 2.4.4 (vendored)"
+            echo "jpegz devShell — zig $(zig version), libjpeg-turbo ${libjpegNativePkg.version}, openjpeg ${openjpegNativePkg.version}, charls 3.0.0 (vendored)"
           '';
         };
 

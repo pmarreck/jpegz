@@ -297,8 +297,8 @@ pub fn build(b: *std.Build) void {
     // (gcc/libstdc++ vs Zig's libc++ symbol mismatch on Linux musl,
     // then libcxxStdenv-on-musl missing libgcc_eh). Vendoring the
     // source and compiling via Zig's own clang+libc++ keeps the C++
-    // stdlib consistent end-to-end. The 8 .cpp files take a few
-    // seconds to compile; the resulting `libcharls.a` ships with us.
+    // stdlib consistent end-to-end. The resulting `libcharls.a`
+    // ships with us.
     //
     // Source path comes from `-Dcharls-src=...` (set by flake) or
     // `CHARLS_SRC` env var (set by dev shell).
@@ -325,10 +325,12 @@ pub fn build(b: *std.Build) void {
             .files = &.{
                 "src/charls_jpegls_decoder.cpp",
                 "src/charls_jpegls_encoder.cpp",
+                "src/golomb_lut.cpp",
                 "src/jpeg_stream_reader.cpp",
                 "src/jpeg_stream_writer.cpp",
                 "src/jpegls_error.cpp",
-                "src/jpegls.cpp",
+                "src/make_scan_codec.cpp",
+                "src/quantization_lut.cpp",
                 "src/validate_spiff_header.cpp",
                 "src/version.cpp",
             },

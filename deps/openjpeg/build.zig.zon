@@ -4,8 +4,8 @@
     .fingerprint = 0x358cfebe7c181e37,
     .dependencies = .{
         .openjpeg_src = .{
-            .url = "https://github.com/uclouvain/openjpeg/archive/refs/tags/v2.5.4.tar.gz",
-            .hash = "N-V-__8AAHiEmgBjTa5rTtwbWMR9ZJJkN2_1NPJOZy6sURMC",
+            .url = "https://github.com/uclouvain/openjpeg/archive/8314119b067c0fc77834731168daaebd379fdb12.tar.gz",
+            .hash = "N-V-__8AAErpmgC0gnamssY7Q0KC4uTsTdF6jv93to_-mPEN",
         },
     },
     .paths = .{

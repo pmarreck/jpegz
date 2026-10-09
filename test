@@ -24,13 +24,24 @@ run_check() {
 	fi
 }
 
-# Phase 1 has only Zig unit tests + the Nix build check.
-# When CLI tests land (./tests/cli/), add another run_check below them.
+run_check "dev shell package metadata" \
+	nix eval --raw .#devShells."$(nix eval --impure --raw --expr 'builtins.currentSystem')".default \
+	--apply 'shell: builtins.deepSeq (map (p: p.meta.changelog or null) shell.nativeBuildInputs) "Package metadata evaluated.\n"'
+
+run_check "codec source compatibility controls" \
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".dependency-compatibility --no-link --print-build-logs
+
 run_check "zig unit tests (nix flake check .#test)" \
 	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".test --print-build-logs
 
 run_check "package builds (nix flake check .#build)" \
 	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".build --print-build-logs
+
+run_check "Windows cross-link check" \
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".cross-windows --print-build-logs
+
+run_check "validator dependency closure" \
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".validator-closure --print-build-logs
 
 # Consumer-facing invariant that jpegz's own build CANNOT catch: every jpegz
 # test links the C libs, so a regression that re-forces libjpeg/openjpeg/charls
