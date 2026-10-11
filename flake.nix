@@ -179,7 +179,7 @@
         #   1. set zigDepsHash = pkgs.lib.fakeHash
         #   2. nix build .#checks.<system>.cross-windows  → prints real hash
         #   3. paste it back here.
-        zigDepsHash = "sha256-pQdrwSZFBjyE3pBhl8MVaUwLYin/DzrZdEyGD0tLLMQ=";
+        zigDepsHash = "sha256-DCc/vzvvWPdBG5rp33IoEEIO/wLAnFbWtanyaV3radM=";
         zigDeps = assert pkgs.lib.hasInfix "archive/${libjxlz-src.rev}.tar.gz"
           (builtins.readFile ./build.zig.zon); pkgs.stdenv.mkDerivation {
           pname = "jpegz-zig-deps";
