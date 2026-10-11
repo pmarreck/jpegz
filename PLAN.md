@@ -5,7 +5,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Priority: dependency freshness
 
-- [ ] Repin JP2Z to its published upstream head, regenerate the Zig dependency closure hash, and publish only after the complete local and exact CI gates pass.
+- [x] Repin JP2Z to published head `91264891`, regenerate the Zig dependency closure hash, pass complete local gates, and publish `8d325c6`; Mechatron Prime passed the exact commit in 14 seconds (done 2026-10-10 20:14 EDT).
 - [x] Refresh direct codec source pins and the transitive Zig/Nix lock graph against live upstream heads; update hashes, fix CharLS/Brotli build compatibility, pass tests/build and retain the queued strictness work (done 2026-10-08 21:12 EDT).
 - [x] Retain the latest Zig 0.16.x release, refresh the overlay, track nixpkgs-unstable within seven days of its head and treat newer-series requirements as advisory (done 2026-10-08 21:12 EDT).
 
