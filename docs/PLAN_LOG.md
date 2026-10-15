@@ -33,3 +33,11 @@ Completed PLAN.md items retired by plan-retire, oldest retirement first.
 - [x] [Dependency freshness] Read the implemented gates in tiffz and validate before choosing code. Peter explicitly requested their working mechanism, not a new one. Read both scripts, classifier tests, and build entrypoints. _(2026-09-06 12:12 EDT)_
 - [x] [Recent documentation work] Consumed and trashed both old handoffs; retained restore metadata and Git history. Removed the orphaned dirtree note. _(2026-08-27 22:48 EDT)_
 - [x] [Recent documentation work] Replaced stale scaffold/ABI descriptions; removed the duplicate May work queue while retaining cited decisions; separated pixel decoding from validation dependencies and removed unsourced JXL market predictions. Archived the old PLAN without losing its historical evidence. _(2026-09-06 EDT)_
+
+## Retired 2026-10-15
+
+- [x] [Priority: DHT memory safety] Reject oversubscribed and reserved-all-ones DHTs before code assignment; preserve legal near-full and 256-symbol controls; pass ReleaseSafe/ReleaseFast, full tests/build, Windows and closure checks; existing private NRW/AVI JPEG payloads report corrupt without crashing (done 2026-09-29 19:51 EDT).
+- [x] [Priority: DHT memory safety] Relay Peter's benchmark-history and scaling expectation to Einstein; his September 28 reply confirms the shared AGENTS policy, without retroactive fleet edits (done 2026-09-29 19:51 EDT; original relay 2026-09-28 14:51 EDT).
+- [x] [Priority: Canon CR2 sensor validation] Resolve rawz's two-component SOF3 validation with failing regressions, checked entropy/EOI traversal and payload-relative findings; pixel decoding remains unchanged (done 2026-09-24 22:05 EDT, 6ef766c).
+- [x] [Priority: Canon CR2 sensor validation] Measure Canon mutations: random replacement51/100, bit flips24/100, XOR-FF64/100, truncations100/100, final64 EOF cuts64/64, pristine controls4/4 (done 2026-09-24 22:04 EDT, 6ef766c; context: docs/measurements/canon-sof3-2026-09-24.md).
+- [x] [Priority: Canon CR2 sensor validation] Pass the full suite, build, Windows and closure checks; publish 6ef766c and send rawz/tiffz its exact SHA/API, evidence and limits (done 2026-09-24 22:13 EDT; exact-commit CI status follows in their handoffs).

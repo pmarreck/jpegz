@@ -70,6 +70,7 @@ annotate=[
 	tests/cli/corruption_coverage.bash = Fake-reader check that no-ops and crashes stay out of the judged rate
 	tests/cli/lib/capture.bash = Vendored capture() helper (Peter, MIT) — stdout/stderr/rc capture; vendored so CLI tests are hermetic in the Nix sandbox
 	tests/cli/no_c_consumer.bash = Gate: pure-Zig consumer must import jpegz + call validate() with zero C deps (has negative control)
+	tests/cli/seed_libjxlz_cache.bash = Cache-hit, cache-miss, and dev-shell hook contract for libjxlz seeding
 	tests/cli/validate_cli.bash = Bash CLI surface suite (22 assertions): arg discipline, exit codes, rich errors, JSON, stdin, spaced paths, ANSI suppression
 	tests/unit/facade_validation.zig = Strict JPEG-family facade contracts, malformed-stream controls and SIZ tile-origin boundaries.
 	tests/unit/fixtures/JXL_VALIDATION_PROVENANCE.md = Exact libjxlz source paths, SHA-256 values, and expected four-way fixture outcomes.
@@ -78,4 +79,5 @@ annotate=[
 	tools/coverage_stats.zig = Wilson intervals and jpegz verdict classes for ./corruption-coverage
 	tools/facade_validator_probe.zig = Production-shaped validation-only ELF used for dependency-closure proof.
 	tools/gen_c_header.zig = Comptime walker over core/errors.zig; emits include/jpegz_errno.h at build
+	tools/seed-libjxlz-cache = Skip a repeated libjxlz zig fetch when that pin is already cached
 ]

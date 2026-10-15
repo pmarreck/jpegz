@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Place the pinned libjxlz package in Zig's global cache.
+# Zig 0.16 rewrites that archive on every `zig fetch`, so this skips the
+# fetch when the hash declared in build.zig.zon is already stored.
+
+set -u
+
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+	echo "usage: seed-libjxlz-cache SOURCE_PATH [ZON_PATH]" >&2
+	exit 2
+fi
+
+source_path=$1
+zon=${2:-build.zig.zon}
+
+if [[ ! -f $zon ]]; then
+	echo "seed-libjxlz-cache: missing $zon" >&2
+	exit 2
+fi
+
+mapfile -t found < <(grep -oE 'libjxlz-[A-Za-z0-9._-]+' "$zon" | sort -u)
+if [[ ${#found[@]} -ne 1 ]]; then
+	echo "seed-libjxlz-cache: expected one libjxlz hash in $zon, found ${#found[@]}" >&2
+	exit 2
+fi
+hash=${found[0]}
+
+if [[ -n ${ZIG_GLOBAL_CACHE_DIR:-} ]]; then
+	cache=$ZIG_GLOBAL_CACHE_DIR
+elif [[ -n ${XDG_CACHE_HOME:-} ]]; then
+	cache=$XDG_CACHE_HOME/zig
+elif [[ -n ${HOME:-} ]]; then
+	cache=$HOME/.cache/zig
+else
+	echo "seed-libjxlz-cache: no Zig cache directory" >&2
+	exit 1
+fi
+
+archive=$cache/p/$hash.tar.gz
+unpacked=$cache/p/$hash
+if [[ -s $archive ]]; then
+	exit 0
+fi
+if [[ -d $unpacked ]]; then
+	for child in "$unpacked"/* "$unpacked"/.[!.]* "$unpacked"/..?*; do
+		if [[ -e $child ]]; then
+			exit 0
+		fi
+	done
+fi
+
+got=$(zig fetch "$source_path")
+rc=$?
+if [[ $rc -ne 0 ]]; then
+	exit "$rc"
+fi
+if [[ $got != "$hash" ]]; then
+	echo "seed-libjxlz-cache: fetched $got, build.zig.zon declares $hash" >&2
+	exit 1
+fi

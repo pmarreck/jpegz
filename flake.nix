@@ -367,8 +367,9 @@
           BROTLI_LIB_DIR = "${brotliNativePkg.lib}/lib";
           shellHook = ''
             # Zig cannot authenticate a private archive URL itself. Seed the
-            # exact package from the locked SSH input for native builds too.
-            zig fetch ${libjxlz-src} >/dev/null || exit 1
+            # locked package once; repeating the fetch rewrites the same
+            # global-cache archive on every shell entry.
+            ${./tools/seed-libjxlz-cache} ${libjxlz-src} ${./build.zig.zon} || exit 1
             echo "jpegz devShell — zig $(zig version), libjpeg-turbo ${libjpegNativePkg.version}, openjpeg ${openjpegNativePkg.version}, charls 3.0.0 (vendored)"
           '';
         };
