@@ -6,6 +6,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Priority: dev shell reentry
 
 - [x] Stop a nix dev shell reentry from repeating the libjxlz fetch when that pin is already in the Zig cache (done 2026-10-15 15:54 EDT).
+- [x] Hand the repeated dev-shell zig fetch to the fleet coordinator for a cross-project check and a writing-nix skill note (done 2026-10-15 16:46 EDT).
 
 ## Priority: dependency freshness
 
@@ -37,7 +38,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Priority: Canon CR2 sensor validation
 
-- [x] Confirm tiffz's single jpegz instance re-pinned to 5c5191a with Canon 6ef766c; tiffz b5e58c46 passed tests and exact-commit CI, and its public DHT repro now reports fail instead of SIGSEGV (done 2026-09-29 20:16 EDT, per tiffz's inbox replies).
 - [ ] Confirm Validate's private full-container NRW/AVI replays after the tiffz re-pin without publishing originals or mutants.
 
 ## Existing ordered follow-ups
