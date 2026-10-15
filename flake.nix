@@ -58,8 +58,8 @@
         libjpegSrc = pkgs.fetchFromGitHub {
           owner = "libjpeg-turbo";
           repo = "libjpeg-turbo";
-          rev = "43ea809765004508d8da72ebe562cf570c6a62b2";
-          hash = "sha256-AYNiwtHfxEnfbe6W/SZwWEuyLZaMDmRwBwQFDTEoSaA=";
+          rev = "2fa570c514a4b0e70342ef8b32ce1cda21b85710";
+          hash = "sha256-6zMSh3aDSd6ZTbHsdoVLkc8sSroYS64ZyhOZwhkrM0s=";
         };
         libjpegTurbo = (if isLinux then pkgs.pkgsStatic.libjpeg else pkgs.libjpeg).overrideAttrs (_: {
           version = "3.2.1";
@@ -84,8 +84,8 @@
         brotliSrc = pkgs.fetchFromGitHub {
           owner = "google";
           repo = "brotli";
-          rev = "392b261debb0f478811ddacb98b118da36b06158";
-          hash = "sha256-YsFJcHjf5MlO5LgpomnzcOVuClOLMm7EcETLGDKSjxw=";
+          rev = "86ee1f65f62d6272345dee751d49e7d1f01c2b11";
+          hash = "sha256-mn8ukkfdeBc8HKOolbcjQ20VC9RdgJU4n2BOmIbgw6c=";
         };
         alreadyAppliedBrotliPatch = pkgs.fetchurl {
           url = "https://github.com/google/brotli/commit/e230f474b87134e8c6c85b630084c612057f253e.patch";
@@ -144,8 +144,8 @@
         charlsSrc = pkgs.fetchFromGitHub {
           owner = "team-charls";
           repo = "charls";
-          rev = "65d912058be87c28f5db3d04081d5305e903bbac";
-          hash = "sha256-2KqHhXkrqevLAbA6SN1i0D6fQrkXg9wB2j8DF3hQtR0=";
+          rev = "5f54145968ff51c3ff84896c2ec8e422154a69cf";
+          hash = "sha256-wMUQuuZOzMJWD/JK5EmhGI0BjrqKZHljfyo6UhRoZsg=";
         };
 
         # When cross-targeting (musl on Linux), Zig's host NIX_LDFLAGS /
@@ -174,12 +174,9 @@
         # Prefetch jp2z, private libjxlz and the optional OpenJPEG source used
         # by Windows cross-builds. All native and cross builds seed their
         # offline Zig cache from this source-bearing output; never publish
-        # it to a public binary cache. A single hash covers the tree; bump when
-        # `build.zig.zon` (or deps/) changes:
-        #   1. set zigDepsHash = pkgs.lib.fakeHash
-        #   2. nix build .#checks.<system>.cross-windows  → prints real hash
-        #   3. paste it back here.
-        zigDepsHash = "sha256-DCc/vzvvWPdBG5rp33IoEEIO/wLAnFbWtanyaV3radM=";
+        # it to a public binary cache. This must stay the real fixed-output
+        # hash for the current build.zig.zon. Never commit a placeholder.
+        zigDepsHash = "sha256-n86bl1BO1NcPy8YAV/sLAUTGcfndo4LfpxAbwVBivRY=";
         zigDeps = assert pkgs.lib.hasInfix "archive/${libjxlz-src.rev}.tar.gz"
           (builtins.readFile ./build.zig.zon); pkgs.stdenv.mkDerivation {
           pname = "jpegz-zig-deps";
@@ -267,18 +264,17 @@
           '';
         };
 
-        # Windows cross-link regression gate. The vendored static openjpeg
-        # (deps/openjpeg) is what lets jpegz cross-compile to mingw, where
-        # the system openjp2/libjpeg are unavailable. We can't *run* a
-        # windows binary in the sandbox, so this is build-only: `test-build`
-        # compiles AND links every test exe (the link step is where missing
-        # openjp2 symbols would surface — the original RED was 18 undefined
-        # `opj_*`). charls + the libjpeg oracle are off so the closure is
-        # openjpeg-only, exactly matching the shipping windows artifact.
-        # Build-only ⇒ host-agnostic: this runs on any builder, no
-        # x86_64-windows runner needed. Deps come from the FOD above.
-        crossWindowsCheck = pkgs.stdenv.mkDerivation {
-          pname = "jpegz-cross-windows";
+        # Foreign-target compile/link gates. Vendored static OpenJPEG is what
+        # lets jpegz cross-compile where system openjp2/libjpeg are unavailable.
+        # test-build compiles and links every test executable but does not run
+        # it. The link step is where missing opj_* symbols surface. CharLS and
+        # the libjpeg oracle are off. JXL stays off because no target-built
+        # Brotli is supplied: nixpkgs has no usable mingw-w64 Brotli that Zig
+        # can link, and a native Brotli would make a foreign gate pass while
+        # producing an artifact that cannot run. Those builds report JPEG XL
+        # as indeterminate / jxl_validator_unavailable. Native tests cover JXL.
+        mkCrossLinkCheck = crossTarget: pkgs.stdenv.mkDerivation {
+          pname = "jpegz-cross-${crossTarget}";
           version = "0.0.1";
           src = ./.;
           nativeBuildInputs = commonNativeBuildInputs;
@@ -289,24 +285,12 @@
             mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
             cp -r ${zigDeps}/* "$ZIG_GLOBAL_CACHE_DIR/"
             chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
-            # No Brotli is exported on purpose, and -Dwith-jxl=false is the
-            # honest consequence: nixpkgs has no usable mingw-w64 Brotli
-            # (the dynamic build ships only `.dll.a` import libraries, which
-            # Zig does not search for, and the static build fails to compile).
-            # Smuggling the NATIVE Brotli into a Windows artifact would make
-            # this gate pass while producing something that could never run,
-            # which is precisely the dishonesty it exists to catch.
-            #
-            # Consequence for users: a Windows build reports JPEG XL files as
-            # `indeterminate` / `jxl_validator_unavailable` rather than
-            # pretending to validate them. Removing this needs Brotli vendored
-            # and compiled by Zig, the way charls already is.
-            zig build test-build -Dtarget=x86_64-windows-gnu \
+            zig build test-build -j2 -Dtarget=${crossTarget} \
               -Dwith-charls=false -Dwith-libjpeg-oracle=false -Dwith-jxl=false
           '';
           installPhase = ''
             mkdir -p $out
-            echo "windows cross-link ok" > $out/result
+            echo "${crossTarget} cross-link ok (JXL and external oracles disabled; not a runtime test)" > $out/result
           '';
         };
 
@@ -366,7 +350,10 @@
           dependency-compatibility = dependencyCompatibilityCheck;
           build = self.packages.${system}.default;
           test = jpegzTestCheck;
-          cross-windows = crossWindowsCheck;
+          cross-windows = mkCrossLinkCheck "x86_64-windows-gnu";
+          cross-aarch64-linux = mkCrossLinkCheck "aarch64-linux-musl";
+          cross-aarch64-macos = mkCrossLinkCheck "aarch64-macos";
+          cross-aarch64-windows = mkCrossLinkCheck "aarch64-windows-gnu";
           validator-closure = validatorClosureCheck;
         };
 

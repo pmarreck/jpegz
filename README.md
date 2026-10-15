@@ -109,6 +109,11 @@ Builds default to ReleaseFast; tests default to ReleaseSafe. Nix supplies the
 dependencies. `./bm` and `./fuzz` run the separate benchmark and fuzz suites.
 Build options and memory ownership are documented in [SPEC.md](SPEC.md).
 
+The full suite also links the test graph for ARM64 Linux, ARM64 macOS, and
+x86-64/ARM64 Windows. Those foreign-target checks disable JXL and the external
+oracles; they do not run target binaries. Native Linux tests retain the full
+enabled feature set.
+
 The libjpeg-turbo and CharLS oracles are optional. Disabling JP2 pixel decoding
 with `-Dwith-jp2-decode=false` removes OpenJPEG while retaining JP2 validation.
 Windows JXL validation remains disabled in the cross check pending Brotli

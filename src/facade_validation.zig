@@ -260,6 +260,9 @@ pub fn validateJp2(
 // stand-in keeps the call shape identical so consumers compile either way.
 pub const JxlOptions = if (with_jxl) libjxlz.validation.Options else struct {
     host_byte_offset: u64 = 0,
+    // Callers set this even when the validator is compiled out. The disabled
+    // path ignores it and reports that the validator is unavailable.
+    max_pixels: u64 = 268_435_456,
 };
 pub const default_jxl_options: JxlOptions =
     if (with_jxl) libjxlz.validation.default_options else .{};

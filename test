@@ -40,6 +40,11 @@ run_check "package builds (nix flake check .#build)" \
 run_check "Windows cross-link check" \
 	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".cross-windows --print-build-logs
 
+for platform in aarch64-linux aarch64-macos aarch64-windows; do
+	run_check "$platform cross-link check" \
+		nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')"."cross-$platform" --print-build-logs
+done
+
 run_check "validator dependency closure" \
 	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".validator-closure --print-build-logs
 

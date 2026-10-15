@@ -5,7 +5,16 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Priority: dependency freshness
 
+- [x] Pin jp2z, libjpeg-turbo, Brotli, CharLS, and the flake lock to their newest published revisions with real hashes; leave unpublished libjxlz commits unpinned and keep OpenJPEG where it is already current (done 2026-10-15 14:56 EDT).
 - [x] Repin JP2Z to published head `91264891`, regenerate the Zig dependency closure hash, pass complete local gates, and publish `8d325c6`; Mechatron Prime passed the exact commit in 14 seconds (done 2026-10-10 20:14 EDT).
+- [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; do not change settings unasked.
+- [x] Add ./corruption-coverage for sniper, bolter, shotgun and nuke, with a pristine gate and Wilson 95% intervals over judged cases only; a 100-round live run on baseline_2x2_rgb.jpg passed with corruption-reader 0.7.0 (done 2026-10-15 14:20 EDT).
+- [ ] Reconcile the October 14 inbox with published f1a255a, preserve explicit holds, advance one unblocked milestone and send the coordinator a receipt with any genuine owner decisions.
+- [x] Send the requested safe checkpoint with the JP2 red witness, dirty source state and completed Nix hash-job receipt; leave adoption uncommitted and the sampling packet held (done 2026-10-10 00:29 EDT).
+- [x] Adopt the SIZ tile-origin regression on jp2z 434b9d53 without restoring draft pin 54531e26; ARM64 link gates pass in ./test (done 2026-10-15 14:56 EDT, context: docs/measurements/jp2-tile-origin-2026-10-10.md).
+- [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
+- [ ] Keep the published JP2 pin and its real Nix closure hash; do not restore draft pin 54531e26 or any placeholder hash.
+- [ ] Mirror approved JP2 finding 261 with a red mapping/ABI regression and conditional-severity controls for 252; do not retry the held sampling research.
 - [x] Refresh direct codec source pins and the transitive Zig/Nix lock graph against live upstream heads; update hashes, fix CharLS/Brotli build compatibility, pass tests/build and retain the queued strictness work (done 2026-10-08 21:12 EDT).
 - [x] Retain the latest Zig 0.16.x release, refresh the overlay, track nixpkgs-unstable within seven days of its head and treat newer-series requirements as advisory (done 2026-10-08 21:12 EDT).
 

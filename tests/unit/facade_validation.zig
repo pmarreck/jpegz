@@ -1,6 +1,59 @@
 const std = @import("std");
 const jpegz = @import("jpegz");
 
+test "JPEG 2000 facade identifies the SIZ tile-origin invariant at its marker" {
+	// T.800 B.3: XTOsiz <= XOsiz < XTOsiz + XTsiz, and likewise in Y.
+	// These SIZ-only controls assess this finding, not full-stream validity.
+	const base = [_]u8{
+		0xff, 0x4f, 0xff, 0x51, 0, 41, 0, 0,
+		0, 0, 0, 6, 0, 0, 0, 6, 0, 0, 0, 2, 0, 0, 0, 2,
+		0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 1, 7, 1, 1, 0xff, 0xd9,
+	};
+	const Case = struct {
+		x_tile: u32,
+		y_tile: u32,
+		x_origin: u32 = 2,
+		x_tile_origin: u32 = 0,
+		x_extent: u32 = 6,
+		illegal: bool,
+	};
+	const cases = [_]Case{
+		.{ .x_tile = 3, .y_tile = 3, .illegal = false },
+		.{ .x_tile = 2, .y_tile = 3, .illegal = true },
+		.{ .x_tile = 3, .y_tile = 2, .illegal = true },
+		.{ .x_tile = 1, .y_tile = 1, .illegal = true },
+		.{ .x_tile = 6, .y_tile = 6, .illegal = false },
+		.{ .x_tile = 4, .y_tile = 6, .x_origin = 0xfffffffe,
+			.x_tile_origin = 0xfffffffd, .x_extent = 0xffffffff, .illegal = false },
+	};
+	for (cases) |case| {
+		var bytes = base;
+		std.mem.writeInt(u32, bytes[8..12], case.x_extent, .big);
+		std.mem.writeInt(u32, bytes[16..20], case.x_origin, .big);
+		std.mem.writeInt(u32, bytes[24..28], case.x_tile, .big);
+		std.mem.writeInt(u32, bytes[28..32], case.y_tile, .big);
+		std.mem.writeInt(u32, bytes[32..36], case.x_tile_origin, .big);
+		var result = try jpegz.jpeg2000.strictValidate(std.testing.allocator, &bytes);
+		defer result.deinit(std.testing.allocator);
+		var found = false;
+		for (result.findings.items) |finding| {
+			if (finding.code != .jp2_invalid_siz) continue;
+			found = true;
+			try std.testing.expectEqual(jpegz.ValidatorSource.jp2z, finding.source);
+			try std.testing.expectEqual(@as(u32, 146), finding.leaf_code);
+			try std.testing.expectEqual(jpegz.Severity.fail, finding.severity);
+			try std.testing.expectEqual(@as(?u64, 2), finding.offset);
+			try std.testing.expect(std.mem.indexOf(u8, finding.detail.?, "B.3") != null);
+		}
+		try std.testing.expectEqual(case.illegal, found);
+		if (case.illegal) try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
+	}
+	var pristine = try jpegz.jpeg2000.strictValidate(std.testing.allocator, @embedFile("fixtures/jp2_8x8_rgb.jp2"));
+	defer pristine.deinit(std.testing.allocator);
+	try std.testing.expectEqual(jpegz.StrictVerdict.valid, pristine.verdict);
+}
+
 test "strict facade rejects Validate's oversubscribed DHT crasher" {
 	// Public synthetic 178-byte reproduction supplied September 26, 2026.
 	const hex = "ffd8ffe000104a46494600010100000100010000ffdb00430003020203020203" ++

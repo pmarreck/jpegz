@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# Observed rejection rate of mutated known-good inputs.
+#
+# corruption-reader 0.7 (docs/consumer_cli.md in that project) draws sniper,
+# bolter, shotgun and nuke cases. jpegz --json judges each changed copy.
+# tools/coverage_stats.zig turns those judgments into Wilson 95% intervals.
+#
+# "Corrupt" here means jpegz said so. A mutation can remain a valid encoding,
+# and a valid mutation that jpegz rejects is a false reject. No-ops, crashes,
+# timeouts and I/O errors are counted beside the rate, not inside it.
+#
+#   ./corruption-coverage [--rounds N] [--master SEED] [--profiles a,b]
+#                         [--jobs N] [--timeout SECS] [--out-dir DIR] [FIXTURE...]
+#
+# Default fixtures are the small known-good JPEG, JPEG-LS, JPEG 2000 and JPEG XL
+# files under tests/unit/fixtures. Default master is 0x6a7065677a. Default
+# rounds is 100: at p = 0.5 the Wilson half-width is about 10 points; 385 rounds
+# brings that to about 5 points. Exit 0 when every judged case completed,
+# 1 when a crash, timeout or I/O error occurred, 2 when the run could not.
+# Run a large campaign under build-budget.
+
+set -u
+
+root=$(cd -- "$(dirname -- "$0")" && pwd)
+orig_args=("$@")
+
+usage() {
+	cat <<EOF
+usage: ./corruption-coverage [--rounds N] [--master SEED] [--profiles a,b]
+                             [--jobs N] [--timeout SECS] [--out-dir DIR] [FIXTURE...]
+
+Mutate known-good files with corruption-reader profiles (default sniper,bolter,
+shotgun,nuke) and report how often jpegz calls the result corrupt. The Wilson
+95% interval is corrupt/judged. It is an observed rejection rate, not a proof
+that every mutated file is invalid.
+
+Default rounds: 100. Default master: 0x6a7065677a. With no FIXTURE, uses four
+pristine files from tests/unit/fixtures. A chosen file that jpegz does not
+already call valid is refused.
+
+Exit 0: campaign finished with no crash, timeout or I/O error.
+Exit 1: campaign finished, and at least one case crashed, timed out or hit I/O.
+Exit 2: usage, a missing tool, or a fixture that is not known-good.
+EOF
+}
+
+rounds=100
+master=0x6a7065677a
+profiles=sniper,bolter,shotgun,nuke
+jobs=1
+timeout_secs=30
+out_dir=
+fixtures=()
+help=0
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		-h|--help) help=1; shift ;;
+		--rounds) rounds=${2:-}; shift 2 ;;
+		--master) master=${2:-}; shift 2 ;;
+		--profiles) profiles=${2:-}; shift 2 ;;
+		--jobs) jobs=${2:-}; shift 2 ;;
+		--timeout) timeout_secs=${2:-}; shift 2 ;;
+		--out-dir) out_dir=${2:-}; shift 2 ;;
+		--) shift; break ;;
+		-*) echo "corruption-coverage: unknown option $1" >&2; exit 2 ;;
+		*) fixtures+=("$1"); shift ;;
+	esac
+done
+while [[ $# -gt 0 ]]; do fixtures+=("$1"); shift; done
+
+if [[ $help -eq 1 ]]; then
+	usage
+	exit 0
+fi
+
+positive() {
+	case ${1:-} in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[[ $1 -ge 1 ]]
+}
+positive "$rounds" || { echo "corruption-coverage: --rounds must be an integer >= 1" >&2; exit 2; }
+positive "$jobs" || { echo "corruption-coverage: --jobs must be an integer >= 1" >&2; exit 2; }
+positive "$timeout_secs" || { echo "corruption-coverage: --timeout must be an integer >= 1" >&2; exit 2; }
+[[ -n $master && -n $profiles ]] || { echo "corruption-coverage: --master and --profiles must be non-empty" >&2; exit 2; }
+
+jpegz=${JPEGZ:-}
+cr=${CORRUPTION_READER:-}
+stats=${JPEGZ_COVERAGE_STATS:-}
+
+if [[ -z $jpegz || -z $cr || -z $stats ]]; then
+	if [[ -z ${JPEGZ_COVERAGE_INNER:-} ]]; then
+		export JPEGZ_COVERAGE_INNER=1
+		exec nix develop "$root" -c "$0" "${orig_args[@]}"
+	fi
+fi
+
+if [[ -z $stats ]]; then
+	stats=$root/zig-out/bin/jpegz-coverage-stats
+	if [[ ! -x $stats ]]; then
+		nix develop "$root" -c zig build coverage-stats --prefix "$root/zig-out" >&2 || exit 2
+	fi
+fi
+if [[ -z $jpegz ]]; then
+	jpegz=$root/zig-out/bin/jpegz
+	if [[ ! -x $jpegz ]]; then
+		echo "corruption-coverage: jpegz is not built. Run ./build, then retry." >&2
+		exit 2
+	fi
+fi
+if [[ -z $cr ]] && command -v corruption-reader >/dev/null 2>&1; then
+	cr=$(command -v corruption-reader)
+fi
+about=
+if [[ -n $cr ]]; then
+	about=$("$cr" --about 2>/dev/null | head -n 1 || true)
+fi
+case $about in
+	"corruption-reader 0."[7-9]*|"corruption-reader "[1-9]*) ;;
+	*)
+		reader=$(nix build "$root/tools/coverage" --no-link --print-out-paths 2>/dev/null)/bin/corruption-reader
+		if [[ ! -x $reader ]]; then
+			echo "corruption-coverage: need corruption-reader 0.7 or newer (consumer CLI). PATH has: ${about:-none}" >&2
+			echo "corruption-coverage: nix build $root/tools/coverage failed or is not locked." >&2
+			exit 2
+		fi
+		cr=$reader
+		;;
+esac
+
+command -v timeout >/dev/null 2>&1 || { echo "corruption-coverage: timeout is not on PATH" >&2; exit 2; }
+
+if [[ ${#fixtures[@]} -eq 0 ]]; then
+	fixtures=(
+		"$root/tests/unit/fixtures/baseline_2x2_rgb.jpg"
+		"$root/tests/unit/fixtures/jpegls_4x4_gray8.jls"
+		"$root/tests/unit/fixtures/jp2_8x8_rgb.jp2"
+		"$root/tests/unit/fixtures/jxl_delta_palette_valid.jxl"
+	)
+fi
+
+if [[ -z $out_dir ]]; then
+	out_dir=$(mktemp -d "${TMPDIR:-/tmp}/jpegz-corruption-coverage.XXXXXX")
+fi
+mkdir -p "$out_dir/cases"
+work=$out_dir/work
+mkdir -p "$work"
+
+verdict_of() {
+	printf '%s\n' "$1" | sed -n 's/.*"verdict":"\([^"]*\)".*/\1/p' | head -n 1
+}
+
+# Pristine gate. A fixture jpegz does not already call valid cannot be a control.
+for fixture in "${fixtures[@]}"; do
+	pristine=$("$jpegz" --json --no-color "$fixture" 2>"$work/pristine.err")
+	rc=$?
+	verdict=$(verdict_of "$pristine")
+	if [[ $rc -ne 0 || $verdict != valid ]]; then
+		echo "corruption-coverage: not known-good (rc=$rc verdict=${verdict:-none}): $fixture" >&2
+		exit 2
+	fi
+	bytes=$(wc -c < "$fixture" | tr -d ' ')
+	if [[ $bytes -lt 4096 ]]; then
+		echo "note: $fixture is $bytes bytes. nuke's 4096-byte window does not fit, so that profile replaces the whole file. shotgun skips inputs shorter than 32 bytes." >&2
+	fi
+done
+
+validate_one() {
+	local path=$1 out rc verdict
+	out=$(timeout "$timeout_secs" "$jpegz" --json --no-color "$path" 2>/dev/null)
+	rc=$?
+	verdict=$(printf '%s\n' "$out" | sed -n 's/.*"verdict":"\([^"]*\)".*/\1/p' | head -n 1)
+	printf '%s\t%s\t%s\n' "$path" "$rc" "$verdict"
+	rm -f -- "$path"
+}
+export -f validate_one verdict_of
+export jpegz timeout_secs
+
+IFS=',' read -r -a profile_list <<< "$profiles"
+batch_args=()
+batch_i=0
+for fixture in "${fixtures[@]}"; do
+	for profile in "${profile_list[@]}"; do
+		[[ -n $profile ]] || { echo "corruption-coverage: empty profile name" >&2; exit 2; }
+		batch_i=$((batch_i + 1))
+		report=$work/batch-$batch_i.report.jsonl
+		paths=$work/batch-$batch_i.paths
+		results=$work/batch-$batch_i.results.tsv
+		: > "$results"
+		"$cr" corrupt "$profile" --master "$master" --round 0 --count "$rounds" \
+			--emit tmp --tmp-dir "$out_dir/cases" --omit-noop --report "$report" \
+			"$fixture" > "$paths"
+		cr_rc=$?
+		if [[ $cr_rc -ne 0 && $cr_rc -ne 3 ]]; then
+			echo "corruption-coverage: corruption-reader exited $cr_rc for $profile $fixture" >&2
+			exit 2
+		fi
+		if [[ $jobs -eq 1 ]]; then
+			while IFS= read -r path; do
+				[[ -n $path ]] || continue
+				validate_one "$path"
+			done < "$paths" >> "$results"
+		else
+			xargs -r -P "$jobs" -n 1 bash -c 'validate_one "$1"' _ < "$paths" >> "$results"
+		fi
+		batch_args+=(--batch "$fixture" "$profile" "$report" "$results")
+	done
+done
+
+table=$out_dir/corruption_coverage.txt
+summary=$out_dir/corruption_coverage.ndjson
+survivors=$out_dir/corruption_coverage_survivors.ndjson
+"$stats" --table "$table" --summary "$summary" --survivors "$survivors" "${batch_args[@]}"
+stats_rc=$?
+cat "$table"
+echo "master=$master" >&2
+echo "summary=$summary" >&2
+echo "survivors=$survivors" >&2
+echo "replay: corruption-reader corrupt PROFILE --master $master --round ROUND -o case.bin FIXTURE" >&2
+exit "$stats_rc"

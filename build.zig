@@ -819,6 +819,30 @@ pub fn build(b: *std.Build) void {
     cli_tests.addFileArg(cli_exe.getEmittedBin());
     cli_tests.step.dependOn(&cli_exe.step);
     test_step.dependOn(&cli_tests.step);
+
+    // Corruption-coverage statistics are std-only. The Bash driver is checked
+    // with fakes, so this does not fetch corruption-reader or run a campaign.
+    const coverage_mod = b.createModule(.{
+        .root_source_file = b.path("tools/coverage_stats.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
+    const coverage_tests = b.addTest(.{
+        .name = "coverage_stats",
+        .root_module = coverage_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(coverage_tests).step);
+    test_build_step.dependOn(&coverage_tests.step);
+    const coverage_exe = b.addExecutable(.{
+        .name = "jpegz-coverage-stats",
+        .root_module = coverage_mod,
+    });
+    const coverage_install = b.addInstallArtifact(coverage_exe, .{});
+    b.step("coverage-stats", "Build the corruption-coverage statistics tool").dependOn(&coverage_install.step);
+    const coverage_cli = b.addSystemCommand(&.{ "bash", "tests/cli/corruption_coverage.bash" });
+    coverage_cli.addFileArg(coverage_exe.getEmittedBin());
+    coverage_cli.step.dependOn(&coverage_exe.step);
+    test_step.dependOn(&coverage_cli.step);
     // ============================================================
     // `zig build cleanroom-diff` — non-committed analysis tool that
     // walks a directory of JPEGs and diffs cleanroom vs. wrapper
