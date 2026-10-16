@@ -14,7 +14,8 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [x] Repin JP2Z to published head `91264891`, regenerate the Zig dependency closure hash, pass complete local gates, and publish `8d325c6`; Mechatron Prime passed the exact commit in 14 seconds (done 2026-10-10 20:14 EDT).
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; do not change settings unasked.
 - [x] Add ./corruption-coverage for sniper, bolter, shotgun and nuke, with a pristine gate and Wilson 95% intervals over judged cases only; a 100-round live run on baseline_2x2_rgb.jpg passed with corruption-reader 0.7.0 (done 2026-10-15 14:20 EDT).
-- [ ] Reconcile the October 14 inbox with published f1a255a, preserve explicit holds, advance one unblocked milestone and send the coordinator a receipt with any genuine owner decisions.
+- [x] Release the JPEG provider hold for published-pin adoption. Freshness gates stay, with no stale override and no placeholder hash. The non-luma sampling packet stays held (done 2026-10-15 22:35 EDT).
+- [ ] Reconcile the October 14 inbox with published f1a255a and later yolo c8937a7. The provider hold is released for pin adoption and the sampling packet stays held. Advance one unblocked milestone and send the coordinator a receipt with any genuine owner decisions.
 - [x] Send the requested safe checkpoint with the JP2 red witness, dirty source state and completed Nix hash-job receipt; leave adoption uncommitted and the sampling packet held (done 2026-10-10 00:29 EDT).
 - [x] Adopt the SIZ tile-origin regression on jp2z 434b9d53 without restoring draft pin 54531e26; ARM64 link gates pass in ./test (done 2026-10-15 14:56 EDT, context: docs/measurements/jp2-tile-origin-2026-10-10.md).
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
@@ -25,7 +26,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Priority: Validate September 30 work order
 
-- [x] Fix partial plane/coefficient allocation leaks; sweep every allocation failure in 8/12-bit RGB, RGB passthrough, subsampled RGB and CMYK decodes (done 2026-09-30 02:57 EDT).
 - [ ] Reproduce and fix the non-luma-dominant sampling panic with synthetic inputs and valid sampling controls; return typed failure or support the layout without out-of-bounds access.
 - [ ] Reproduce SOF1 with component ids 0/1/2 and Huffman table pairs 0/1/2; accept legal table ids 0-3 and distinguish any remaining private-stream failure.
 - [ ] Verify JP2 leaf offset semantics; preserve exact in-buffer offsets and represent EOF or declared extents without claiming nonexistent byte locations.
