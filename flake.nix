@@ -144,8 +144,8 @@
         charlsSrc = pkgs.fetchFromGitHub {
           owner = "team-charls";
           repo = "charls";
-          rev = "5f54145968ff51c3ff84896c2ec8e422154a69cf";
-          hash = "sha256-wMUQuuZOzMJWD/JK5EmhGI0BjrqKZHljfyo6UhRoZsg=";
+          rev = "b2beeae98d850a6456e465c4c6bba49f90d270ee";
+          hash = "sha256-6ufZCsDgI28ryaWNKOixF7hLLrfstKAFGa4lGJulqH4=";
         };
 
         # When cross-targeting (musl on Linux), Zig's host NIX_LDFLAGS /
