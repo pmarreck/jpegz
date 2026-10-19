@@ -15,7 +15,10 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; do not change settings unasked.
 - [x] Add ./corruption-coverage for sniper, bolter, shotgun and nuke, with a pristine gate and Wilson 95% intervals over judged cases only; a 100-round live run on baseline_2x2_rgb.jpg passed with corruption-reader 0.7.0 (done 2026-10-15 14:20 EDT).
 - [x] Release the JPEG provider hold for published-pin adoption. Freshness gates stay, with no stale override and no placeholder hash. The non-luma sampling packet stays held (done 2026-10-15 22:35 EDT).
-- [ ] Pin published jp2z yolo a7cc185 in an administrative commit with real package and closure hashes, pass ./test and Mechatron Prime, and send tiffz, rawz and Validate the SHA, package hash and CI result.
+- [x] Pin published jp2z yolo a7cc185 in an administrative commit with real package and closure hashes, pass ./test and Mechatron Prime, and send tiffz, rawz and Validate the SHA, package hash and CI result (done 2026-10-18 22:52 EDT, bc01093, CI 117 s).
+- [x] Refresh CharLS b2beeae, nixpkgs f20cd90 and zig-overlay e7e40b6 with the package hash unchanged (done 2026-10-18 23:30 EDT, ae68443).
+- [x] Re-lock tools/coverage to corruption_reader 3ea60b7 and make zig-overlay follow a current flake-compat; ./test and a 5-round real-tool coverage smoke run pass (done 2026-10-18 23:58 EDT).
+- [ ] Re-lock tools/coverage once performance_profiling publishes a refreshed lock (printable_binary 3f697d5 behind cdefa95); that project has no running agent, note is in its inbox.
 - [ ] Reconcile the October 14 inbox with published f1a255a and later yolo c8937a7. The provider hold is released for pin adoption and the sampling packet stays held. Advance one unblocked milestone and send the coordinator a receipt with any genuine owner decisions.
 - [x] Send the requested safe checkpoint with the JP2 red witness, dirty source state and completed Nix hash-job receipt; leave adoption uncommitted and the sampling packet held (done 2026-10-10 00:29 EDT).
 - [x] Adopt the SIZ tile-origin regression on jp2z 434b9d53 without restoring draft pin 54531e26; ARM64 link gates pass in ./test (done 2026-10-15 14:56 EDT, context: docs/measurements/jp2-tile-origin-2026-10-10.md).
@@ -24,6 +27,11 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Mirror approved JP2 finding 261 with a red mapping/ABI regression and conditional-severity controls for 252; do not retry the held sampling research.
 - [x] Refresh direct codec source pins and the transitive Zig/Nix lock graph against live upstream heads; update hashes, fix CharLS/Brotli build compatibility, pass tests/build and retain the queued strictness work (done 2026-10-08 21:12 EDT).
 - [x] Retain the latest Zig 0.16.x release, refresh the overlay, track nixpkgs-unstable within seven days of its head and treat newer-series requirements as advisory (done 2026-10-08 21:12 EDT).
+
+## Priority: Validate false FAILs and labels (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md)
+
+- [ ] Fix the false FAIL on a valid three-scan non-interleaved sequential JPEG (cjpeg -scans 0;1;2) with a red legal test and a malformed undefined-table counterpart.
+- [ ] Give restart-after-final-MCU, interval-boundary truncation and non-1 padding their own registry-numbered finding codes with exact offsets, keeping FAIL severity.
 
 ## Priority: Validate September 30 work order
 

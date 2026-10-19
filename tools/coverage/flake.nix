@@ -9,7 +9,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     corruption-reader = {
-      url = "git+ssh://git@github.com/pmarreck/corruption_reader?rev=ac62a738a17ca61a8c74f57952138972ce66b7b6";
+      url = "git+ssh://git@github.com/pmarreck/corruption_reader?rev=3ea60b7ca7eeb37f2551d93bf01796e29ec2b389";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

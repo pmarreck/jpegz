@@ -10,16 +10,16 @@
         "random": "random"
       },
       "locked": {
-        "lastModified": 1792084689,
-        "narHash": "sha256-oqB7sNQb/56q/hsurghUdgPLPj4UsRGw6Q01k5uTfWs=",
+        "lastModified": 1792379621,
+        "narHash": "sha256-dwYLTcP6rwfp/PZWS5E6iGkf805eYQ8U1VJxqsHKKug=",
         "ref": "refs/heads/yolo",
-        "rev": "ac62a738a17ca61a8c74f57952138972ce66b7b6",
-        "revCount": 83,
+        "rev": "3ea60b7ca7eeb37f2551d93bf01796e29ec2b389",
+        "revCount": 84,
         "type": "git",
         "url": "ssh://git@github.com/pmarreck/corruption_reader"
       },
       "original": {
-        "rev": "ac62a738a17ca61a8c74f57952138972ce66b7b6",
+        "rev": "3ea60b7ca7eeb37f2551d93bf01796e29ec2b389",
         "type": "git",
         "url": "ssh://git@github.com/pmarreck/corruption_reader"
       }
@@ -42,27 +42,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1787736819,
-        "narHash": "sha256-cV5xEJJK3BvhU8rEd4mC9UsmDi5qscv/kzGPhBRC5WA=",
+        "lastModified": 1792116957,
+        "narHash": "sha256-EjZqHKObBfIOeHZnMRVV87HB3pPq/WBkmRJWyFxmZu8=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "9fbb54b33e91ee4ca368e35a78e0613c720600b3",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "9fbb54b33e91ee4ca368e35a78e0613c720600b3",
-        "type": "github"
-      }
-    },
-    "nixpkgs_2": {
-      "locked": {
-        "lastModified": 1791966044,
-        "narHash": "sha256-t1hT8UW97rFCWCJO7/pClvu0AhLN5V3uir2M0ic4w/Q=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "319e4cebef10cbb636c6ea392137b52ad105336a",
+        "rev": "f20cd90e28fe0403873f473b29e42662cd86e8c4",
         "type": "github"
       },
       "original": {
@@ -75,7 +59,10 @@
     "performance-profiling": {
       "inputs": {
         "dotfiles": "dotfiles",
-        "nixpkgs": "nixpkgs",
+        "nixpkgs": [
+          "corruption-reader",
+          "nixpkgs"
+        ],
         "printable-binary": "printable-binary"
       },
       "locked": {
@@ -147,7 +134,7 @@
     "root": {
       "inputs": {
         "corruption-reader": "corruption-reader",
-        "nixpkgs": "nixpkgs_2"
+        "nixpkgs": "nixpkgs"
       }
     }
   },

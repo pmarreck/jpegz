@@ -16,10 +16,17 @@
     zig-overlay = {
       url = "github:mitchellh/zig-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-compat.follows = "flake-compat";
+    };
+    # Lock zig-overlay's flake-compat here so it tracks its head rather
+    # than whatever zig-overlay last locked. Only its default.nix uses it.
+    flake-compat = {
+      url = "github:edolstra/flake-compat";
+      flake = false;
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, zig-overlay, libjxlz-src }:
+  outputs = { self, nixpkgs, flake-utils, zig-overlay, libjxlz-src, ... }:
     flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (system:
       let
         pkgs = import nixpkgs { inherit system; };

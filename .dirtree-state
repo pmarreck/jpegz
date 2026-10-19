@@ -28,6 +28,7 @@ annotate=[
 	docs/measurements/prior-art/AcBoundaryProbe.java = Four synthetic AC category comparison fixtures
 	docs/measurements/prior-art/PriorArtProbe.java = Optional pinned Java validator experiment adapter
 	docs/plan_context/pre-canon-2026-09-24.md = Preserved queue evidence and decisions before Canon SOF3 work
+	docs/plan_context/validate-findings-2026-09-27-to-10-14.md = Validate JPEG work orders and false-positive repro data, Sept 27-Oct 14 2026
 	docs/superpowers/specs = Frozen design specs (public API, 12-bit precision, arithmetic, JPEG-LS, etc.)
 	flake.nix = Nix packages, offline checks and dev shell; Zig 0.16.0 with immutable upstream-head codec pins
 	include/jpegz_core.h = Hand-curated public C ABI header (jpegz_decode/validate/free/version)
