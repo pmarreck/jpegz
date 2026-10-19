@@ -176,7 +176,7 @@
         # offline Zig cache from this source-bearing output; never publish
         # it to a public binary cache. This must stay the real fixed-output
         # hash for the current build.zig.zon. Never commit a placeholder.
-        zigDepsHash = "sha256-n86bl1BO1NcPy8YAV/sLAUTGcfndo4LfpxAbwVBivRY=";
+        zigDepsHash = "sha256-1v/6bnPMmMm58D/+1M6nOIrnqWIcVy5Hq0OFFpbo/ts=";
         zigDeps = assert pkgs.lib.hasInfix "archive/${libjxlz-src.rev}.tar.gz"
           (builtins.readFile ./build.zig.zon); pkgs.stdenv.mkDerivation {
           pname = "jpegz-zig-deps";
