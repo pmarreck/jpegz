@@ -148,15 +148,28 @@ pub const BitReader = struct {
     /// Finish a Huffman-coded scan or restart segment without discarding
     /// unchecked entropy. T.81 F.1.2.3 permits at most seven all-one pad bits.
     /// Lookahead bytes count as payload; FF marker fill does not.
-    pub fn finishHuffmanSegment(self: *BitReader) error{InvalidEntropyBoundary}!u8 {
+    /// `PaddingNotOnes` means one to seven leftover bits that are not all 1;
+    /// `padByteOffset` then names their byte. `InvalidEntropyBoundary` means a
+    /// whole extra byte of entropy or no marker at the boundary.
+    pub fn finishHuffmanSegment(self: *BitReader) error{ InvalidEntropyBoundary, PaddingNotOnes }!u8 {
         if (self.bits_valid > 7) return error.InvalidEntropyBoundary;
         if (self.bits_valid != 0) {
             const mask = @as(u32, std.math.maxInt(u32)) << @intCast(32 - @as(u6, self.bits_valid));
-            if (self.buf & mask != mask) return error.InvalidEntropyBoundary;
+            if (self.buf & mask != mask) return error.PaddingNotOnes;
         }
         self.seekToMarker();
         if (!self.marker_seen) return error.InvalidEntropyBoundary;
         return self.marker_byte;
+    }
+
+    /// Byte offset in `data` of the leftover pad bits after `PaddingNotOnes`.
+    /// Bytes enter the buffer whole, so fewer than eight leftover bits are the
+    /// low bits of the latest payload byte, and refill parks `byte_pos` on a
+    /// marker rather than past it. A stuffed FF payload byte has only 1 bits,
+    /// so it can never be the byte reported here.
+    pub fn padByteOffset(self: BitReader) usize {
+        std.debug.assert(self.bits_valid != 0 and self.byte_pos != 0);
+        return self.byte_pos - 1;
     }
 
     /// Discard any padding bits in the bit buffer (per T.81 §F.1.2.3
@@ -209,7 +222,8 @@ test "Huffman boundary accepts only all-one partial-byte padding with or without
                 var bad = BitReader.init(&.{ changed, 0xff, 0xd9 });
                 _ = try bad.readBits(@intCast(8 - padding));
                 if (lookahead) _ = bad.peekBits(16);
-                try std.testing.expectError(error.InvalidEntropyBoundary, bad.finishHuffmanSegment());
+                try std.testing.expectError(error.PaddingNotOnes, bad.finishHuffmanSegment());
+                try std.testing.expectEqual(@as(usize, 0), bad.padByteOffset());
             }
         }
     }

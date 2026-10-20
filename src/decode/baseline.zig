@@ -46,16 +46,50 @@ inline fn fail(comptime tag: []const u8, err: errors.DecodeError) errors.DecodeE
     return @import("diag.zig").fail("baseline:" ++ tag, err);
 }
 
+/// Emit a typed finding at the exact in-buffer file offset of the defect
+/// byte, when a sink is attached.
+fn emitFinding(
+    options: DecodeOptions,
+    severity: errors.Severity,
+    code: errors.FindingCode,
+    offset: usize,
+    detail: []const u8,
+) Error!void {
+    if (options.findings_sink) |sink| try sink.emitExact(severity, code, @intCast(offset), detail);
+}
+
+/// Classify a Huffman segment ending (T.81 §F.1.2.3) and report it at its
+/// absolute offset: non-1 pad bits are `entropy_padding_not_ones`, and a whole
+/// extra entropy byte stays `huffman_table_corrupt`. `base` is the file offset
+/// of `br.data[0]`.
+fn reportEntropyBoundary(
+    br: *const bitstream.BitReader,
+    err: anyerror,
+    base: usize,
+    options: DecodeOptions,
+    context: []const u8,
+) Error!void {
+    if (err == error.PaddingNotOnes) {
+        try emitFinding(options, .fail, .entropy_padding_not_ones, base + br.padByteOffset(),
+            "pad bits before the marker are not all 1 (T.81 F.1.2.3)");
+    } else {
+        try emitFinding(options, .fail, .huffman_table_corrupt, base + br.byte_pos, context);
+    }
+}
+
 /// Resync the entropy stream at a restart-interval boundary
 /// (T.81 §F.2.1.3). Strict mode hard-fails on a missing or
 /// wrong-cycle RSTm marker. Lenient mode + sink emits a warn finding
 /// (`restart_marker_missing` or `restart_marker_unexpected`), resets
 /// the DC predictors, advances `expected_rst` to the next position
-/// in the 0xD0..0xD7 cycle, and continues. Any non-RST marker (EOI,
-/// DNL, premature SOF) still hard-fails so callers see real
-/// end-of-scan signals instead of pixel garbage.
+/// in the 0xD0..0xD7 cycle, and continues. EOI in place of the RST is
+/// truncation at an interval boundary (`truncated_stream`); any other
+/// non-RST marker (DNL, premature SOF) still hard-fails so callers see real
+/// end-of-scan signals instead of pixel garbage. `base` is the file offset of
+/// `br.data[0]`.
 fn handleRstResync(
     br: *bitstream.BitReader,
+    base: usize,
     expected_rst: *u8,
     prev_dc: *[4]i32,
     mcus_since_rst: *u32,
@@ -64,12 +98,10 @@ fn handleRstResync(
     // Preserve opt-in pixel recovery, but never hide discarded entropy from
     // a validator. Check a copy so lenient resynchronization retains its input.
     var boundary = br.*;
-    if (boundary.finishHuffmanSegment()) |_| {} else |_| {
+    if (boundary.finishHuffmanSegment()) |_| {} else |err| {
+        try reportEntropyBoundary(&boundary, err, base, options,
+            "invalid Huffman entropy or padding at restart boundary");
         if (!options.lenient) return fail("rst_entropy_boundary", error.BackendError);
-        if (options.findings_sink) |sink| {
-            try sink.emit(.fail, .huffman_table_corrupt, @intCast(br.byte_pos),
-                "invalid Huffman entropy or padding at restart boundary");
-        }
     }
     // Force the reader to look ahead for the marker — the bit
     // buffer may still hold padding bits that haven't triggered a
@@ -80,7 +112,7 @@ fn handleRstResync(
         if (options.lenient) {
             if (options.findings_sink) |sink| {
                 sink.emit(.warn, .restart_marker_missing,
-                    @intCast(br.byte_pos),
+                    @intCast(base + br.byte_pos),
                     "expected RSTm marker not found at restart-interval boundary; continuing with reset DC predictors")
                     catch return error.OutOfMemory;
             }
@@ -103,7 +135,7 @@ fn handleRstResync(
                        br.marker_byte - 0xD0, br.marker_byte })
                     catch buf[0..0];
                 sink.emit(.warn, .restart_marker_unexpected,
-                    @intCast(br.byte_pos), detail) catch return error.OutOfMemory;
+                    @intCast(base + br.byte_pos), detail) catch return error.OutOfMemory;
             }
             prev_dc.* = .{ 0, 0, 0, 0 };
             mcus_since_rst.* = 0;
@@ -111,6 +143,11 @@ fn handleRstResync(
             expected_rst.* = 0xD0 + ((br.marker_byte - 0xD0 + 1) & 0x07);
             br.skipPastMarker();
             return;
+        }
+        if (br.marker_byte == 0xD9) {
+            try emitFinding(options, .fail, .truncated_stream, base + br.byte_pos,
+                "EOI where a restart marker and further restart intervals belong");
+            return fail("rst_eoi_truncation", error.TruncatedStream);
         }
         return fail("rst_wrong_marker", error.InvalidMarker);
     }
@@ -422,7 +459,11 @@ fn walkToNextScan(
     while (pos.* + 1 < data.len) {
         const marker = (try nextMarker(data, pos, options)) orelse continue;
         switch (marker) {
-            0xD9 => return fail("eoi_before_all_components_scanned", error.TruncatedStream),
+            0xD9 => {
+                try emitFinding(options, .fail, .truncated_stream, pos.* - 2,
+                    "EOI before every component of the sequential frame was scanned");
+                return fail("eoi_before_all_components_scanned", error.TruncatedStream);
+            },
             0xC0...0xC3, 0xC5...0xC7, 0xC9...0xCB, 0xCD...0xCF => return fail("sof_between_scans", error.InvalidMarker),
             0xC4 => {
                 try parseDht(data, pos.*, dc_tables, ac_tables);
@@ -447,6 +488,9 @@ fn walkToNextScan(
             else => pos.* += parseSegmentLength(data, pos.*),
         }
     }
+    // data.len is not a byte of the input, so this offset is not exact.
+    if (options.findings_sink) |sink| try sink.emit(.fail, .truncated_stream, data.len,
+        "data ended before every component of the sequential frame was scanned");
     return fail("eof_before_all_components_scanned", error.TruncatedStream);
 }
 
@@ -466,6 +510,8 @@ const parseDht = jpeg_markers.parseDht;
 pub const ScanSelection = struct {
     count: u8,
     comp: [4]u8,
+    /// File offset of each Csj byte, for findings that name a selector.
+    cs_pos: [4]usize,
 };
 
 /// Parse an SOS header and latch each selected component's Td/Ta tables.
@@ -478,7 +524,7 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanSelec
     const ns = data[pos + 2];
     if (ns == 0 or ns > frame.num_components) return fail("sos_bad_ns", error.InvalidMarker);
     if (seg_len != 6 + @as(usize, ns) * 2) return fail("sos_bad_length", error.InvalidMarker);
-    var scan: ScanSelection = .{ .count = ns, .comp = .{ 0, 0, 0, 0 } };
+    var scan: ScanSelection = .{ .count = ns, .comp = .{ 0, 0, 0, 0 }, .cs_pos = .{ 0, 0, 0, 0 } };
     var i: usize = 0;
     while (i < ns) : (i += 1) {
         const off = pos + 3 + i * 2;
@@ -506,6 +552,7 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanSelec
         frame.components[j].dc_table = td;
         frame.components[j].ac_table = ta;
         scan.comp[i] = @intCast(j);
+        scan.cs_pos[i] = off;
     }
     // Ss/Se/Ah/Al in the last 3 bytes — for baseline they're 0/63/0/0.
     return scan;
@@ -543,14 +590,15 @@ const ScanEnd = struct {
 /// ceil(Y·Vi/(8·Vmax)) blocks, one block per MCU, so restart intervals count
 /// blocks. A single-component frame is always the non-interleaved case.
 fn decodeScanEntropy(
-    entropy: []const u8,
+    data: []const u8,
+    base: usize,
     frame: *const FrameInfo,
     scan: ScanSelection,
     grid: CoefGrid,
     tables: ScanTables,
     options: DecodeOptions,
 ) Error!ScanEnd {
-    var br = bitstream.BitReader.init(entropy);
+    var br = bitstream.BitReader.init(data[base..]);
     var prev_dc: [4]i32 = .{ 0, 0, 0, 0 };
     var mcus_since_rst: u32 = 0;
     var expected_rst: u8 = 0xD0;
@@ -566,7 +614,7 @@ fn decodeScanEntropy(
             var mcu_x: u32 = 0;
             while (mcu_x < grid.mcu_cols) : (mcu_x += 1) {
                 if (restart_interval > 0 and mcus_since_rst == restart_interval) {
-                    try handleRstResync(&br, &expected_rst, &prev_dc, &mcus_since_rst, options);
+                    try handleRstResync(&br, base, &expected_rst, &prev_dc, &mcus_since_rst, options);
                 }
                 for (scan.comp[0..scan.count]) |ci| {
                     const comp = &frame.components[ci];
@@ -600,7 +648,7 @@ fn decodeScanEntropy(
             var bx: u32 = 0;
             while (bx < xi) : (bx += 1) {
                 if (restart_interval > 0 and mcus_since_rst == restart_interval) {
-                    try handleRstResync(&br, &expected_rst, &prev_dc, &mcus_since_rst, options);
+                    try handleRstResync(&br, base, &expected_rst, &prev_dc, &mcus_since_rst, options);
                 }
                 const linear: usize = (@as(usize, by) * @as(usize, grid.blocks_w[ci]) + @as(usize, bx)) * 64;
                 try decodeBlockCoefficients(&br, ci, comp, tables.dc, tables.ac, tables.quant,
@@ -613,9 +661,16 @@ fn decodeScanEntropy(
     // Account for every entropy bit before handing the marker back. Recovered
     // truncation already has an insufficient_data finding in the legacy API.
     if (!lenient_state.truncation_seen) {
-        const marker = br.finishHuffmanSegment() catch return fail("scan_entropy_boundary", error.BackendError);
-        if (marker >= 0xD0 and marker <= 0xD7)
+        const marker = br.finishHuffmanSegment() catch |err| {
+            try reportEntropyBoundary(&br, err, base, options, "invalid Huffman entropy or padding at end of scan");
+            return fail("scan_entropy_boundary", error.BackendError);
+        };
+        // T.81 §B.2.1: a restart marker follows every entropy-coded segment except the last.
+        if (marker >= 0xD0 and marker <= 0xD7) {
+            try emitFinding(options, .fail, .restart_marker_unexpected, base + br.byte_pos,
+                "restart marker after the final MCU of the scan");
             return fail("rst_after_final_mcu", error.BackendError);
+        }
     }
     return .{ .consumed = br.byte_pos, .truncated = lenient_state.truncation_seen };
 }
@@ -757,11 +812,15 @@ fn decodeScanT(
     var scan_start = entropy_start;
     var coded: [4]bool = .{ false, false, false, false };
     while (true) {
-        for (scan.comp[0..scan.count]) |ci| {
-            if (coded[ci]) return fail("scan_component_already_coded", error.InvalidMarker);
+        for (scan.comp[0..scan.count], scan.cs_pos[0..scan.count]) |ci, cs_pos| {
+            if (coded[ci]) {
+                try emitFinding(options, .fail, .sos_component_mismatch, cs_pos,
+                    "scan selects a component an earlier scan of this sequential frame already coded");
+                return fail("scan_component_already_coded", error.InvalidMarker);
+            }
             coded[ci] = true;
         }
-        const end = try decodeScanEntropy(data[scan_start..], frame, scan, grid, tables, options);
+        const end = try decodeScanEntropy(data, scan_start, frame, scan, grid, tables, options);
         // Recovered truncation leaves later components at zero, as libjpeg does.
         if (end.truncated) break;
         if (std.mem.allEqual(bool, coded[0..channels], true)) break;

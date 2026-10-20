@@ -50,18 +50,30 @@ pub const FindingsSink = struct {
         offset: ?u64,
         detail: ?[]const u8,
     ) Allocator.Error!void {
+        return self.append(.{ .severity = severity, .code = code, .offset = offset }, detail);
+    }
+
+    /// Like `emit`, for an offset that names the exact in-buffer defect byte.
+    pub fn emitExact(
+        self: *FindingsSink,
+        severity: Severity,
+        code: FindingCode,
+        offset: u64,
+        detail: ?[]const u8,
+    ) Allocator.Error!void {
+        return self.append(.{ .severity = severity, .code = code, .offset = offset, .offset_is_exact = true }, detail);
+    }
+
+    fn append(self: *FindingsSink, finding: Finding, detail: ?[]const u8) Allocator.Error!void {
         const stored: ?[]const u8 = if (detail) |d|
             try self.allocator.dupe(u8, d)
         else
             null;
         errdefer if (stored) |s| self.allocator.free(s);
 
-        try self.list.append(self.allocator, .{
-            .severity = severity,
-            .code = code,
-            .offset = offset,
-            .detail = stored,
-        });
+        var owned = finding;
+        owned.detail = stored;
+        try self.list.append(self.allocator, owned);
     }
 
     pub fn items(self: *const FindingsSink) []const Finding {

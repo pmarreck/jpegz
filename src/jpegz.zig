@@ -125,6 +125,9 @@ pub const Finding = struct {
     /// Byte offset in `data` where the issue was detected, if known.
     /// 0 is a legitimate offset; `null` means "didn't apply / unknown".
     offset: ?u64 = null,
+    /// True when `offset` names the exact in-buffer byte of the defect, not
+    /// an approximate position such as the end of the data.
+    offset_is_exact: bool = false,
     /// Optional human-readable detail. Allocated from the report's
     /// allocator; freed by `ValidationReport.deinit()`. `null` = no detail.
     detail: ?[]const u8 = null,
@@ -523,6 +526,7 @@ fn strictFromReport(
             .code = finding.code,
             .severity = finding.severity,
             .offset = finding.offset,
+            .offset_is_exact = finding.offset_is_exact,
             .detail = detail,
         });
     }

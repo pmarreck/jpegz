@@ -462,6 +462,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         // shape used by the marker walker, so the report is uniform.
         for (sink.items()) |f| {
             try addFinding(&report, allocator, f.severity, f.code, f.offset, f.detail);
+            report.findings.items[report.findings.items.len - 1].offset_is_exact = f.offset_is_exact;
         }
 
         if (result) |_| {
@@ -479,7 +480,12 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             error.OutOfMemory => return error.OutOfMemory,
             else => {
                 report.codec_check = .failed;
-                try addFinding(&report, allocator, .fail,
+                // A decoder that already named the defect with an exact
+                // offset needs no second, generic bucket for the same stop.
+                const typed = for (sink.items()) |f| {
+                    if (f.severity == .fail) break true;
+                } else false;
+                if (!typed) try addFinding(&report, allocator, .fail,
                     mapDecodeErrorToFindingCode(err), null, @errorName(err));
             },
         }

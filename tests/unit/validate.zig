@@ -350,6 +350,24 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 	}
 }
 
+/// Assert the report names `code` as a FAIL at exactly `offset`, and does not
+/// also fall back to the generic huffman_table_corrupt bucket.
+fn expectOnlyTypedFail(report: jpegz.ValidationReport, code: jpegz.FindingCode, offset: u64) !void {
+	var found = false;
+	for (report.findings.items) |f| {
+		if (f.severity == .fail and f.code == code and f.offset == offset) found = true;
+		if (f.code == .huffman_table_corrupt) {
+			std.debug.print("generic huffman_table_corrupt alongside {s}\n", .{@tagName(code)});
+			return error.TestUnexpectedResult;
+		}
+	}
+	if (!found) {
+		for (report.findings.items) |f| std.debug.print("  got {s} {s} @{?d}\n", .{ @tagName(f.severity), @tagName(f.code), f.offset });
+		std.debug.print("expected FAIL {s} @{d}\n", .{ @tagName(code), offset });
+		return error.TestUnexpectedResult;
+	}
+}
+
 test "sequential entropy bounds classify legal endings and malformed runs" {
 	// T.81 F.1.2.2 / F.2.2.2: ZRL represents exactly 16 AC zeros;
 	// the block has 63 AC positions. Independent specification:
@@ -370,6 +388,11 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		restart: ?u8 = null,
 		legacy_valid: ?bool = null,
 		recoverable_boundary_error: bool = false,
+		// Typed FAIL the validator must name instead of huffman_table_corrupt,
+		// at an absolute file offset. Entropy starts at 141, or 147 with DRI.
+		code: ?jpegz.FindingCode = null,
+		offset: u64 = 0,
+		decode_error: anyerror = error.BackendError,
 	}{
 		// Explicit bit strings, padded with ones; no test-side entropy encoder.
 		.{ .entropy = &.{0x0f}, .verdict = .valid }, // DC, EOB
@@ -379,18 +402,19 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		.{ .entropy = &.{ 0x12, 0x57 }, .verdict = .valid }, // 3 ZRL, E1(+1): nonzero at 63
 		.{ .entropy = &.{ 0x12, 0x4f }, .verdict = .corrupt }, // 4 ZRL: 64 zeros in 63 slots
 		.{ .entropy = &.{ 0x12, 0x5f }, .verdict = .corrupt }, // 3 ZRL, F1(+1): nonzero at 64
-		.{ .entropy = &.{0x0e}, .verdict = .corrupt }, // One zero in the four final padding bits.
+		.{ .entropy = &.{0x0e}, .verdict = .corrupt, .code = .entropy_padding_not_ones, .offset = 141 }, // One zero in the four final padding bits.
 		.{ .entropy = &.{ 0x0f, 0x00 }, .verdict = .corrupt }, // Extra whole entropy byte.
 		.{ .entropy = &.{ 0x0f, 0xff, 0x00 }, .verdict = .corrupt }, // Stuffed extra payload is not marker fill.
-		.{ .entropy = &.{0x00}, .verdict = .corrupt }, // Two blocks where geometry requires one.
+		.{ .entropy = &.{0x00}, .verdict = .corrupt, .code = .entropy_padding_not_ones, .offset = 141 }, // Second block's bits sit where padding must be ones.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xff }, .verdict = .valid }, // Legal fill before EOI.
-		.{ .entropy = &.{ 0x0f, 0xff, 0xd0 }, .verdict = .corrupt }, // No restart after the final MCU.
+		.{ .entropy = &.{ 0x0f, 0xff, 0xd0 }, .verdict = .corrupt, .code = .restart_marker_unexpected, .offset = 142 }, // No restart after the final MCU.
 		.{ .entropy = &.{0x00}, .width = 16, .verdict = .valid }, // Two blocks exactly fill one byte.
 		.{ .entropy = &.{ 0x00, 0x0f }, .width = 17, .verdict = .valid }, // Partial edge MCU is still a whole block.
 		.{ .entropy = &.{0x0f}, .restart = 2, .verdict = .valid }, // Final short interval needs no RST.
-		.{ .entropy = &.{ 0x0f, 0xff, 0xd0 }, .restart = 1, .verdict = .corrupt },
+		.{ .entropy = &.{ 0x0f, 0xff, 0xd0 }, .restart = 1, .verdict = .corrupt, .code = .restart_marker_unexpected, .offset = 148 },
+		.{ .entropy = &.{0x0f}, .width = 16, .restart = 1, .verdict = .corrupt, .code = .truncated_stream, .offset = 148, .decode_error = error.TruncatedStream }, // EOI where RST0 and a second interval belong.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
-		.{ .entropy = &.{ 0x0e, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt, .recoverable_boundary_error = true },
+		.{ .entropy = &.{ 0x0e, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt, .recoverable_boundary_error = true, .code = .entropy_padding_not_ones, .offset = 147 },
 		.{ .entropy = &.{ 0x0f, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
 		.{ .entropy = &.{ 0x0f, 0xff, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
 		.{ .entropy = &.{ 0x0f, 0xff, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
@@ -411,6 +435,7 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		var result = try jpegz.validate(allocator, data);
 		defer result.deinit(allocator);
 		try std.testing.expectEqual(case.legacy_valid orelse (case.verdict == .valid), result.isValid());
+		if (case.code) |code| try expectOnlyTypedFail(result, code, case.offset);
 		if (case.recoverable_boundary_error) {
 			var sink = jpegz.FindingsSink.init(allocator);
 			defer sink.deinit();
@@ -418,7 +443,7 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 			defer recovered.deinit(allocator);
 			var failures: usize = 0;
 			for (sink.items()) |finding| {
-				if (finding.code == .huffman_table_corrupt and finding.severity == .fail) failures += 1;
+				if (finding.code == .entropy_padding_not_ones and finding.severity == .fail and finding.offset == case.offset) failures += 1;
 			}
 			try std.testing.expectEqual(@as(usize, 1), failures);
 			try std.testing.expectEqual(@as(u32, case.width), recovered.width);
@@ -438,7 +463,7 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 				var unexpected = image;
 				unexpected.deinit(allocator);
 				return error.ExpectedDecodeFailure;
-			} else |err| try std.testing.expectEqual(error.BackendError, err);
+			} else |err| try std.testing.expectEqual(case.decode_error, err);
 		}
 	}
 }
@@ -1351,5 +1376,17 @@ test "validate rejects multi-scan sequential frames that break component coverag
 		var report = try jpegz.validate(allocator, data);
 		defer report.deinit(allocator);
 		try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
+	}
+	// Coverage violations name the SOS whose selector repeats a component
+	// (the Cs byte) or the EOI that ends the frame early.
+	const Typed = struct { data: []const u8, code: jpegz.FindingCode, offset: u64 };
+	for ([_]Typed{
+		.{ .data = &repeated, .code = .sos_component_mismatch, .offset = 661 + 5 },
+		.{ .data = &repeated_scan, .code = .sos_component_mismatch, .offset = 432 + 5 },
+		.{ .data = &early_eoi, .code = .truncated_stream, .offset = 661 },
+	}) |c| {
+		var report = try jpegz.validate(allocator, c.data);
+		defer report.deinit(allocator);
+		try expectOnlyTypedFail(report, c.code, c.offset);
 	}
 }

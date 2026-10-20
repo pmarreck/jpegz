@@ -822,3 +822,44 @@ test "a JP2 with a destroyed signature box is not misdiagnosed as a JPEG missing
 		if (finding.code) |code| try std.testing.expect(code != .missing_soi);
 	}
 }
+
+test "JPEG facade marks typed sequential-DCT failures with exact offsets" {
+	// Validate's 2026-09-30 repro: a 16x16 4:2:0 ImageMagick JPEG whose last
+	// entropy byte (offset 293, before EOI) became 0x40, so the pad bits are
+	// zeros (T.81 F.1.2.3). Then two coverage violations of a split-scan frame.
+	const pad_hex = "ffd8ffe000104a46494600010100000100010000ffdb004300100b0c0e0c0a10" ++
+		"0e0d0e1211101318281a181616183123251d283a333d3c3933383740485c4e40" ++
+		"4457453738506d51575f626768673e4d71797064785c656763ffdb0043011112" ++
+		"121815182f1a1a2f634238426363636363636363636363636363636363636363" ++
+		"636363636363636363636363636363636363636363636363636363636363ffc0" ++
+		"0011080010001003012200021101031101ffc400160001010100000000000000" ++
+		"000000000000000405ffc4001510010100000000000000000000000000000013" ++
+		"ffc40014010100000000000000000000000000000005ffc40016110003000000" ++
+		"0000000000000000000000001561ffda000c03010002110311003f00c0a95455" ++
+		"2a5144196940ffd9";
+	var pad_bytes: [296]u8 = undefined;
+	const padded = try std.fmt.hexToBytes(&pad_bytes, pad_hex);
+	const seq = @embedFile("fixtures/seq_16x16_3scan.jpg");
+	var repeated = seq.*;
+	repeated[661 + 5] = 2; // component 2 coded twice
+	const early_eoi = seq[0..661].* ++ [_]u8{ 0xff, 0xd9 };
+	const Case = struct { data: []const u8, code: jpegz.FindingCode, offset: u64 };
+	for ([_]Case{
+		.{ .data = padded, .code = .entropy_padding_not_ones, .offset = 293 },
+		.{ .data = &repeated, .code = .sos_component_mismatch, .offset = 666 },
+		.{ .data = &early_eoi, .code = .truncated_stream, .offset = 661 },
+	}) |c| {
+		var result = try jpegz.validateAny(std.testing.allocator, c.data);
+		defer result.deinit(std.testing.allocator);
+		try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
+		var exact = false;
+		for (result.findings.items) |finding| {
+			if (finding.code == c.code and finding.severity == .fail and finding.offset == c.offset and finding.offset_is_exact) exact = true;
+			try std.testing.expect(finding.code != .huffman_table_corrupt);
+		}
+		if (!exact) {
+			std.debug.print("no exact {s} @{d}\n", .{ @tagName(c.code), c.offset });
+			return error.TestUnexpectedResult;
+		}
+	}
+}

@@ -108,6 +108,11 @@ pub const FindingCode = enum(u32) {
     // decoder (like libjpeg without DNL support) rejects. Fires at the
     // marker walk for every variant, before the codec decode-through.
     invalid_dimensions = 61,
+    // T.81 §F.1.2.3: the bits that complete a Huffman-coded segment's final
+    // byte before a marker shall be 1s. Offset is the entropy byte holding the
+    // non-1 pad bits. Huffman sequential DCT only; arithmetic coding has no
+    // such padding. Registry sign-off 2026-10-20.
+    entropy_padding_not_ones = 62,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────
     lossless_predictor_invalid = 100,

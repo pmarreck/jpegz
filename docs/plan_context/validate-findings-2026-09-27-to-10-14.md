@@ -1,8 +1,8 @@
 # Validate findings queue, 2026-09-27 to 2026-10-14
 
 Durable record of Validate's JPEG work orders and false-positive reports from
-that period, kept here so the inbox envelopes can be retired. Original
-originals stay private to Validate; only synthetic shapes are recorded.
+that period, kept here so the inbox envelopes can be retired. The
+original files stay private to Validate; only synthetic shapes are recorded.
 
 Verdict policy for all of these: a proven violation of a normative clause is a
 FAIL, and reader tolerance never lowers it. Validate's KNOWN_DEFECT registry
@@ -13,6 +13,11 @@ unexplained damage, KNOWN_DEFECT is an admitted producer defect, WARN is no
 proven violation, limits are reach".
 
 ## Distinct finding labels (2026-10-10)
+
+Resolved for sequential Huffman DCT on 2026-10-20: 57 for a restart after the
+final MCU, 3 for EOI at an interval boundary, 62 `entropy_padding_not_ones`
+(registry-approved 2026-10-20) and 55 for split-scan coverage violations, each
+at an exact absolute offset. The 296-byte repro below reports 62 at 293.
 
 `src/core/validator.zig` maps InvalidMarker, BackendError and TruncatedStream to
 `huffman_table_corrupt`. So three different faults all reach users as "JPEG
@@ -60,6 +65,9 @@ k = 1..7, plus the same with DRI and zero-padded RST segments. Malformed
 counterparts are an extra 0x55 byte before EOI and a dropped final entropy byte.
 
 ## Valid non-interleaved sequential JPEG falsely rejected (2026-10-10)
+
+Fixed in fa75e3c (2026-10-20): the fixture below and three more split-scan
+shapes decode byte for byte like libjpeg-turbo.
 
 The input is a 16x16 RGB PPM with pixel (x, y) = ((x*16)%256, (y*16)%256,
 ((x+y)*8)%256). It is encoded with libjpeg-turbo 3.1.4.1 `cjpeg -scans seq.scans`,
