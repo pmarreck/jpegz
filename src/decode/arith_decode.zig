@@ -147,7 +147,9 @@ pub fn dumpCoefsSof9(allocator: Allocator, data: []const u8) Error!CoefDump {
             },
             0xDA => {
                 if (frame == null) return error.InvalidMarker;
-                try baseline.parseSos(data, pos, &frame.?);
+                const scan = try baseline.parseSos(data, pos, &frame.?);
+                // The SOF9 path decodes one interleaved scan; split-component frames stay out of scope.
+                if (scan.count != frame.?.num_components) return error.InvalidMarker;
                 pos += baseline.parseSegmentLength(data, pos);
                 return try dumpScanCoefsSof9(allocator, data[pos..], &frame.?, &dac_dc_L, &dac_dc_U, &dac_ac_K, restart_interval);
             },
@@ -314,7 +316,9 @@ fn decodeArithBaseline(
             },
             0xDA => { // SOS
                 if (frame == null) return error.InvalidMarker;
-                try baseline.parseSos(data, pos, &frame.?);
+                const scan = try baseline.parseSos(data, pos, &frame.?);
+                // The SOF9 path decodes one interleaved scan; split-component frames stay out of scope.
+                if (scan.count != frame.?.num_components) return error.InvalidMarker;
                 pos += baseline.parseSegmentLength(data, pos);
                 return try decodeScanSof9(
                     allocator,

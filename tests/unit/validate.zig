@@ -1304,3 +1304,52 @@ test "validate is total over every single-byte mutation of a real JPEG" {
 		}
 	}
 }
+
+const fixture_seq_16x16_3scan = @embedFile("fixtures/seq_16x16_3scan.jpg");
+const fixture_seq_17x13_420_y_cbcr_rst = @embedFile("fixtures/seq_17x13_420_y_cbcr_rst.jpg");
+const fixture_seq_23x19_422_rev_rst = @embedFile("fixtures/seq_23x19_422_rev_rst.jpg");
+const fixture_seq_23x19_rgb12_420_3scan = @embedFile("fixtures/seq_23x19_rgb12_420_3scan.jpg");
+
+test "validate accepts conforming multi-scan sequential JPEGs" {
+	const allocator = std.testing.allocator;
+	for ([_][]const u8{
+		fixture_seq_16x16_3scan,
+		fixture_seq_17x13_420_y_cbcr_rst,
+		fixture_seq_23x19_422_rev_rst,
+		fixture_seq_23x19_rgb12_420_3scan,
+	}) |data| {
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		for (report.findings.items) |f| {
+			if (f.severity == .fail or f.severity == .warn) {
+				std.debug.print("unexpected {s} {s}\n", .{ @tagName(f.severity), @tagName(f.code) });
+				return error.TestUnexpectedResult;
+			}
+		}
+		try std.testing.expect(report.codec_check == .decoded);
+	}
+}
+
+test "validate rejects multi-scan sequential frames that break component coverage" {
+	// Malformed counterparts built from seq_16x16_3scan (SOS at 648 selects
+	// component 2, SOS at 661 selects component 3; Cs is at +5, Td/Ta at +6).
+	// T.81 §3.1.116: sequential coding encodes each component within a single
+	// scan (§B.2.3 also forbids a repeated Csj), and Td/Ta must name a table
+	// defined before the scan. libjpeg-turbo 3.2.1 `djpeg -strict` reports only
+	// the undefined table; reader tolerance does not lower the other three.
+	const allocator = std.testing.allocator;
+	const good = fixture_seq_16x16_3scan;
+	var repeated = good.*;
+	repeated[661 + 5] = 2; // component 2 twice, component 3 never
+	var undefined_table = good.*;
+	undefined_table[648 + 6] = 0x22; // DC/AC destination 2 was never defined
+	const early_eoi = good[0..661].* ++ [_]u8{ 0xff, 0xd9 }; // component 3 never coded
+	// Scan 1 (SOS at 393, entropy through 431) repeated before the DHT at 432:
+	// every component still ends up coded, so only the repeat guard can object.
+	const repeated_scan = good[0..432].* ++ good[393..432].* ++ good[432..].*;
+	for ([_][]const u8{ &repeated, &undefined_table, &early_eoi, &repeated_scan }) |data| {
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
+	}
+}

@@ -2210,3 +2210,39 @@ test "IDCT overflow: out-of-range coefficient decodes without panic + emits dct_
     }
     try std.testing.expect(found);
 }
+
+// Non-interleaved sequential DCT (T.81 §A.2.2, §B.2.3 Ns < Nf): a frame whose
+// components arrive in separate scans, with DHT segments between scans. All
+// four come from libjpeg-turbo `cjpeg -scans` and decode cleanly with djpeg.
+// seq_16x16_3scan.jpg is Validate's reported false FAIL byte for byte
+// (sha256 a8f9d58a...). The others cover a partial interleaved scan (Cb+Cr),
+// reversed component order, restart intervals inside non-interleaved scans,
+// non-MCU-aligned extents and 12-bit precision.
+const fixture_seq_16x16_3scan = @embedFile("fixtures/seq_16x16_3scan.jpg");
+const fixture_seq_17x13_420_y_cbcr_rst = @embedFile("fixtures/seq_17x13_420_y_cbcr_rst.jpg");
+const fixture_seq_23x19_422_rev_rst = @embedFile("fixtures/seq_23x19_422_rev_rst.jpg");
+const fixture_seq_23x19_rgb12_420_3scan = @embedFile("fixtures/seq_23x19_rgb12_420_3scan.jpg");
+
+test "multi-scan sequential DCT decodes byte-identically to libjpeg-turbo" {
+	const allocator = std.testing.allocator;
+	const Case = struct { name: []const u8, data: []const u8 };
+	const cases = [_]Case{
+		.{ .name = "seq_16x16_3scan", .data = fixture_seq_16x16_3scan },
+		.{ .name = "seq_17x13_420_y_cbcr_rst", .data = fixture_seq_17x13_420_y_cbcr_rst },
+		.{ .name = "seq_23x19_422_rev_rst", .data = fixture_seq_23x19_422_rev_rst },
+		.{ .name = "seq_23x19_rgb12_420_3scan", .data = fixture_seq_23x19_rgb12_420_3scan },
+	};
+	for (cases) |c| {
+		var clean = jpegz.internal.cleanroomDecode(allocator, c.data) catch |err| {
+			std.debug.print("cleanroom rejected {s}: {s}\n", .{ c.name, @errorName(err) });
+			return err;
+		};
+		defer clean.deinit(allocator);
+		var wrap = try jpegz.internal.wrapperDecode(allocator, c.data);
+		defer wrap.deinit(allocator);
+		std.testing.expectEqualSlices(u8, wrap.pixels, clean.pixels) catch |err| {
+			std.debug.print("byte-exact mismatch on {s}\n", .{c.name});
+			return err;
+		};
+	}
+}

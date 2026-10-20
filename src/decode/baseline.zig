@@ -219,53 +219,7 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
 
     // ── Marker walk until we reach SOS ─────────────────────────
     while (pos + 1 < data.len) {
-        // Tolerate "extraneous bytes before marker" — djpeg/libjpeg-turbo
-        // recover from this and so do we (per T.81 §B.1.1.2 markers are
-        // self-synchronizing). Scan forward to the next 0xFF byte.
-        const skip_start = pos;
-        while (pos < data.len and data[pos] != 0xFF) pos += 1;
-        if (pos > skip_start) {
-            if (options.findings_sink) |sink| {
-                // Mirror libjpeg's "Corrupt JPEG data: N extraneous bytes
-                // before marker 0xXX" warning text so consumers can grep
-                // across cleanroom and wrapper paths uniformly.
-                var buf: [96]u8 = undefined;
-                const next_marker: u8 = if (pos + 1 < data.len) data[pos + 1] else 0;
-                const detail = std.fmt.bufPrint(&buf,
-                    "Corrupt JPEG data: {d} extraneous bytes before marker 0x{x:0>2}",
-                    .{ pos - skip_start, next_marker }) catch buf[0..0];
-                sink.emit(.warn, .extraneous_bytes_before_marker,
-                    @intCast(skip_start), detail) catch return error.OutOfMemory;
-            }
-        }
-        if (pos + 1 >= data.len) return fail("walker_eof_after_ff", error.TruncatedStream);
-        // Skip 0xFF padding bytes (T.81 §B.1.1.2: legal "fill" but
-        // non-canonical). Emit a warn finding so strict validators
-        // see the spec deviation.
-        const fill_start = pos;
-        while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
-        if (pos > fill_start) {
-            if (options.findings_sink) |sink| {
-                var buf: [80]u8 = undefined;
-                const next_marker: u8 = if (pos + 1 < data.len) data[pos + 1] else 0;
-                const detail = std.fmt.bufPrint(&buf,
-                    "{d} extra 0xFF fill byte(s) before marker 0x{x:0>2}",
-                    .{ pos - fill_start, next_marker }) catch buf[0..0];
-                sink.emit(.warn, .entropy_fill_bytes,
-                    @intCast(fill_start), detail) catch return error.OutOfMemory;
-            }
-        }
-        if (pos + 1 >= data.len) return fail("walker_eof_after_ff", error.TruncatedStream);
-        const marker = data[pos + 1];
-        // 0xFF 0x00 here would be byte-stuffing inside an entropy stream —
-        // we shouldn't see it during the marker walk (entropy data is
-        // consumed by decodeScan after SOS, not here). Treat as garbage
-        // and advance one byte.
-        if (marker == 0x00) {
-            pos += 1;
-            continue;
-        }
-        pos += 2;
+        const marker = (try nextMarker(data, &pos, options)) orelse continue;
 
         switch (marker) {
             0xD9 => return fail("eoi_before_sos", error.TruncatedStream),
@@ -336,54 +290,23 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
             },
             0xDA => { // SOS — entropy data follows
                 if (frame == null) return fail("sos_before_sof", error.InvalidMarker);
-                try parseSos(data, pos, &frame.?);
+                const scan = try parseSos(data, pos, &frame.?);
                 pos += parseSegmentLength(data, pos);
-                // 12-bit grayscale (A1 Part A) and 12-bit RGB (A1 Part B)
-                // route to their own focused paths. Everything else
-                // goes through the 8-bit pipeline.
-                if (frame.?.precision == 12 and frame.?.num_components == 1) {
-                    return try decodeScanT(
-                        12,
-                        allocator,
-                        data[pos..],
-                        &frame.?,
-                        &quant_tables,
-                        &dc_tables,
-                        &ac_tables,
-                        restart_interval,
-                        options,
-                        app14_color_transform,
-                        saw_jfif,
-                    );
+                // 12-bit grayscale (A1 Part A) and 12-bit RGB (A1 Part B) take
+                // the u16-sample instantiation; the SOF gate above admits no
+                // other 12-bit component counts.
+                const tables: ScanTables = .{
+                    .quant = &quant_tables,
+                    .dc = &dc_tables,
+                    .ac = &ac_tables,
+                    .restart_interval = &restart_interval,
+                };
+                if (frame.?.precision == 12) {
+                    return try decodeScanT(12, allocator, data, pos, &frame.?, scan, tables,
+                        options, app14_color_transform, saw_jfif);
                 }
-                if (frame.?.precision == 12 and frame.?.num_components == 3) {
-                    return try decodeScanT(
-                        12,
-                        allocator,
-                        data[pos..],
-                        &frame.?,
-                        &quant_tables,
-                        &dc_tables,
-                        &ac_tables,
-                        restart_interval,
-                        options,
-                        app14_color_transform,
-                        saw_jfif,
-                    );
-                }
-                return try decodeScanT(
-                    8,
-                    allocator,
-                    data[pos..],
-                    &frame.?,
-                    &quant_tables,
-                    &dc_tables,
-                    &ac_tables,
-                    restart_interval,
-                    options,
-                    app14_color_transform,
-                    saw_jfif,
-                );
+                return try decodeScanT(8, allocator, data, pos, &frame.?, scan, tables,
+                    options, app14_color_transform, saw_jfif);
             },
             // Standalone markers we can skip safely:
             0x01, 0xD0...0xD7 => continue, // TEM, RST0..RST7
@@ -429,6 +352,104 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
     return error.TruncatedStream;
 }
 
+/// Find the next marker code the way libjpeg's next_marker does (T.81
+/// §B.1.1.2, markers are self-synchronizing): report and skip extraneous
+/// non-FF bytes, report and collapse FF fill bytes, and return the code with
+/// `pos` just past it. A stray FF 00 (entropy stuffing outside a scan) is
+/// garbage: `pos` steps one byte and the result is null so the caller rechecks
+/// its loop bound.
+fn nextMarker(data: []const u8, pos: *usize, options: DecodeOptions) Error!?u8 {
+    // Tolerate "extraneous bytes before marker" — djpeg/libjpeg-turbo
+    // recover from this and so do we. Scan forward to the next 0xFF byte.
+    const skip_start = pos.*;
+    while (pos.* < data.len and data[pos.*] != 0xFF) pos.* += 1;
+    if (pos.* > skip_start) {
+        if (options.findings_sink) |sink| {
+            // Mirror libjpeg's "Corrupt JPEG data: N extraneous bytes
+            // before marker 0xXX" warning text so consumers can grep
+            // across cleanroom and wrapper paths uniformly.
+            var buf: [96]u8 = undefined;
+            const next_marker: u8 = if (pos.* + 1 < data.len) data[pos.* + 1] else 0;
+            const detail = std.fmt.bufPrint(&buf,
+                "Corrupt JPEG data: {d} extraneous bytes before marker 0x{x:0>2}",
+                .{ pos.* - skip_start, next_marker }) catch buf[0..0];
+            sink.emit(.warn, .extraneous_bytes_before_marker,
+                @intCast(skip_start), detail) catch return error.OutOfMemory;
+        }
+    }
+    if (pos.* + 1 >= data.len) return fail("walker_eof_after_ff", error.TruncatedStream);
+    // Skip 0xFF padding bytes (T.81 §B.1.1.2: legal "fill" but
+    // non-canonical). Emit a warn finding so strict validators
+    // see the spec deviation.
+    const fill_start = pos.*;
+    while (pos.* + 1 < data.len and data[pos.* + 1] == 0xFF) pos.* += 1;
+    if (pos.* > fill_start) {
+        if (options.findings_sink) |sink| {
+            var buf: [80]u8 = undefined;
+            const next_marker: u8 = if (pos.* + 1 < data.len) data[pos.* + 1] else 0;
+            const detail = std.fmt.bufPrint(&buf,
+                "{d} extra 0xFF fill byte(s) before marker 0x{x:0>2}",
+                .{ pos.* - fill_start, next_marker }) catch buf[0..0];
+            sink.emit(.warn, .entropy_fill_bytes,
+                @intCast(fill_start), detail) catch return error.OutOfMemory;
+        }
+    }
+    if (pos.* + 1 >= data.len) return fail("walker_eof_after_ff", error.TruncatedStream);
+    const marker = data[pos.* + 1];
+    if (marker == 0x00) {
+        pos.* += 1;
+        return null;
+    }
+    pos.* += 2;
+    return marker;
+}
+
+/// Continue the marker walk after a scan whose frame still has uncoded
+/// components (T.81 §B.2.1: tables and miscellaneous segments may precede
+/// every scan). Applies DHT/DQT/DRI updates in place and returns the next
+/// scan's component selection with `pos` at its entropy data. EOI here means
+/// some frame component was never coded; a new SOF means a second frame.
+fn walkToNextScan(
+    data: []const u8,
+    pos: *usize,
+    frame: *FrameInfo,
+    quant_tables: *[4]?[64]u16,
+    dc_tables: *[4]?huffman.HuffmanTable,
+    ac_tables: *[4]?huffman.HuffmanTable,
+    restart_interval: *u32,
+    options: DecodeOptions,
+) Error!ScanSelection {
+    while (pos.* + 1 < data.len) {
+        const marker = (try nextMarker(data, pos, options)) orelse continue;
+        switch (marker) {
+            0xD9 => return fail("eoi_before_all_components_scanned", error.TruncatedStream),
+            0xC0...0xC3, 0xC5...0xC7, 0xC9...0xCB, 0xCD...0xCF => return fail("sof_between_scans", error.InvalidMarker),
+            0xC4 => {
+                try parseDht(data, pos.*, dc_tables, ac_tables);
+                pos.* += parseSegmentLength(data, pos.*);
+            },
+            0xDB => {
+                try parseDqt(data, pos.*, quant_tables);
+                pos.* += parseSegmentLength(data, pos.*);
+            },
+            0xDD => {
+                const seg_len = parseSegmentLength(data, pos.*);
+                if (seg_len < 4 or pos.* + seg_len > data.len) return error.TruncatedStream;
+                restart_interval.* = (@as(u32, data[pos.* + 2]) << 8) | data[pos.* + 3];
+                pos.* += seg_len;
+            },
+            0xDA => {
+                const scan = try parseSos(data, pos.*, frame);
+                pos.* += parseSegmentLength(data, pos.*);
+                return scan;
+            },
+            0x01, 0xD0...0xD7 => continue,
+            else => pos.* += parseSegmentLength(data, pos.*),
+        }
+    }
+    return fail("eof_before_all_components_scanned", error.TruncatedStream);
+}
+
 // Shared spec primitive (also re-exported for arith_decode, which
 // imports `baseline.parseSegmentLength`). Single definition lives in
 // segment.zig.
@@ -441,11 +462,23 @@ pub const parseDqt = jpeg_markers.parseDqt;
 
 const parseDht = jpeg_markers.parseDht;
 
-pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!void {
+/// Frame-component indices coded by one scan, in scan order (T.81 §B.2.3).
+pub const ScanSelection = struct {
+    count: u8,
+    comp: [4]u8,
+};
+
+/// Parse an SOS header and latch each selected component's Td/Ta tables.
+/// T.81 §B.2.3: Ls = 6 + 2*Ns, 1 <= Ns <= 4, and every Cs names a distinct
+/// frame component. Sequential frames may split components across scans,
+/// so Ns may be less than Nf.
+pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanSelection {
     const seg_len = parseSegmentLength(data, pos);
     if (seg_len < 6 or pos + seg_len > data.len) return error.TruncatedStream;
     const ns = data[pos + 2];
-    if (ns != frame.num_components) return fail("sos_ns_mismatch", error.InvalidMarker);
+    if (ns == 0 or ns > frame.num_components) return fail("sos_bad_ns", error.InvalidMarker);
+    if (seg_len != 6 + @as(usize, ns) * 2) return fail("sos_bad_length", error.InvalidMarker);
+    var scan: ScanSelection = .{ .count = ns, .comp = .{ 0, 0, 0, 0 } };
     var i: usize = 0;
     while (i < ns) : (i += 1) {
         const off = pos + 3 + i * 2;
@@ -464,14 +497,127 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!void {
         if (td > 3 or ta > 3) return fail("sos_bad_table_selector", error.InvalidMarker);
         var j: usize = 0;
         while (j < frame.num_components) : (j += 1) {
-            if (frame.components[j].id == cs) {
-                frame.components[j].dc_table = td;
-                frame.components[j].ac_table = ta;
-                break;
+            if (frame.components[j].id == cs) break;
+        }
+        if (j == frame.num_components) return fail("sos_unknown_component", error.InvalidMarker);
+        for (scan.comp[0..i]) |prior| {
+            if (prior == j) return fail("sos_duplicate_component", error.InvalidMarker);
+        }
+        frame.components[j].dc_table = td;
+        frame.components[j].ac_table = ta;
+        scan.comp[i] = @intCast(j);
+    }
+    // Ss/Se/Ah/Al in the last 3 bytes — for baseline they're 0/63/0/0.
+    return scan;
+}
+
+/// Decoder tables that segments between scans may redefine (T.81 §B.2.4).
+const ScanTables = struct {
+    quant: *[4]?[64]u16,
+    dc: *[4]?huffman.HuffmanTable,
+    ac: *[4]?huffman.HuffmanTable,
+    restart_interval: *u32,
+};
+
+/// Frame-wide MCU geometry and the coefficient grid every scan writes into.
+const CoefGrid = struct {
+    channels: u8,
+    max_h: u32,
+    max_v: u32,
+    mcu_cols: u32,
+    mcu_rows: u32,
+    blocks_w: [4]u32,
+    coef_buf: [4][]i32,
+};
+
+const ScanEnd = struct {
+    /// Bytes from the scan's entropy start to the 0xFF of the marker after it.
+    consumed: usize,
+    truncated: bool,
+};
+
+/// Phase 1 for one sequential scan: Huffman-decode and dequantize each data
+/// unit it codes into the frame-wide grid. T.81 §A.2.3: an interleaved scan
+/// (Ns > 1) walks frame MCUs of Hi×Vi blocks per selected component. §A.2.2:
+/// a non-interleaved scan walks only its component's ceil(X·Hi/(8·Hmax)) ×
+/// ceil(Y·Vi/(8·Vmax)) blocks, one block per MCU, so restart intervals count
+/// blocks. A single-component frame is always the non-interleaved case.
+fn decodeScanEntropy(
+    entropy: []const u8,
+    frame: *const FrameInfo,
+    scan: ScanSelection,
+    grid: CoefGrid,
+    tables: ScanTables,
+    options: DecodeOptions,
+) Error!ScanEnd {
+    var br = bitstream.BitReader.init(entropy);
+    var prev_dc: [4]i32 = .{ 0, 0, 0, 0 };
+    var mcus_since_rst: u32 = 0;
+    var expected_rst: u8 = 0xD0;
+    var lenient_state: LenientState = .{
+        .lenient = options.lenient,
+        .sink = options.findings_sink,
+    };
+    const restart_interval = tables.restart_interval.*;
+
+    if (scan.count > 1) {
+        var mcu_y: u32 = 0;
+        while (mcu_y < grid.mcu_rows) : (mcu_y += 1) {
+            var mcu_x: u32 = 0;
+            while (mcu_x < grid.mcu_cols) : (mcu_x += 1) {
+                if (restart_interval > 0 and mcus_since_rst == restart_interval) {
+                    try handleRstResync(&br, &expected_rst, &prev_dc, &mcus_since_rst, options);
+                }
+                for (scan.comp[0..scan.count]) |ci| {
+                    const comp = &frame.components[ci];
+                    const blocks_v_per_mcu: u32 = @intCast(comp.v_factor);
+                    const blocks_h_per_mcu: u32 = @intCast(comp.h_factor);
+                    var block_v: u32 = 0;
+                    while (block_v < blocks_v_per_mcu) : (block_v += 1) {
+                        var block_h: u32 = 0;
+                        while (block_h < blocks_h_per_mcu) : (block_h += 1) {
+                            const block_idx_x: u32 = mcu_x * blocks_h_per_mcu + block_h;
+                            const block_idx_y: u32 = mcu_y * blocks_v_per_mcu + block_v;
+                            const linear: usize = (@as(usize, block_idx_y) * @as(usize, grid.blocks_w[ci]) + @as(usize, block_idx_x)) * 64;
+                            try decodeBlockCoefficients(&br, ci, comp, tables.dc, tables.ac, tables.quant,
+                                &prev_dc, grid.coef_buf[ci][linear..][0..64], frame.precision, &lenient_state);
+                        }
+                    }
+                }
+                mcus_since_rst += 1;
+            }
+        }
+    } else {
+        const ci = scan.comp[0];
+        const comp = &frame.components[ci];
+        // A single-component frame ignores its declared factors (max_h = max_v = 1).
+        const hc: u32 = if (grid.channels == 1) 1 else @intCast(comp.h_factor);
+        const vc: u32 = if (grid.channels == 1) 1 else @intCast(comp.v_factor);
+        const xi: u32 = (frame.width * hc + 8 * grid.max_h - 1) / (8 * grid.max_h);
+        const yi: u32 = (frame.height * vc + 8 * grid.max_v - 1) / (8 * grid.max_v);
+        var by: u32 = 0;
+        while (by < yi) : (by += 1) {
+            var bx: u32 = 0;
+            while (bx < xi) : (bx += 1) {
+                if (restart_interval > 0 and mcus_since_rst == restart_interval) {
+                    try handleRstResync(&br, &expected_rst, &prev_dc, &mcus_since_rst, options);
+                }
+                const linear: usize = (@as(usize, by) * @as(usize, grid.blocks_w[ci]) + @as(usize, bx)) * 64;
+                try decodeBlockCoefficients(&br, ci, comp, tables.dc, tables.ac, tables.quant,
+                    &prev_dc, grid.coef_buf[ci][linear..][0..64], frame.precision, &lenient_state);
+                mcus_since_rst += 1;
             }
         }
     }
-    // Ss/Se/Ah/Al in the last 3 bytes — for baseline they're 0/63/0/0.
+
+    // Account for every entropy bit before handing the marker back. Recovered
+    // truncation already has an insufficient_data finding in the legacy API.
+    if (!lenient_state.truncation_seen) {
+        const marker = br.finishHuffmanSegment() catch return fail("scan_entropy_boundary", error.BackendError);
+        if (marker >= 0xD0 and marker <= 0xD7)
+            return fail("rst_after_final_mcu", error.BackendError);
+    }
+    return .{ .consumed = br.byte_pos, .truncated = lenient_state.truncation_seen };
 }
 
 /// Unified scan decoder generic over sample precision `P` (8 or 12),
@@ -485,15 +631,20 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!void {
 /// output packing) is shared via `assembleOutputT(P)`; 4-component CMYK/YCCK
 /// (P=8 only) goes through `cmyk_mod.assemble`. P=8 is byte-identical to the
 /// former decodeScan.
+///
+/// Sequential frames may split their components across several scans (T.81
+/// §A.2, Ns < Nf), with table and restart segments between them. Phase 1
+/// therefore runs once per scan into one whole-frame coefficient grid until
+/// every component has been coded exactly once; Phases 2 and 3 run once.
+/// `entropy_start` is the byte after the first SOS header in `data`.
 fn decodeScanT(
     comptime P: u8,
     allocator: Allocator,
     data: []const u8,
-    frame: *const FrameInfo,
-    quant_tables: *const [4]?[64]u16,
-    dc_tables: *const [4]?huffman.HuffmanTable,
-    ac_tables: *const [4]?huffman.HuffmanTable,
-    restart_interval: u32,
+    entropy_start: usize,
+    frame: *FrameInfo,
+    first_scan: ScanSelection,
+    tables: ScanTables,
     options: DecodeOptions,
     app14_color_transform: cmyk_mod.ColorTransform,
     saw_jfif: bool,
@@ -587,61 +738,36 @@ fn decodeScanT(
         }
     }
 
-    var br = bitstream.BitReader.init(data);
-    var prev_dc: [4]i32 = .{ 0, 0, 0, 0 };
-    var mcus_since_rst: u32 = 0;
-    var expected_rst: u8 = 0xD0;
-    var lenient_state: LenientState = .{
-        .lenient = options.lenient,
-        .sink = options.findings_sink,
-    };
-
-    // ── Phase 1: serial entropy decode → coefficient buffer ────
-    var mcu_y: u32 = 0;
-    while (mcu_y < mcu_rows) : (mcu_y += 1) {
-        var mcu_x: u32 = 0;
-        while (mcu_x < mcu_cols) : (mcu_x += 1) {
-            if (restart_interval > 0 and mcus_since_rst == restart_interval) {
-                try handleRstResync(&br, &expected_rst, &prev_dc, &mcus_since_rst, options);
-            }
-            var ci: usize = 0;
-            while (ci < channels) : (ci += 1) {
-                const comp = &frame.components[ci];
-                const blocks_v_per_mcu: u32 = if (channels == 1) 1 else @intCast(comp.v_factor);
-                const blocks_h_per_mcu: u32 = if (channels == 1) 1 else @intCast(comp.h_factor);
-                var block_v: u32 = 0;
-                while (block_v < blocks_v_per_mcu) : (block_v += 1) {
-                    var block_h: u32 = 0;
-                    while (block_h < blocks_h_per_mcu) : (block_h += 1) {
-                        const block_idx_x: u32 = mcu_x * blocks_h_per_mcu + block_h;
-                        const block_idx_y: u32 = mcu_y * blocks_v_per_mcu + block_v;
-                        const linear: usize = (@as(usize, block_idx_y) * @as(usize, blocks_w[ci]) + @as(usize, block_idx_x)) * 64;
-                        const slot: *[64]i32 = coef_buf[ci][linear..][0..64];
-                        try decodeBlockCoefficients(
-                            &br,
-                            ci,
-                            comp,
-                            dc_tables,
-                            ac_tables,
-                            quant_tables,
-                            &prev_dc,
-                            slot,
-                            frame.precision,
-                            &lenient_state,
-                        );
-                    }
-                }
-            }
-            mcus_since_rst += 1;
-        }
+    // ── Phase 1: serial entropy decode → coefficient buffer, per scan ────
+    // A non-interleaved scan codes only the component's image-extent blocks,
+    // so the MCU-padding blocks it skips must read as zero.
+    if (first_scan.count != channels) {
+        for (coef_buf[0..channels]) |buf| @memset(buf, 0);
     }
-
-    // Account for every entropy bit before handing the marker back. Recovered
-    // truncation already has an insufficient_data finding in the legacy API.
-    if (!lenient_state.truncation_seen) {
-        const marker = br.finishHuffmanSegment() catch return fail("scan_entropy_boundary", error.BackendError);
-        if (marker >= 0xD0 and marker <= 0xD7)
-            return fail("rst_after_final_mcu", error.BackendError);
+    const grid: CoefGrid = .{
+        .channels = channels,
+        .max_h = max_h,
+        .max_v = max_v,
+        .mcu_cols = mcu_cols,
+        .mcu_rows = mcu_rows,
+        .blocks_w = blocks_w,
+        .coef_buf = coef_buf,
+    };
+    var scan = first_scan;
+    var scan_start = entropy_start;
+    var coded: [4]bool = .{ false, false, false, false };
+    while (true) {
+        for (scan.comp[0..scan.count]) |ci| {
+            if (coded[ci]) return fail("scan_component_already_coded", error.InvalidMarker);
+            coded[ci] = true;
+        }
+        const end = try decodeScanEntropy(data[scan_start..], frame, scan, grid, tables, options);
+        // Recovered truncation leaves later components at zero, as libjpeg does.
+        if (end.truncated) break;
+        if (std.mem.allEqual(bool, coded[0..channels], true)) break;
+        scan_start += end.consumed;
+        scan = try walkToNextScan(data, &scan_start, frame, tables.quant, tables.dc, tables.ac,
+            tables.restart_interval, options);
     }
 
     // Pool machinery is hoisted to function scope so `pool_ptr` survives to the

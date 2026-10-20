@@ -30,8 +30,11 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Priority: Validate false FAILs and labels (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md)
 
-- [ ] Fix the false FAIL on a valid three-scan non-interleaved sequential JPEG (cjpeg -scans 0;1;2) with a red legal test and a malformed undefined-table counterpart.
+- [x] Fix the false FAIL on a valid three-scan non-interleaved sequential JPEG (cjpeg -scans 0;1;2) with a red legal test and a malformed undefined-table counterpart. Baseline now decodes split-component sequential frames (T.81 §3.1.116, §A.2, §B.2.3); four cjpeg fixtures match libjpeg-turbo byte for byte; repeated components, early EOI and undefined tables FAIL. (2026-10-20 12:15 EDT)
+- [ ] Reject a sequential scan that follows complete component coverage (for example a fourth SOS after Y, Cb, Cr). Needs a post-coverage walk to EOI that leaves missing-EOI files unchanged.
+- [ ] Report baseline restart and padding findings at absolute file offsets; `handleRstResync` emits `br.byte_pos` relative to the scan's entropy start. Fold into the distinct-codes item below.
 - [ ] Give restart-after-final-MCU, interval-boundary truncation and non-1 padding their own registry-numbered finding codes with exact offsets, keeping FAIL severity.
+  - Registry decision 2026-10-20 12:38 EDT: 62 `entropy_padding_not_ones` approved (append-only, FAIL, offset of the entropy byte holding the non-1 pad bits). Reuse 57 `restart_marker_unexpected`, 3 `truncated_stream` and 55 `sos_component_mismatch`. Conditions: paired tests (legal all-1 and byte-aligned endings stay accepted; non-1 padding gives 62 at the exact byte) on both end-of-scan and restart paths; live entropy bits and FF fill are not padding; state Huffman-only applicability (arithmetic and lossless explicit); keep multi-scan acceptance; verify the generated C header and consumer mapping; send the tested commit to consumers.
 
 ## Priority: Validate September 30 work order
 

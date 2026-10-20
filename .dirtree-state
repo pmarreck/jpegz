@@ -76,6 +76,10 @@ annotate=[
 	tests/unit/facade_validation.zig = Strict JPEG-family facade contracts, malformed-stream controls and SIZ tile-origin boundaries.
 	tests/unit/fixtures/JXL_VALIDATION_PROVENANCE.md = Exact libjxlz source paths, SHA-256 values, and expected four-way fixture outcomes.
 	tests/unit/fixtures/baseline_16x16_rgb_marked.jpg = RGB-marked baseline JPEG (Adobe APP14 transform=0) — gap-D cleanroom RGB-passthrough test fixture
+	tests/unit/fixtures/seq_16x16_3scan.jpg = Validate's three-scan non-interleaved sequential JPEG (cjpeg -scans 0;1;2), former false FAIL
+	tests/unit/fixtures/seq_17x13_420_y_cbcr_rst.jpg = Sequential 4:2:0 Y scan then interleaved Cb+Cr scan, DRI=1, non-MCU-aligned
+	tests/unit/fixtures/seq_23x19_422_rev_rst.jpg = Sequential 4:2:2 three scans in reversed component order, DRI=3
+	tests/unit/fixtures/seq_23x19_rgb12_420_3scan.jpg = 12-bit SOF1 three-scan non-interleaved sequential 4:2:0
 	tools/coverage/flake.nix = Private corruption-reader 0.7 pin used only by ./corruption-coverage
 	tools/coverage_stats.zig = Wilson intervals and jpegz verdict classes for ./corruption-coverage
 	tools/facade_validator_probe.zig = Production-shaped validation-only ELF used for dependency-closure proof.
