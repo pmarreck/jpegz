@@ -31,7 +31,10 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Priority: Validate false FAILs and labels (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md)
 
 - [x] Fix the false FAIL on a valid three-scan non-interleaved sequential JPEG (cjpeg -scans 0;1;2) with a red legal test and a malformed undefined-table counterpart. Baseline now decodes split-component sequential frames (T.81 §3.1.116, §A.2, §B.2.3); four cjpeg fixtures match libjpeg-turbo byte for byte; repeated components, early EOI and undefined tables FAIL. (2026-10-20 12:15 EDT)
-- [ ] Decide severity for code 62 on all-zero pad bits. A 1,621-file local corpus had exactly two FAILs, both all-zero padding from known encoders (Intel JPEG Library 1.51; Olympus C730UZ firmware); libjpeg-turbo decodes both. Proposal awaiting BDFN: all-zero pad bits after a complete scan WARN as a known encoder defect, mixed pad bits stay FAIL; measure the detection cost with ./corruption-coverage before and after.
+- [ ] Padding faults as KNOWN_DEFECT evidence (validate owns the registry and decides KNOWN_DEFECT; jpegz names the defect). Validate's record: docs/plan_context/known_defect_state.md in validate. Severity stays FAIL until BDFN and validate settle WARN vs KNOWN_DEFECT.
+  - [x] Lenient decoding continues past end-of-scan padding faults when a marker follows, so every instance is reported and recovery matches libjpeg-turbo pixels (done 2026-10-23 10:40 EDT).
+  - [ ] Code 63 entropy_padding_zero_bits for all-zero pad bits, with the pad-bit count in the detail; 62 narrows to mixed bits. Requested 2026-10-23, under registry review, not assigned.
+  - [ ] The same split for progressive and lossless scans.
 - [ ] Reject a sequential scan that follows complete component coverage (for example a fourth SOS after Y, Cb, Cr). Needs a post-coverage walk to EOI that leaves missing-EOI files unchanged.
 - [x] Report baseline restart and padding findings at absolute file offsets (done with the distinct-codes item, 2026-10-20).
 - [ ] Apply code 62 to progressive and lossless Huffman scans (T.81 F.1.2.3 also governs them); both still report non-1 padding as 51. Arithmetic coding has no such padding and stays out of scope.

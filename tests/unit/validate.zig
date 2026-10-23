@@ -388,6 +388,8 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		restart: ?u8 = null,
 		legacy_valid: ?bool = null,
 		recoverable_boundary_error: bool = false,
+		// Padding faults lenient decoding must report; all are T.81 F.1.2.3 FAILs.
+		padding_faults: usize = 1,
 		// Typed FAIL the validator must name instead of huffman_table_corrupt,
 		// at an absolute file offset. Entropy starts at 141, or 147 with DRI.
 		code: ?jpegz.FindingCode = null,
@@ -402,10 +404,10 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		.{ .entropy = &.{ 0x12, 0x57 }, .verdict = .valid }, // 3 ZRL, E1(+1): nonzero at 63
 		.{ .entropy = &.{ 0x12, 0x4f }, .verdict = .corrupt }, // 4 ZRL: 64 zeros in 63 slots
 		.{ .entropy = &.{ 0x12, 0x5f }, .verdict = .corrupt }, // 3 ZRL, F1(+1): nonzero at 64
-		.{ .entropy = &.{0x0e}, .verdict = .corrupt, .code = .entropy_padding_not_ones, .offset = 141 }, // One zero in the four final padding bits.
+		.{ .entropy = &.{0x0e}, .verdict = .corrupt, .recoverable_boundary_error = true, .code = .entropy_padding_not_ones, .offset = 141 }, // One zero in the four final padding bits.
 		.{ .entropy = &.{ 0x0f, 0x00 }, .verdict = .corrupt }, // Extra whole entropy byte.
 		.{ .entropy = &.{ 0x0f, 0xff, 0x00 }, .verdict = .corrupt }, // Stuffed extra payload is not marker fill.
-		.{ .entropy = &.{0x00}, .verdict = .corrupt, .code = .entropy_padding_not_ones, .offset = 141 }, // Second block's bits sit where padding must be ones.
+		.{ .entropy = &.{0x00}, .verdict = .corrupt, .recoverable_boundary_error = true, .code = .entropy_padding_not_ones, .offset = 141 }, // Second block's bits sit where padding must be ones.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xff }, .verdict = .valid }, // Legal fill before EOI.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xd0 }, .verdict = .corrupt, .code = .restart_marker_unexpected, .offset = 142 }, // No restart after the final MCU.
 		.{ .entropy = &.{0x00}, .width = 16, .verdict = .valid }, // Two blocks exactly fill one byte.
@@ -415,6 +417,7 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		.{ .entropy = &.{0x0f}, .width = 16, .restart = 1, .verdict = .corrupt, .code = .truncated_stream, .offset = 148, .decode_error = error.TruncatedStream }, // EOI where RST0 and a second interval belong.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
 		.{ .entropy = &.{ 0x0e, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt, .recoverable_boundary_error = true, .code = .entropy_padding_not_ones, .offset = 147 },
+		.{ .entropy = &.{ 0x0e, 0xff, 0xd0, 0x0e }, .width = 16, .restart = 1, .verdict = .corrupt, .recoverable_boundary_error = true, .padding_faults = 2, .code = .entropy_padding_not_ones, .offset = 147 }, // Every faulty segment is reported, not only the first.
 		.{ .entropy = &.{ 0x0f, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
 		.{ .entropy = &.{ 0x0f, 0xff, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
 		.{ .entropy = &.{ 0x0f, 0xff, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
@@ -442,11 +445,22 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 			var recovered = try jpegz.decodeWithOptions(allocator, data, .{ .lenient = true, .findings_sink = &sink });
 			defer recovered.deinit(allocator);
 			var failures: usize = 0;
+			var at_offset: usize = 0;
 			for (sink.items()) |finding| {
-				if (finding.code == .entropy_padding_not_ones and finding.severity == .fail and finding.offset == case.offset) failures += 1;
+				if (finding.code != .entropy_padding_not_ones or finding.severity != .fail) continue;
+				failures += 1;
+				if (finding.offset == case.offset) at_offset += 1;
 			}
-			try std.testing.expectEqual(@as(usize, 1), failures);
+			try std.testing.expectEqual(case.padding_faults, failures);
+			try std.testing.expectEqual(@as(usize, 1), at_offset);
 			try std.testing.expectEqual(@as(u32, case.width), recovered.width);
+			// Pad bits carry no image data, so recovery must match libjpeg-turbo,
+			// which ignores them.
+			if (jpegz.internal.wrapperDecode(allocator, data)) |oracle_image| {
+				var oracle = oracle_image;
+				defer oracle.deinit(allocator);
+				try std.testing.expectEqualSlices(u8, oracle.pixels, recovered.pixels);
+			} else |err| if (err != error.NotImplemented) return err;
 		}
 		if (case.verdict == .valid) {
 			var decoded = try jpegz.decode(allocator, data);

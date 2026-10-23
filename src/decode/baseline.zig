@@ -661,8 +661,14 @@ fn decodeScanEntropy(
     // Account for every entropy bit before handing the marker back. Recovered
     // truncation already has an insufficient_data finding in the legacy API.
     if (!lenient_state.truncation_seen) {
-        const marker = br.finishHuffmanSegment() catch |err| {
+        const marker = br.finishHuffmanSegment() catch |err| recovered: {
             try reportEntropyBoundary(&br, err, base, options, "invalid Huffman entropy or padding at end of scan");
+            // Pad bits carry no image data: lenient decoding keeps going when a
+            // marker follows them, as it does at restart boundaries.
+            if (options.lenient and err == error.PaddingNotOnes) {
+                br.seekToMarker();
+                if (br.marker_seen) break :recovered br.marker_byte;
+            }
             return fail("scan_entropy_boundary", error.BackendError);
         };
         // T.81 §B.2.1: a restart marker follows every entropy-coded segment except the last.
