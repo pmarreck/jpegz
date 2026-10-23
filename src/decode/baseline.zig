@@ -60,8 +60,11 @@ fn emitFinding(
 
 /// Classify a Huffman segment ending (T.81 §F.1.2.3) and report it at its
 /// absolute offset: non-1 pad bits are `entropy_padding_not_ones`, and a whole
-/// extra entropy byte stays `huffman_table_corrupt`. `base` is the file offset
-/// of `br.data[0]`.
+/// extra entropy byte stays `huffman_table_corrupt`. All-zero pad bits are a
+/// known encoder defect (Intel JPEG Library 1.51, Olympus camera firmware)
+/// that mainstream readers open with correct pixels, so they report WARN;
+/// mixed bits look like damage and FAIL. `base` is the file offset of
+/// `br.data[0]`.
 fn reportEntropyBoundary(
     br: *const bitstream.BitReader,
     err: anyerror,
@@ -69,7 +72,13 @@ fn reportEntropyBoundary(
     options: DecodeOptions,
     context: []const u8,
 ) Error!void {
-    if (err == error.PaddingNotOnes) {
+    if (err == error.PaddingZeroBits) {
+        var buf: [96]u8 = undefined;
+        const detail = std.fmt.bufPrint(&buf,
+            "{d} pad bits before the marker are all 0 (T.81 F.1.2.3; known encoder defect)",
+            .{br.padBitCount()}) catch unreachable;
+        try emitFinding(options, .warn, .entropy_padding_not_ones, base + br.padByteOffset(), detail);
+    } else if (err == error.PaddingNotOnes) {
         try emitFinding(options, .fail, .entropy_padding_not_ones, base + br.padByteOffset(),
             "pad bits before the marker are not all 1 (T.81 F.1.2.3)");
     } else {
@@ -101,7 +110,8 @@ fn handleRstResync(
     if (boundary.finishHuffmanSegment()) |_| {} else |err| {
         try reportEntropyBoundary(&boundary, err, base, options,
             "invalid Huffman entropy or padding at restart boundary");
-        if (!options.lenient) return fail("rst_entropy_boundary", error.BackendError);
+        if (!options.lenient and err != error.PaddingZeroBits)
+            return fail("rst_entropy_boundary", error.BackendError);
     }
     // Force the reader to look ahead for the marker — the bit
     // buffer may still hold padding bits that haven't triggered a
@@ -664,8 +674,9 @@ fn decodeScanEntropy(
         const marker = br.finishHuffmanSegment() catch |err| recovered: {
             try reportEntropyBoundary(&br, err, base, options, "invalid Huffman entropy or padding at end of scan");
             // Pad bits carry no image data: lenient decoding keeps going when a
-            // marker follows them, as it does at restart boundaries.
-            if (options.lenient and err == error.PaddingNotOnes) {
+            // marker follows them, as it does at restart boundaries. Every
+            // decode accepts the known all-zero pattern.
+            if (err == error.PaddingZeroBits or (options.lenient and err == error.PaddingNotOnes)) {
                 br.seekToMarker();
                 if (br.marker_seen) break :recovered br.marker_byte;
             }

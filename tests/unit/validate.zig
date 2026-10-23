@@ -353,9 +353,13 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 /// Assert the report names `code` as a FAIL at exactly `offset`, and does not
 /// also fall back to the generic huffman_table_corrupt bucket.
 fn expectOnlyTypedFail(report: jpegz.ValidationReport, code: jpegz.FindingCode, offset: u64) !void {
+	return expectOnlyTyped(report, .fail, code, offset);
+}
+
+fn expectOnlyTyped(report: jpegz.ValidationReport, severity: jpegz.Severity, code: jpegz.FindingCode, offset: u64) !void {
 	var found = false;
 	for (report.findings.items) |f| {
-		if (f.severity == .fail and f.code == code and f.offset == offset) found = true;
+		if (f.severity == severity and f.code == code and f.offset == offset) found = true;
 		if (f.code == .huffman_table_corrupt) {
 			std.debug.print("generic huffman_table_corrupt alongside {s}\n", .{@tagName(code)});
 			return error.TestUnexpectedResult;
@@ -363,9 +367,29 @@ fn expectOnlyTypedFail(report: jpegz.ValidationReport, code: jpegz.FindingCode, 
 	}
 	if (!found) {
 		for (report.findings.items) |f| std.debug.print("  got {s} {s} @{?d}\n", .{ @tagName(f.severity), @tagName(f.code), f.offset });
-		std.debug.print("expected FAIL {s} @{d}\n", .{ @tagName(code), offset });
+		std.debug.print("expected {s} {s} @{d}\n", .{ @tagName(severity), @tagName(code), offset });
 		return error.TestUnexpectedResult;
 	}
+}
+
+test "zero entropy padding warns and decodes to libjpeg-turbo pixels" {
+	// The synthetic Intel JPEG Library 1.51 pattern: pad bits before EOI are 0
+	// (T.81 F.1.2.3). Pad bits carry no image data, so strict decoding must
+	// accept the file and match libjpeg-turbo, which ignores them.
+	const data = @embedFile("fixtures/zero_pad_16x16_420.jpg");
+	const allocator = std.testing.allocator;
+	var result = try jpegz.validate(allocator, data);
+	defer result.deinit(allocator);
+	try std.testing.expect(result.isValid());
+	try expectOnlyTyped(result, .warn, .entropy_padding_not_ones, 293);
+	var image = try jpegz.decode(allocator, data);
+	defer image.deinit(allocator);
+	var oracle = jpegz.internal.wrapperDecode(allocator, data) catch |err| switch (err) {
+		error.NotImplemented => return error.SkipZigTest,
+		else => return err,
+	};
+	defer oracle.deinit(allocator);
+	try std.testing.expectEqualSlices(u8, oracle.pixels, image.pixels);
 }
 
 test "sequential entropy bounds classify legal endings and malformed runs" {
@@ -393,6 +417,8 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		// Typed FAIL the validator must name instead of huffman_table_corrupt,
 		// at an absolute file offset. Entropy starts at 141, or 147 with DRI.
 		code: ?jpegz.FindingCode = null,
+		// All-zero padding is a known encoder defect that readers open: WARN.
+		severity: jpegz.Severity = .fail,
 		offset: u64 = 0,
 		decode_error: anyerror = error.BackendError,
 	}{
@@ -407,7 +433,7 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		.{ .entropy = &.{0x0e}, .verdict = .corrupt, .recoverable_boundary_error = true, .code = .entropy_padding_not_ones, .offset = 141 }, // One zero in the four final padding bits.
 		.{ .entropy = &.{ 0x0f, 0x00 }, .verdict = .corrupt }, // Extra whole entropy byte.
 		.{ .entropy = &.{ 0x0f, 0xff, 0x00 }, .verdict = .corrupt }, // Stuffed extra payload is not marker fill.
-		.{ .entropy = &.{0x00}, .verdict = .corrupt, .recoverable_boundary_error = true, .code = .entropy_padding_not_ones, .offset = 141 }, // Second block's bits sit where padding must be ones.
+		.{ .entropy = &.{0x00}, .verdict = .valid, .code = .entropy_padding_not_ones, .severity = .warn, .offset = 141 }, // Four 0 pad bits: a known encoder defect.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xff }, .verdict = .valid }, // Legal fill before EOI.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xd0 }, .verdict = .corrupt, .code = .restart_marker_unexpected, .offset = 142 }, // No restart after the final MCU.
 		.{ .entropy = &.{0x00}, .width = 16, .verdict = .valid }, // Two blocks exactly fill one byte.
@@ -418,6 +444,8 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		.{ .entropy = &.{ 0x0f, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
 		.{ .entropy = &.{ 0x0e, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt, .recoverable_boundary_error = true, .code = .entropy_padding_not_ones, .offset = 147 },
 		.{ .entropy = &.{ 0x0e, 0xff, 0xd0, 0x0e }, .width = 16, .restart = 1, .verdict = .corrupt, .recoverable_boundary_error = true, .padding_faults = 2, .code = .entropy_padding_not_ones, .offset = 147 }, // Every faulty segment is reported, not only the first.
+		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid, .code = .entropy_padding_not_ones, .severity = .warn, .offset = 147 }, // Zero padding before RST0.
+		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x00 }, .width = 16, .restart = 1, .verdict = .valid, .code = .entropy_padding_not_ones, .severity = .warn, .offset = 150 }, // Zero padding in both segments.
 		.{ .entropy = &.{ 0x0f, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
 		.{ .entropy = &.{ 0x0f, 0xff, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
 		.{ .entropy = &.{ 0x0f, 0xff, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
@@ -438,7 +466,7 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		var result = try jpegz.validate(allocator, data);
 		defer result.deinit(allocator);
 		try std.testing.expectEqual(case.legacy_valid orelse (case.verdict == .valid), result.isValid());
-		if (case.code) |code| try expectOnlyTypedFail(result, code, case.offset);
+		if (case.code) |code| try expectOnlyTyped(result, case.severity, code, case.offset);
 		if (case.recoverable_boundary_error) {
 			var sink = jpegz.FindingsSink.init(allocator);
 			defer sink.deinit();

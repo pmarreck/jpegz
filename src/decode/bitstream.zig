@@ -148,13 +148,16 @@ pub const BitReader = struct {
     /// Finish a Huffman-coded scan or restart segment without discarding
     /// unchecked entropy. T.81 F.1.2.3 permits at most seven all-one pad bits.
     /// Lookahead bytes count as payload; FF marker fill does not.
-    /// `PaddingNotOnes` means one to seven leftover bits that are not all 1;
-    /// `padByteOffset` then names their byte. `InvalidEntropyBoundary` means a
-    /// whole extra byte of entropy or no marker at the boundary.
-    pub fn finishHuffmanSegment(self: *BitReader) error{ InvalidEntropyBoundary, PaddingNotOnes }!u8 {
+    /// `PaddingZeroBits` means one to seven leftover bits that are all 0, the
+    /// pattern some encoders write; `PaddingNotOnes` means a mix of 0s and 1s.
+    /// `padByteOffset` and `padBitCount` then describe them, until the reader
+    /// moves. `InvalidEntropyBoundary` means a whole extra byte of entropy or
+    /// no marker at the boundary.
+    pub fn finishHuffmanSegment(self: *BitReader) error{ InvalidEntropyBoundary, PaddingNotOnes, PaddingZeroBits }!u8 {
         if (self.bits_valid > 7) return error.InvalidEntropyBoundary;
         if (self.bits_valid != 0) {
             const mask = @as(u32, std.math.maxInt(u32)) << @intCast(32 - @as(u6, self.bits_valid));
+            if (self.buf & mask == 0) return error.PaddingZeroBits;
             if (self.buf & mask != mask) return error.PaddingNotOnes;
         }
         self.seekToMarker();
@@ -170,6 +173,12 @@ pub const BitReader = struct {
     pub fn padByteOffset(self: BitReader) usize {
         std.debug.assert(self.bits_valid != 0 and self.byte_pos != 0);
         return self.byte_pos - 1;
+    }
+
+    /// Number of leftover pad bits after a padding error.
+    pub fn padBitCount(self: BitReader) u8 {
+        std.debug.assert(self.bits_valid != 0 and self.bits_valid < 8);
+        return @intCast(self.bits_valid);
     }
 
     /// Discard any padding bits in the bit buffer (per T.81 §F.1.2.3
@@ -222,10 +231,25 @@ test "Huffman boundary accepts only all-one partial-byte padding with or without
                 var bad = BitReader.init(&.{ changed, 0xff, 0xd9 });
                 _ = try bad.readBits(@intCast(8 - padding));
                 if (lookahead) _ = bad.peekBits(16);
-                try std.testing.expectError(error.PaddingNotOnes, bad.finishHuffmanSegment());
+                // A lone pad bit that is not 1 is all zeros.
+                const expected = if (padding == 1) error.PaddingZeroBits else error.PaddingNotOnes;
+                try std.testing.expectError(expected, bad.finishHuffmanSegment());
                 try std.testing.expectEqual(@as(usize, 0), bad.padByteOffset());
             }
         }
+    }
+}
+
+test "Huffman boundary names all-zero padding apart from mixed padding" {
+    // T.81 F.1.2.3. Some encoders pad with 0 bits; damage leaves a mix. The
+    // consumed bits are all 1, so only the pad bits decide the outcome.
+    for (1..8) |padding| {
+        const consumed: u8 = @truncate(@as(u16, 0xff00) >> @intCast(8 - padding));
+        var zero = BitReader.init(&.{ consumed, 0xff, 0xd9 });
+        _ = try zero.readBits(@intCast(8 - padding));
+        try std.testing.expectError(error.PaddingZeroBits, zero.finishHuffmanSegment());
+        try std.testing.expectEqual(@as(u8, @intCast(padding)), zero.padBitCount());
+        try std.testing.expectEqual(@as(usize, 0), zero.padByteOffset());
     }
 }
 
