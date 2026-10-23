@@ -235,7 +235,7 @@ const parseSegmentLength = @import("segment.zig").parseSegmentLength;
 /// mutation caused desynchronization. No sample-domain or image-content claim.
 pub fn validate(data: []const u8, sink: *findings_mod.FindingsSink) Error!void {
 	var offset: usize = 0;
-	validateSyntax(data, &offset) catch |err| {
+	validateSyntax(data, &offset, sink) catch |err| {
 		if (err != error.NotImplemented) {
 			try sink.emit(.fail, if (err == error.TruncatedStream) .truncated_stream else .huffman_table_corrupt,
 				@intCast(@min(offset, data.len)), @errorName(err));
@@ -244,7 +244,7 @@ pub fn validate(data: []const u8, sink: *findings_mod.FindingsSink) Error!void {
 	};
 }
 
-fn validateSyntax(data: []const u8, offset: *usize) Error!void {
+fn validateSyntax(data: []const u8, offset: *usize, sink: *findings_mod.FindingsSink) Error!void {
 	if (data.len < 2) return error.TruncatedStream;
 	if (data[0] != 0xff or data[1] != 0xd8) return error.InvalidMarker;
 	var pos: usize = 2;
@@ -292,7 +292,7 @@ fn validateSyntax(data: []const u8, offset: *usize) Error!void {
 				if (scan.predictor < 1 or scan.predictor > 7) return error.InvalidMarker;
 				if (scan.point_transform >= frame.?.precision) return error.NotImplemented;
 				pos += len;
-				pos = try validateEntropy(data, pos, &frame.?, &scan, &tables, restart, offset);
+				pos = try validateEntropy(data, pos, &frame.?, &scan, &tables, restart, offset, sink);
 				scanned = true;
 				continue;
 			},
@@ -304,7 +304,7 @@ fn validateSyntax(data: []const u8, offset: *usize) Error!void {
 }
 
 fn validateEntropy(data: []const u8, start: usize, frame: *const FrameInfo, scan: *const ScanInfo,
-	tables: *const [4]?huffman.HuffmanTable, restart: u16, offset: *usize) Error!usize
+	tables: *const [4]?huffman.HuffmanTable, restart: u16, offset: *usize, sink: *findings_mod.FindingsSink) Error!usize
 {
 	var max_h: usize = 1;
 	var max_v: usize = 1;
@@ -328,7 +328,7 @@ fn validateEntropy(data: []const u8, start: usize, frame: *const FrameInfo, scan
 	var expected_rst: u8 = 0xd0;
 	for (0..columns * rows) |mcu| {
 		if (restart != 0 and mcu != 0 and mcu % restart == 0) {
-			const marker = br.finishHuffmanSegment() catch return entropyError(&br);
+			const marker = br.finishHuffmanSegment() catch |err| try zeroPadMarker(&br, err, start, sink);
 			if (marker == 0xdc) return error.NotImplemented;
 			if (marker != expected_rst) return error.InvalidMarker;
 			br.skipPastMarker();
@@ -347,10 +347,22 @@ fn validateEntropy(data: []const u8, start: usize, frame: *const FrameInfo, scan
 			}
 		}
 	}
-	const marker = br.finishHuffmanSegment() catch return entropyError(&br);
+	const marker = br.finishHuffmanSegment() catch |err| try zeroPadMarker(&br, err, start, sink);
 	if (marker == 0xdc) return error.NotImplemented;
 	if (marker >= 0xd0 and marker <= 0xd7) return error.InvalidMarker;
 	return start + br.byte_pos;
+}
+
+/// All-zero pad bits are a known encoder defect (finding 63, T.81 §F.1.2.3):
+/// report the WARN and return the marker that follows them. Every other
+/// segment-boundary fault keeps its error. `base` is the file offset of
+/// `br.data[0]`.
+fn zeroPadMarker(br: *bitstream.BitReader, err: anyerror, base: usize, sink: *findings_mod.FindingsSink) Error!u8 {
+	if (err != error.PaddingZeroBits) return entropyError(br);
+	try sink.emitZeroPadding(base + br.padByteOffset(), br.padBitCount());
+	br.seekToMarker();
+	if (!br.marker_seen) return entropyError(br);
+	return br.marker_byte;
 }
 
 fn entropyError(br: *const bitstream.BitReader) Error {
@@ -539,7 +551,10 @@ fn decodeScan(
                 // Validate before discarding padding. A copy preserves the
                 // existing cursor when opt-in recovery needs to resynchronize.
                 var boundary = br;
-                if (boundary.finishHuffmanSegment()) |_| {} else |_| {
+                if (boundary.finishHuffmanSegment()) |_| {} else |err| if (err == error.PaddingZeroBits) {
+                    // A known encoder defect (finding 63): WARN and continue.
+                    if (options.findings_sink) |sink| try sink.emitZeroPadding(entropy_start + boundary.padByteOffset(), boundary.padBitCount());
+                } else {
                     if (!options.lenient) return error.BackendError;
                     if (options.findings_sink) |sink| {
                         try sink.emit(.fail, .huffman_table_corrupt, @intCast(br.byte_pos),
@@ -621,7 +636,13 @@ fn decodeScan(
         }
     }
 
-    const marker = br.finishHuffmanSegment() catch return error.BackendError;
+    const marker = br.finishHuffmanSegment() catch |err| zero: {
+        if (err != error.PaddingZeroBits) return error.BackendError;
+        if (options.findings_sink) |sink| try sink.emitZeroPadding(entropy_start + br.padByteOffset(), br.padBitCount());
+        br.seekToMarker();
+        if (!br.marker_seen) return error.BackendError;
+        break :zero br.marker_byte;
+    };
     if (marker >= 0xD0 and marker <= 0xD7) return error.BackendError;
     return out;
 }

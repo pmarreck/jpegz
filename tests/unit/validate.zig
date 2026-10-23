@@ -258,6 +258,10 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 		valid: bool = true,
 		insufficient_count: usize = 0,
 		recovered_boundary_failure: bool = false,
+		// All-zero padding (a known encoder defect): WARN at these entropy
+		// byte indexes of the DC or AC scan.
+		zero_pad_scan: enum { dc, ac } = .dc,
+		zero_pad_at: []const usize = &.{},
 	}{
 		.{}, // Two blocks, byte-aligned EOB2.
 		.{ .dc = &.{0x1f}, .ac = &.{0x01}, .width = 17 }, // Three blocks, partial edge.
@@ -272,7 +276,10 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 		.{ .ac = &.{0x60}, .table = &lookahead, .refine = &.{ 0x00, 0x7f } }, // AC1=+2, correction0.
 		.{ .ac = &.{0x60}, .table = &lookahead, .refine = &.{ 0x00, 0xff, 0x00 } }, // AC1=+3, stuffed correction1.
 		.{ .dc = &.{0x3e}, .valid = false }, // Zero DC padding bit.
-		.{ .table = &eob6, .valid = false }, // Zero AC padding bit.
+		.{ .table = &eob6, .zero_pad_scan = .ac, .zero_pad_at = &.{0} }, // One zero AC padding bit.
+		.{ .dc = &.{0x00}, .zero_pad_at = &.{0} }, // Six zero DC padding bits.
+		.{ .width = 32, .ri = 2, .dc = &.{ 0x00, 0xff, 0xd0, 0x00 }, .ac = &.{ 0x00, 0xff, 0xd0, 0x00 }, .zero_pad_at = &.{ 0, 3 } }, // Zero padding at RST and EOI.
+		.{ .dc = &.{0x3d}, .valid = false }, // Mixed DC padding bits.
 		.{ .ac = &.{ 0x00, 0x00 }, .valid = false }, // Surplus entropy byte.
 		.{ .ac = &.{ 0x00, 0xff, 0x00 }, .valid = false }, // Surplus stuffed byte.
 		.{ .dc = &.{0x7f}, .width = 8, .valid = false }, // EOB2 exceeds one block.
@@ -322,6 +329,11 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 		var report = try jpegz.validate(allocator, data);
 		defer report.deinit(allocator);
 		try std.testing.expectEqual(case.valid or case.insufficient_count > 0, report.isValid());
+		if (case.zero_pad_at.len > 0) {
+			const dc_start = header.len + dri.len + case.table.len + 10;
+			const scan_start = if (case.zero_pad_scan == .dc) dc_start else dc_start + case.dc.len + ac_sos.len;
+			try expectZeroPadWarnings(report.findings.items, scan_start, case.zero_pad_at);
+		}
 		if (case.insufficient_count > 0 or case.recovered_boundary_failure) {
 			var sink = jpegz.FindingsSink.init(allocator);
 			defer sink.deinit();
@@ -372,6 +384,30 @@ fn expectOnlyTyped(report: jpegz.ValidationReport, severity: jpegz.Severity, cod
 	}
 }
 
+/// Assert the findings name all-zero entropy padding as exactly one exact WARN
+/// per padded segment, at `base + index`, with no FAIL beside them.
+fn expectZeroPadWarnings(findings: anytype, base: usize, indexes: []const usize) !void {
+	var warnings: usize = 0;
+	for (findings) |f| {
+		if (f.severity == .fail) {
+			std.debug.print("unexpected FAIL {s} @{?d}\n", .{ @tagName(f.code), f.offset });
+			return error.TestUnexpectedResult;
+		}
+		if (f.code != .entropy_padding_zero_bits) continue;
+		try std.testing.expectEqual(jpegz.Severity.warn, f.severity);
+		try std.testing.expect(f.offset_is_exact);
+		const offset = f.offset orelse return error.TestUnexpectedResult;
+		for (indexes) |index| {
+			if (offset == base + index) break;
+		} else {
+			std.debug.print("zero-padding WARN at unexpected offset {d}\n", .{offset});
+			return error.TestUnexpectedResult;
+		}
+		warnings += 1;
+	}
+	try std.testing.expectEqual(indexes.len, warnings);
+}
+
 test "zero entropy padding warns and decodes to libjpeg-turbo pixels" {
 	// The synthetic Intel JPEG Library 1.51 pattern: pad bits before EOI are 0
 	// (T.81 F.1.2.3). Pad bits carry no image data, so strict decoding must
@@ -381,7 +417,7 @@ test "zero entropy padding warns and decodes to libjpeg-turbo pixels" {
 	var result = try jpegz.validate(allocator, data);
 	defer result.deinit(allocator);
 	try std.testing.expect(result.isValid());
-	try expectOnlyTyped(result, .warn, .entropy_padding_not_ones, 293);
+	try expectOnlyTyped(result, .warn, .entropy_padding_zero_bits, 293);
 	var image = try jpegz.decode(allocator, data);
 	defer image.deinit(allocator);
 	var oracle = jpegz.internal.wrapperDecode(allocator, data) catch |err| switch (err) {
@@ -390,6 +426,70 @@ test "zero entropy padding warns and decodes to libjpeg-turbo pixels" {
 	};
 	defer oracle.deinit(allocator);
 	try std.testing.expectEqualSlices(u8, oracle.pixels, image.pixels);
+}
+
+test "entropy padding is classified by its bits for every pad width" {
+	// T.81 F.1.2.3 over the whole domain of 1..7 pad bits: all 1s is legal,
+	// all 0s is the known encoder defect (63, WARN, bit count in the detail)
+	// and any mix is damage (62, FAIL), each at the exact pad byte. One 8x8
+	// gray block; DC code 0, AC EOB 000, ZRL 001, E1 010 and F1 011 (run 14
+	// or 15, then amplitude 1). A block whose last coefficient is 63 has no EOB.
+	// Bit strings are hand-packed, listed with their pad bits cleared.
+	const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++
+		([_]u8{1} ** 64) ++
+		[_]u8{ 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 23, 0x10, 0, 0, 4 } ++ ([_]u8{0} ** 13) ++
+		[_]u8{ 0, 0xf0, 0xe1, 0xf1 } ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0 };
+	const cases = [_]struct { entropy: []const u8, pad_bits: u3 }{
+		.{ .entropy = &.{0x10}, .pad_bits = 1 }, // ZRL
+		.{ .entropy = &.{ 0x12, 0xa0 }, .pad_bits = 2 }, // 2 ZRL, E1
+		.{ .entropy = &.{ 0x12, 0x40 }, .pad_bits = 3 }, // 3 ZRL
+		.{ .entropy = &.{0x00}, .pad_bits = 4 }, // EOB only
+		.{ .entropy = &.{ 0x15, 0x00 }, .pad_bits = 5 }, // ZRL, E1
+		.{ .entropy = &.{ 0x12, 0x00 }, .pad_bits = 6 }, // 2 ZRL
+		.{ .entropy = &.{ 0x2b, 0xbb, 0x80 }, .pad_bits = 7 }, // E1, 3 F1: ends at 63
+	};
+	const allocator = std.testing.allocator;
+	for (cases) |case| {
+		const pad_offset = header.len + case.entropy.len - 1;
+		const mask: u8 = @intCast((@as(u16, 1) << case.pad_bits) - 1);
+		const variants = [_]struct { pad: u8, code: ?jpegz.FindingCode }{
+			.{ .pad = mask, .code = null },
+			.{ .pad = 0, .code = .entropy_padding_zero_bits },
+			.{ .pad = 1, .code = if (case.pad_bits > 1) .entropy_padding_not_ones else null },
+		};
+		for (variants) |variant| {
+			const data = try std.mem.concat(allocator, u8, &.{ &header, case.entropy, &.{ 0xff, 0xd9 } });
+			defer allocator.free(data);
+			data[pad_offset] |= variant.pad;
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			const code = variant.code orelse {
+				for (report.findings.items) |finding| try std.testing.expect(finding.severity != .fail and
+					finding.code != .entropy_padding_zero_bits and finding.code != .entropy_padding_not_ones);
+				continue;
+			};
+			const severity: jpegz.Severity = if (code == .entropy_padding_zero_bits) .warn else .fail;
+			try expectOnlyTyped(report, severity, code, pad_offset);
+			try std.testing.expectEqual(severity == .warn, report.isValid());
+			if (severity == .fail) continue;
+			var count_buf: [16]u8 = undefined;
+			const count = try std.fmt.bufPrint(&count_buf, "{d} pad bits", .{case.pad_bits});
+			for (report.findings.items) |finding| {
+				if (finding.code == code) try std.testing.expect(std.mem.startsWith(u8, finding.detail.?, count));
+			}
+			var decoded = try jpegz.decode(allocator, data);
+			defer decoded.deinit(allocator);
+			var oracle = jpegz.internal.wrapperDecode(allocator, data) catch |err| switch (err) {
+				error.NotImplemented => continue,
+				else => return err,
+			};
+			defer oracle.deinit(allocator);
+			try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+		}
+	}
 }
 
 test "sequential entropy bounds classify legal endings and malformed runs" {
@@ -433,7 +533,7 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		.{ .entropy = &.{0x0e}, .verdict = .corrupt, .recoverable_boundary_error = true, .code = .entropy_padding_not_ones, .offset = 141 }, // One zero in the four final padding bits.
 		.{ .entropy = &.{ 0x0f, 0x00 }, .verdict = .corrupt }, // Extra whole entropy byte.
 		.{ .entropy = &.{ 0x0f, 0xff, 0x00 }, .verdict = .corrupt }, // Stuffed extra payload is not marker fill.
-		.{ .entropy = &.{0x00}, .verdict = .valid, .code = .entropy_padding_not_ones, .severity = .warn, .offset = 141 }, // Four 0 pad bits: a known encoder defect.
+		.{ .entropy = &.{0x00}, .verdict = .valid, .code = .entropy_padding_zero_bits, .severity = .warn, .offset = 141 }, // Four 0 pad bits: a known encoder defect.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xff }, .verdict = .valid }, // Legal fill before EOI.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xd0 }, .verdict = .corrupt, .code = .restart_marker_unexpected, .offset = 142 }, // No restart after the final MCU.
 		.{ .entropy = &.{0x00}, .width = 16, .verdict = .valid }, // Two blocks exactly fill one byte.
@@ -444,8 +544,8 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		.{ .entropy = &.{ 0x0f, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
 		.{ .entropy = &.{ 0x0e, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt, .recoverable_boundary_error = true, .code = .entropy_padding_not_ones, .offset = 147 },
 		.{ .entropy = &.{ 0x0e, 0xff, 0xd0, 0x0e }, .width = 16, .restart = 1, .verdict = .corrupt, .recoverable_boundary_error = true, .padding_faults = 2, .code = .entropy_padding_not_ones, .offset = 147 }, // Every faulty segment is reported, not only the first.
-		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid, .code = .entropy_padding_not_ones, .severity = .warn, .offset = 147 }, // Zero padding before RST0.
-		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x00 }, .width = 16, .restart = 1, .verdict = .valid, .code = .entropy_padding_not_ones, .severity = .warn, .offset = 150 }, // Zero padding in both segments.
+		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid, .code = .entropy_padding_zero_bits, .severity = .warn, .offset = 147 }, // Zero padding before RST0.
+		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x00 }, .width = 16, .restart = 1, .verdict = .valid, .code = .entropy_padding_zero_bits, .severity = .warn, .offset = 150 }, // Zero padding in both segments.
 		.{ .entropy = &.{ 0x0f, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
 		.{ .entropy = &.{ 0x0f, 0xff, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
 		.{ .entropy = &.{ 0x0f, 0xff, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
@@ -522,12 +622,16 @@ test "lossless entropy boundaries classify complete samples and restart interval
 		restart: ?u8 = null,
 		recoverable_boundary_error: bool = false,
 		decode_error: jpegz.DecodeError = error.BackendError,
+		zero_pad_at: []const usize = &.{}, // Entropy byte indexes of all-zero padding.
 	}{
 		.{ .entropy = &.{0x7f}, .valid = true },
 		.{ .entropy = &.{0x00}, .width = 8, .valid = true },
 		.{ .entropy = &.{ 0x00, 0x7f }, .width = 9, .valid = true },
 		.{ .entropy = &.{ 0x7f, 0xff, 0xff }, .valid = true }, // Marker fill.
-		.{ .entropy = &.{0x7e}, .valid = false }, // Zero padding bit.
+		.{ .entropy = &.{0x7e}, .valid = false }, // Mixed padding bits.
+		.{ .entropy = &.{0x00}, .valid = true, .zero_pad_at = &.{0} }, // Seven zero padding bits.
+		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = true, .zero_pad_at = &.{0} },
+		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x00 }, .height = 2, .restart = 1, .valid = true, .zero_pad_at = &.{ 0, 3 } },
 		.{ .entropy = &.{0x3f}, .valid = false }, // Extra sample within final byte.
 		.{ .entropy = &.{ 0x7f, 0x00 }, .valid = false },
 		.{ .entropy = &.{ 0x7f, 0xff, 0x00 }, .valid = false },
@@ -562,6 +666,15 @@ test "lossless entropy boundaries classify complete samples and restart interval
 		var report = try jpegz.validate(allocator, data);
 		defer report.deinit(allocator);
 		try std.testing.expectEqual(case.valid, report.isValid());
+		if (case.zero_pad_at.len > 0) {
+			const entropy_start = data.len - 2 - case.entropy.len;
+			try expectZeroPadWarnings(report.findings.items, entropy_start, case.zero_pad_at);
+			var sink = jpegz.FindingsSink.init(allocator);
+			defer sink.deinit();
+			var recovered = try jpegz.internal.losslessDecodeLenientWithFindings(allocator, data, &sink);
+			defer recovered.deinit(allocator);
+			try expectZeroPadWarnings(sink.items(), entropy_start, case.zero_pad_at);
+		}
 		if (case.valid) {
 			var decoded = try jpegz.decode(allocator, data);
 			defer decoded.deinit(allocator);

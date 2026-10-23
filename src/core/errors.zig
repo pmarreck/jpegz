@@ -109,10 +109,18 @@ pub const FindingCode = enum(u32) {
     // marker walk for every variant, before the codec decode-through.
     invalid_dimensions = 61,
     // T.81 §F.1.2.3: the bits that complete a Huffman-coded segment's final
-    // byte before a marker shall be 1s. Offset is the entropy byte holding the
-    // non-1 pad bits. Huffman sequential DCT only; arithmetic coding has no
-    // such padding. Registry sign-off 2026-10-20.
+    // byte before a marker shall be 1s. This code is for pad bits that mix 0s
+    // and 1s, which points to damage; all-zero padding is 63. Offset is the
+    // entropy byte holding the pad bits. Arithmetic coding has no such
+    // padding. Registry sign-off 2026-10-20; narrowed to mixed bits 2026-10-23.
     entropy_padding_not_ones = 62,
+    // T.81 §F.1.2.3 again, for 1 to 7 pad bits that are all 0 at a Huffman
+    // segment boundary followed by a marker. Some encoders write this (Intel
+    // JPEG Library 1.51, Olympus camera firmware) and mainstream readers
+    // decode it with correct pixels, so it is a WARN and never stops decoding.
+    // Offset is the pad byte; the detail gives the bit count. Registry
+    // sign-off 2026-10-23.
+    entropy_padding_zero_bits = 63,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────
     lossless_predictor_invalid = 100,

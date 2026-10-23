@@ -449,6 +449,7 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo 
 /// MUST NOT cross a restart marker).
 fn handleRestart(
     br: *bitstream.BitReader,
+    base: usize,
     prev_dc: *[3]i16,
     eob_run: *u32,
     expected_rst: *u8,
@@ -457,7 +458,12 @@ fn handleRestart(
     const options = recovery.options;
     if (!recovery.truncated) {
         var boundary = br.*;
-        const complete = if (boundary.finishHuffmanSegment()) |_| eob_run.* == 0 else |_| false;
+        // All-zero pad bits are a known encoder defect (finding 63): WARN, continue.
+        const complete = if (boundary.finishHuffmanSegment()) |_| eob_run.* == 0 else |err| zero: {
+            if (err != error.PaddingZeroBits or eob_run.* != 0) break :zero false;
+            if (options.findings_sink) |sink| try sink.emitZeroPadding(base + boundary.padByteOffset(), boundary.padBitCount());
+            break :zero true;
+        };
         if (!complete) {
             if (!options.lenient) return error.BackendError;
             if (options.findings_sink) |sink| {
@@ -576,7 +582,7 @@ fn decodeOneScan(
             var mx: u32 = 0;
             while (mx < mcu_cols) : (mx += 1) {
                 if (restart_interval > 0 and units_since_rst == restart_interval) {
-                    try handleRestart(&br, &prev_dc, &eob_run, &expected_rst, &recovery);
+                    try handleRestart(&br, entropy_start, &prev_dc, &eob_run, &expected_rst, &recovery);
                     recovery.truncated = false;
                     units_since_rst = 0;
                 }
@@ -633,7 +639,7 @@ fn decodeOneScan(
             var bx: u32 = 0;
             while (bx < bw) : (bx += 1) {
                 if (restart_interval > 0 and units_since_rst == restart_interval) {
-                    try handleRestart(&br, &prev_dc, &eob_run, &expected_rst, &recovery);
+                    try handleRestart(&br, entropy_start, &prev_dc, &eob_run, &expected_rst, &recovery);
                     recovery.truncated = false;
                     units_since_rst = 0;
                 }
@@ -654,7 +660,12 @@ fn decodeOneScan(
     // the EOB run and every entropy bit except all-one byte padding.
     if (!recovery.truncated) {
         if (eob_run != 0) return error.BackendError;
-        _ = br.finishHuffmanSegment() catch return error.BackendError;
+        _ = br.finishHuffmanSegment() catch |err| zero: {
+            if (err != error.PaddingZeroBits) return error.BackendError;
+            if (options.findings_sink) |sink| try sink.emitZeroPadding(entropy_start + br.padByteOffset(), br.padBitCount());
+            br.seekToMarker();
+            break :zero 0;
+        };
     } else br.seekToMarker();
     if (!br.marker_seen) {
         dbg("[prog:scan_end] no marker after scan: byte_pos={d} bits_valid={d}\n", .{ br.byte_pos, br.bits_valid });

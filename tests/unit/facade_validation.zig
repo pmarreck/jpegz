@@ -862,7 +862,7 @@ test "JPEG facade warns on zero padding from a known encoder and still decodes" 
 	var warned: usize = 0;
 	for (result.findings.items) |finding| {
 		try std.testing.expect(finding.severity != .fail);
-		if (finding.code == .entropy_padding_not_ones and finding.severity == .warn and
+		if (finding.code == .entropy_padding_zero_bits and finding.severity == .warn and
 			finding.offset == 293 and finding.offset_is_exact) warned += 1;
 	}
 	try std.testing.expectEqual(@as(usize, 1), warned);

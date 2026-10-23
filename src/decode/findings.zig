@@ -53,6 +53,17 @@ pub const FindingsSink = struct {
         return self.append(.{ .severity = severity, .code = code, .offset = offset }, detail);
     }
 
+    /// Report all-zero entropy padding (T.81 §F.1.2.3, finding 63) at its pad
+    /// byte. Shared by every Huffman decoder so the known-encoder-defect WARN
+    /// carries the same detail, with the bit count, wherever it is found.
+    pub fn emitZeroPadding(self: *FindingsSink, offset: u64, pad_bits: u8) Allocator.Error!void {
+        var buf: [96]u8 = undefined;
+        const detail = std.fmt.bufPrint(&buf,
+            "{d} pad bits before the marker are all 0 (T.81 F.1.2.3; known encoder defect)",
+            .{pad_bits}) catch unreachable;
+        return self.emitExact(.warn, .entropy_padding_zero_bits, offset, detail);
+    }
+
     /// Like `emit`, for an offset that names the exact in-buffer defect byte.
     pub fn emitExact(
         self: *FindingsSink,

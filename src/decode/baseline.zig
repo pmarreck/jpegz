@@ -59,12 +59,11 @@ fn emitFinding(
 }
 
 /// Classify a Huffman segment ending (T.81 §F.1.2.3) and report it at its
-/// absolute offset: non-1 pad bits are `entropy_padding_not_ones`, and a whole
-/// extra entropy byte stays `huffman_table_corrupt`. All-zero pad bits are a
-/// known encoder defect (Intel JPEG Library 1.51, Olympus camera firmware)
-/// that mainstream readers open with correct pixels, so they report WARN;
-/// mixed bits look like damage and FAIL. `base` is the file offset of
-/// `br.data[0]`.
+/// absolute offset. All-zero pad bits are a known encoder defect (Intel JPEG
+/// Library 1.51, Olympus camera firmware) that mainstream readers open with
+/// correct pixels: WARN `entropy_padding_zero_bits`. Mixed bits look like
+/// damage: FAIL `entropy_padding_not_ones`. A whole extra entropy byte stays
+/// `huffman_table_corrupt`. `base` is the file offset of `br.data[0]`.
 fn reportEntropyBoundary(
     br: *const bitstream.BitReader,
     err: anyerror,
@@ -73,11 +72,7 @@ fn reportEntropyBoundary(
     context: []const u8,
 ) Error!void {
     if (err == error.PaddingZeroBits) {
-        var buf: [96]u8 = undefined;
-        const detail = std.fmt.bufPrint(&buf,
-            "{d} pad bits before the marker are all 0 (T.81 F.1.2.3; known encoder defect)",
-            .{br.padBitCount()}) catch unreachable;
-        try emitFinding(options, .warn, .entropy_padding_not_ones, base + br.padByteOffset(), detail);
+        if (options.findings_sink) |sink| try sink.emitZeroPadding(base + br.padByteOffset(), br.padBitCount());
     } else if (err == error.PaddingNotOnes) {
         try emitFinding(options, .fail, .entropy_padding_not_ones, base + br.padByteOffset(),
             "pad bits before the marker are not all 1 (T.81 F.1.2.3)");
