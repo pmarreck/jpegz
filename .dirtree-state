@@ -56,7 +56,7 @@ annotate=[
 	src/decode/progressive.zig = SOF2 progressive multi-scan DCT decode incl. DRI and AC refinement
 	src/decode/segment.zig = Shared parseSegmentLength marker-length primitive
 	src/decode/thread_pool.zig = Minimal worker thread pool (spawnWg/waitAndWork) for parallel IDCT + color convert
-	src/facade_validation.zig = Four-way JP2/JXL adapter preserving ordered leaf findings, assessment, completion, counts and offsets
+	src/facade_validation.zig = Classified codec reports with leaf severity, completion and bounded JP2 locations
 	src/ffi/c_api.zig = C ABI export fn for every public API; exhaustive toCStatus switch fails the build on an unmapped error
 	src/ffi/c_api_validate.zig = Validation half of the C ABI: validate/validate_any/sniff/verdict names — root of the C-library-free libjpegz-validate.a
 	src/ffi/c_common.zig = Shared C-ABI marshaling helpers (allocator, last-error, status/finding conversion) for both ABI archives
@@ -73,7 +73,7 @@ annotate=[
 	tests/cli/no_c_consumer.bash = Gate: pure-Zig consumer must import jpegz + call validate() with zero C deps (has negative control)
 	tests/cli/seed_libjxlz_cache.bash = Cache-hit, cache-miss, and dev-shell hook contract for libjxlz seeding
 	tests/cli/validate_cli.bash = Bash CLI surface suite (22 assertions): arg discipline, exit codes, rich errors, JSON, stdin, spaced paths, ANSI suppression
-	tests/unit/facade_validation.zig = Strict JPEG-family facade contracts, malformed-stream controls and SIZ tile-origin boundaries.
+	tests/unit/facade_validation.zig = Facade verdict, leaf mapping and JP2 location-boundary controls
 	tests/unit/fixtures/JXL_VALIDATION_PROVENANCE.md = Exact libjxlz source paths, SHA-256 values, and expected four-way fixture outcomes.
 	tests/unit/fixtures/baseline_16x16_rgb_marked.jpg = RGB-marked baseline JPEG (Adobe APP14 transform=0) — gap-D cleanroom RGB-passthrough test fixture
 	tests/unit/fixtures/seq_16x16_3scan.jpg = Validate's three-scan non-interleaved sequential JPEG (cjpeg -scans 0;1;2), former false FAIL

@@ -1,6 +1,65 @@
 const std = @import("std");
 const jpegz = @import("jpegz");
 
+test "JP2 declared ends beyond input retain corruption without a byte location" {
+	const allocator = std.testing.allocator;
+	var bytes = @embedFile("fixtures/jp2_8x8_rgb.jp2").*;
+	bytes[215] ^= 1;
+	var result = try jpegz.jpeg2000.strictValidate(allocator, &bytes);
+	defer result.deinit(allocator);
+	try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
+	var found = false;
+	var retained_anchor = false;
+	for (result.findings.items) |finding| {
+		// The original leaf report also has this in-buffer detection anchor.
+		if (finding.offset == 147) {
+			try std.testing.expectEqual(@as(?u64, 147), finding.host_offset);
+			retained_anchor = true;
+		}
+		if (finding.leaf_code != 3) continue;
+		found = true;
+		try std.testing.expectEqual(jpegz.FindingCode.truncated_stream, finding.code.?);
+		try std.testing.expectEqual(jpegz.Severity.fail, finding.severity);
+		try std.testing.expectEqual(@as(?u64, null), finding.offset);
+		try std.testing.expectEqual(@as(?u64, null), finding.host_offset);
+		try std.testing.expect(!finding.offset_is_exact);
+		try std.testing.expect(std.mem.indexOf(u8, finding.detail orelse "", "242") != null);
+	}
+	try std.testing.expect(found);
+	try std.testing.expect(retained_anchor);
+}
+
+test "JP2 packet corruption never exposes an offset beyond the input" {
+	const allocator = std.testing.allocator;
+	const pristine = @embedFile("fixtures/jp2_8x8_rgb.jp2");
+	const sod = std.mem.indexOf(u8, pristine, &.{ 0xff, 0x93 }) orelse return error.MissingSod;
+	// Keep container/geometry headers fixed. Sweep every one-bit mutation of
+	// the packet region, including its length declarations, with a clean control.
+	for (sod + 2..pristine.len - 2) |offset| {
+		for (0..8) |bit| {
+			var bytes = pristine.*;
+			bytes[offset] ^= @as(u8, 1) << @intCast(bit);
+			var result = try jpegz.jpeg2000.strictValidate(allocator, &bytes);
+			defer result.deinit(allocator);
+			for (result.findings.items) |finding| {
+				if (finding.offset) |location| {
+					if (location > bytes.len) {
+						std.debug.print("JP2 bit mutation at {d}:{d} reports leaf {d} at {d}, input length {d}\n",
+							.{ offset, bit, finding.leaf_code, location, bytes.len });
+						return error.OffsetBeyondInput;
+					}
+					if (location == bytes.len) try std.testing.expect(!finding.offset_is_exact);
+					try std.testing.expectEqual(@as(?u64, location), finding.host_offset);
+				}
+				if (finding.host_offset) |location| try std.testing.expect(location <= bytes.len);
+			}
+		}
+	}
+	var clean = try jpegz.jpeg2000.strictValidate(allocator, pristine);
+	defer clean.deinit(allocator);
+	try std.testing.expectEqual(jpegz.StrictVerdict.valid, clean.verdict);
+}
+
 test "known encoder defects have their own verdict without hiding corruption" {
 	const allocator = std.testing.allocator;
 	const zero = @embedFile("fixtures/zero_pad_16x16_420.jpg");

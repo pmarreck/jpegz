@@ -237,13 +237,26 @@ pub fn validateJp2(
         saw_unknown = saw_unknown or mapped.code == null;
         saw_unsupported = saw_unsupported or mapped.verdict == .unsupported;
         saw_corrupt = saw_corrupt or mapped.verdict == .corrupt;
-        const detail = if (finding.detail) |value| try allocator.dupe(u8, value) else null;
+		// Some leaf truncation positions describe a declared end beyond the
+		// supplied buffer. Preserve that evidence without inventing a byte.
+		const offset: ?u64 = if (finding.offset) |value|
+			(if (value <= data.len) value else null)
+		else
+			null;
+		const detail = if (finding.offset != null and offset == null)
+			try std.fmt.allocPrint(allocator, "{s}{s}Leaf reported position {d} beyond input length {d}.",
+				.{ finding.detail orelse "", if (finding.detail != null) " " else "", finding.offset.?, data.len })
+		else if (finding.detail) |value|
+			try allocator.dupe(u8, value)
+		else
+			null;
         result.findings.appendAssumeCapacity(.{
             .source = .jp2z,
             .leaf_code = @intFromEnum(finding.code),
             .code = mapped.code,
             .severity = mapped.severity,
-            .offset = finding.offset,
+            .offset = offset,
+			.host_offset = offset,
             .detail = detail,
         });
     }

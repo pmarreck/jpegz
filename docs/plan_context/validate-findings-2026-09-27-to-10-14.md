@@ -187,6 +187,36 @@ encoder. Confirm that once the padding code exists.
   example is `truncated_stream` reported at 690 on a 269-byte `tiny.jp2` with
   byte 259 flipped.
 
+### JP2 strict-facade location bounds (2026-10-28)
+
+A public regression reproduces the location problem without the private
+original: XOR byte 215 of `tests/unit/fixtures/jp2_8x8_rgb.jp2` with 1. The
+238-byte input produces leaf finding 3 at position 242. The first persisted
+regression failed on that overshoot; a strengthened regression also failed
+because the same report's in-buffer anchor at 147 had no host offset.
+
+The strict adapter now retains positions through EOF and copies them to the
+standalone host offset. A position beyond the input becomes null byte and
+host offsets, and its raw numeric position is preserved in the owned detail
+string. The typed truncation finding, FAIL severity and corrupt verdict stay
+intact. The regression requires the 147 anchor to survive, preventing a fix
+that discards every location. A set of 168 one-bit packet-region mutations
+checks location bounds with container and geometry headers held fixed; a
+clean control remains valid. This is a location regression, not a measurement
+of corruption-detection sensitivity.
+
+The complete local test entry point passed native/CLI/C ABI checks, production,
+all four cross-link checks, the dependency closure and consumer controls.
+A separate production-CLI check confirmed exit 1, null byte/host offsets,
+nonexact status and position 242 retained in JSON detail. Nix sandboxing was
+confirmed enabled. No finding IDs, provider pins or classification policy
+changed.
+
+The pinned jp2z Finding exposes a numeric offset without exactness metadata.
+Its cursor/anchor/declared-end contract is pending a provider response; bounds
+alone must not turn on `offset_is_exact`. The older severity-only JP2 adapter
+also remains to audit. This change does not claim either part is complete.
+
 ## Coordinator items
 
 - Finding 261 = `cblk_contribution_ends_ff`, approved append-only (jp2z

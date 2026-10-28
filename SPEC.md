@@ -100,6 +100,13 @@ Registry values are append-only and shared with sibling validators.
 Use `jpegz_finding_code_name()` for display; do not duplicate the name table.
 Code-number changes require the coordination recorded in PLAN.md.
 
+JP2 strict reports retain positions within the supplied buffer, including
+nonexact EOF cursors, and copy them to the standalone host offset. A leaf
+position beyond the buffer has null byte/host offsets, with its reported
+number preserved in the detail. Bounds alone do not establish exactness;
+the pinned leaf does not yet provide exactness metadata. The older JP2
+severity-only report retains its existing location behavior pending review.
+
 Strict validation must account for decoded entropy and surface recovery.
 DHT construction rejects oversubscribed code counts and reserved all-ones
 codes before code narrowing or lookup-table writes (T.81 Annex C). Legal
