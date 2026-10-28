@@ -499,6 +499,40 @@ fn walkToNextScan(
     return fail("eof_before_all_components_scanned", error.TruncatedStream);
 }
 
+/// Detect another sequential scan after every component was already coded
+/// (T.81 3.1.116). Probe complete marker chains without decoding extra entropy;
+/// defer the finding until EOI so missing-EOI decode behavior stays unchanged.
+fn rejectPostCoverageScans(data: []const u8, start: usize, options: DecodeOptions) Error!void {
+	var pos = start;
+	var repeated_cs: ?usize = null;
+	while (pos + 1 < data.len) {
+		// Inspection is provisional: incomplete tails must not add findings.
+		const marker = (nextMarker(data, &pos, .{}) catch return) orelse continue;
+		switch (marker) {
+			0xd9 => {
+				if (repeated_cs) |offset| {
+					try emitFinding(options, .fail, .sos_component_mismatch, offset,
+						"SOS follows complete component coverage of a sequential frame");
+					return fail("scan_after_complete_coverage", error.InvalidMarker);
+				}
+				return;
+			},
+			0x01, 0xd0...0xd8 => continue,
+			else => {
+				const len = parseSegmentLength(data, pos);
+				if (len < 2 or pos + len > data.len) return;
+				if (marker == 0xda and repeated_cs == null) {
+					// A complete selector field gives the repeated component's
+					// exact byte; a shorter extra header names its SOS marker.
+					repeated_cs = if (len >= 8 and data[pos + 2] != 0) pos + 3 else pos - 2;
+				}
+				// Length-delimited payloads may contain arbitrary marker bytes.
+				pos += len;
+			},
+		}
+	}
+}
+
 // Shared spec primitive (also re-exported for arith_decode, which
 // imports `baseline.parseSegmentLength`). Single definition lives in
 // segment.zig.
@@ -835,7 +869,10 @@ fn decodeScanT(
         const end = try decodeScanEntropy(data, scan_start, frame, scan, grid, tables, options);
         // Recovered truncation leaves later components at zero, as libjpeg does.
         if (end.truncated) break;
-        if (std.mem.allEqual(bool, coded[0..channels], true)) break;
+        if (std.mem.allEqual(bool, coded[0..channels], true)) {
+			try rejectPostCoverageScans(data, scan_start + end.consumed, options);
+			break;
+		}
         scan_start += end.consumed;
         scan = try walkToNextScan(data, &scan_start, frame, tables.quant, tables.dc, tables.ac,
             tables.restart_interval, options);

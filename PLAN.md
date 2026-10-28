@@ -6,7 +6,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Priority: dependency freshness
 
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; do not change settings unasked.
-- [x] Re-lock tools/coverage to corruption_reader 3ea60b7 and make zig-overlay follow a current flake-compat; ./test and a 5-round real-tool coverage smoke run pass (done 2026-10-18 23:58 EDT).
 - [ ] Re-lock tools/coverage after corruption_reader repins performance_profiling 01ae85b (published 2026-10-20 21:50 EDT; our lock reaches it only through corruption_reader 3ea60b7, which still pins a04d62a and printable_binary 3f697d5). Bump root nixpkgs to the current head in the same re-lock.
 - [ ] Reconcile the October 14 inbox with published f1a255a and later yolo c8937a7. The provider hold is released for pin adoption and the sampling packet stays held. Advance one unblocked milestone and send the coordinator a receipt with any genuine owner decisions.
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
@@ -22,7 +21,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
   - [x] Lenient decoding continues past end-of-scan padding faults when a marker follows, so every instance is reported and recovery matches libjpeg-turbo pixels (done 2026-10-23 10:40 EDT).
   - [x] Code 63 `entropy_padding_zero_bits` for all-zero pad bits (WARN, exact pad byte, bit count in the detail); 62 narrows to mixed bits. Validate verified 63 unused and endorsed it; registry coordinator sign-off 2026-10-23 ~1:55 PM EDT. Conditions: append-only (62 keeps number and name), tests over the set of pad widths 1..7 (all 0 -> 63, mixed -> 62, all 1 -> none; width 1 has no mixed pattern), non-boundary cases unchanged, consumer mapping coordinated with validate. Not a KNOWN_DEFECT admission. (done 2026-10-23 6:30 PM EDT)
   - [x] The same all-zero WARN for progressive and lossless scans (strict decode accepts; lenient and validation report 63 at the exact pad byte). (done 2026-10-23 6:30 PM EDT)
-- [ ] Reject a sequential scan that follows complete component coverage (for example a fourth SOS after Y, Cb, Cr). Needs a post-coverage walk to EOI that leaves missing-EOI files unchanged.
+- [x] Reject additional sequential Huffman SOS after complete component coverage with exact FAIL 55; skip opaque metadata, stop at first EOI and preserve missing-EOI decode outcomes; full ./test passes (done 2026-10-28 17:21 EDT; delivered by this change).
 - [x] Report baseline restart and padding findings at absolute file offsets (done with the distinct-codes item, 2026-10-20).
 - [x] Apply FAIL 62 to mixed padding in progressive and lossless Huffman scans at exact absolute pad-byte offsets, including strict decode and lenient restart recovery, without generic 51 duplication; arithmetic stays excluded (done 2026-10-28 15:52 EDT; delivered by this change).
 - [x] Give repeated T.81 SOS selectors and invalid sequential Ns exact finding 55, and bad sequential Ls exact finding 4, before entropy decoding; reserve the scan tail when Ns is excessive; full ./test and valid four-component controls pass (done 2026-10-28 16:51 EDT; delivered by this change).

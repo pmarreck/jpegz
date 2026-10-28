@@ -113,6 +113,12 @@ first row. Progressive scans also check padding and EOB-run exhaustion;
 remaining coefficient and scan-history constraints are tracked in PLAN.md.
 Do not advertise complete corruption detection from pixel-oracle equality.
 
+Sequential Huffman frames reject an additional SOS after all components have
+been coded, with exact finding 55 at its first selector. The post-coverage
+walk skips length-delimited metadata and stops at the first EOI. It commits
+the finding only when EOI is reached, preserving existing missing-EOI decode
+behavior and the treatment of bytes after EOI as trailing data.
+
 SOF3 validation also accepts single full-component scans with two or four
 components and non-1x1 sampling. It consumes differences, MCU edge padding,
 restart intervals and the marker chain through EOI without constructing

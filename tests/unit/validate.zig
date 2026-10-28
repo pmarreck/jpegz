@@ -1673,3 +1673,86 @@ test "validate rejects multi-scan sequential frames that break component coverag
 		try expectOnlyTypedFail(report, c.code, c.offset);
 	}
 }
+
+test "sequential scans after complete coverage fail before EOI only" {
+	const allocator = std.testing.allocator;
+	// Marker-like bytes inside an opaque APP payload are not scan boundaries.
+	const app = [_]u8{ 0xff, 0xe1, 0, 8, 0xff, 0xda, 0xff, 0xd9, 1, 2 };
+	const cases = [_]struct { pristine: []const u8, extra: []const u8 }{
+		.{ .pristine = fixture_baseline_2x2_rgb, .extra = fixture_baseline_2x2_rgb[findMarker(fixture_baseline_2x2_rgb, 0xda).? .. fixture_baseline_2x2_rgb.len - 2] },
+		.{ .pristine = fixture_seq_16x16_3scan, .extra = fixture_seq_16x16_3scan[393..432] },
+	};
+	for (cases) |case| {
+		try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xd9 }, case.pristine[case.pristine.len - 2 ..]);
+		const prefix = case.pristine[0 .. case.pristine.len - 2];
+		for ([_][]const u8{ &.{}, &app }) |between| {
+			const good = try std.mem.concat(allocator, u8, &.{ prefix, between, &.{ 0xff, 0xd9 } });
+			defer allocator.free(good);
+			var decoded = try jpegz.decode(allocator, good);
+			defer decoded.deinit(allocator);
+			var oracle = try jpegz.internal.wrapperDecode(allocator, good);
+			defer oracle.deinit(allocator);
+			try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+			const bad = try std.mem.concat(allocator, u8, &.{ prefix, between, case.extra, &.{ 0xff, 0xd9 } });
+			defer allocator.free(bad);
+			const repeated_cs = prefix.len + between.len + 5;
+			var report = try jpegz.validate(allocator, bad);
+			defer report.deinit(allocator);
+			try expectOnlyTypedFail(report, .sos_component_mismatch, repeated_cs);
+			for ([_]bool{ false, true }) |lenient| {
+				var sink = jpegz.FindingsSink.init(allocator);
+				defer sink.deinit();
+				if (jpegz.decodeWithOptions(allocator, bad, .{ .lenient = lenient, .findings_sink = &sink })) |image| {
+					var unexpected = image;
+					unexpected.deinit(allocator);
+					return error.ExpectedDecodeFailure;
+				} else |err| try std.testing.expectEqual(error.InvalidMarker, err);
+				var found = false;
+				for (sink.items()) |finding| {
+					if (finding.code == .sos_component_mismatch and finding.offset == repeated_cs) {
+						try std.testing.expectEqual(jpegz.Severity.fail, finding.severity);
+						try std.testing.expect(finding.offset_is_exact);
+						found = true;
+					}
+				}
+				try std.testing.expect(found);
+			}
+		}
+		const trailing = try std.mem.concat(allocator, u8, &.{ case.pristine, case.extra });
+		defer allocator.free(trailing);
+		var report = try jpegz.validate(allocator, trailing);
+		defer report.deinit(allocator);
+		try std.testing.expect(report.isValid());
+		try std.testing.expect(!reportHasCode(report, .sos_component_mismatch));
+	}
+}
+
+test "post-coverage inspection preserves missing-EOI decode outcomes" {
+	const allocator = std.testing.allocator;
+	const pristine = fixture_seq_16x16_3scan;
+	const prefix = pristine[0 .. pristine.len - 2];
+	const app = [_]u8{ 0xff, 0xe1, 0, 8, 0xff, 0xda, 0xff, 0xd9, 1, 2 };
+	var complete = try jpegz.decode(allocator, pristine);
+	defer complete.deinit(allocator);
+	try std.testing.expectError(error.BackendError, jpegz.decode(allocator, prefix));
+	// The old decoder finishes at the APP marker after full scan coverage,
+	// even when the following metadata is incomplete. Preserve that behavior.
+	for (2..app.len + 1) |end| {
+		const data = try std.mem.concat(allocator, u8, &.{ prefix, app[0..end] });
+		defer allocator.free(data);
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		var decoded = try jpegz.decodeWithOptions(allocator, data, .{ .findings_sink = &sink });
+		defer decoded.deinit(allocator);
+		try std.testing.expectEqualSlices(u8, complete.pixels, decoded.pixels);
+		try std.testing.expectEqual(@as(usize, 0), sink.items().len);
+	}
+	const open_tail = try std.mem.concat(allocator, u8, &.{ prefix, &app, pristine[393..432] });
+	defer allocator.free(open_tail);
+	var sink = jpegz.FindingsSink.init(allocator);
+	defer sink.deinit();
+	var decoded = try jpegz.decodeWithOptions(allocator, open_tail, .{ .findings_sink = &sink });
+	defer decoded.deinit(allocator);
+	try std.testing.expectEqualSlices(u8, complete.pixels, decoded.pixels);
+	try std.testing.expectEqual(@as(usize, 0), sink.items().len);
+}

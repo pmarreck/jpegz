@@ -112,6 +112,28 @@ selection or reset between single-component scans, or MCU = 1 data-unit
 geometry. Asked for: a red legal-input test, a malformed counterpart (for
 example a scan selecting an undefined table) and a fix.
 
+### Scans after complete sequential coverage (2026-10-28)
+
+Sequential Huffman decoding now inspects the remaining marker chain through
+the first EOI. A further SOS receives exact FAIL 55 at its first selector;
+the validator retains that typed finding without adding generic 51. This
+applies to strict and lenient decoding. Opaque APP payloads may contain marker
+bytes, so the inspection skips complete length-delimited payloads.
+
+The inspection defers its finding until EOI. Missing-EOI decode outcomes stay
+unchanged, including existing acceptance of incomplete metadata tails after
+full component coverage. Data after the first EOI remains trailing data.
+Tests cover interleaved and three-scan inputs, metadata containing fake SOS
+and EOI bytes, exact offsets, both decoder modes, and valid pixel controls
+against libjpeg-turbo. This does not claim arithmetic or hierarchical support.
+
+The failing native regression accepted an extra scan before the fix; its
+missing-EOI characterization already passed. After the fix, the complete
+local test entry point passed native/CLI/C ABI tests, the production build,
+all four cross-link checks, the dependency closure and isolated consumer
+negative controls. Cross compilation and closure preparation dominated the
+roughly 16-minute full run; native preparation had already passed separately.
+
 ## SOF1 with component ids 0/1/2 and table pairs 0/1/2 (2026-09-30 item 4)
 
 A 3-component SOF1 with component ids 0/1/2, each using its own DC/AC pair 0, 1
