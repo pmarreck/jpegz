@@ -1074,6 +1074,84 @@ test "validate: sos_component_mismatch classifies Cs not declared in SOF, silent
     try std.testing.expect(reportHasCode(report, .sos_component_mismatch));
 }
 
+test "SOS duplicate selectors are typed at the repeated byte across Huffman modes" {
+	const allocator = std.testing.allocator;
+	for ([_][]const u8{
+		fixture_baseline_2x2_rgb,
+		fixture_progressive_8x8,
+		@embedFile("fixtures/lossless_4x4_rgb_pred1.jpg"),
+		@embedFile("fixtures/baseline_4x4_cmyk.jpg"),
+	}) |pristine| {
+		var clean = try jpegz.validate(allocator, pristine);
+		defer clean.deinit(allocator);
+		try std.testing.expect(clean.isValid());
+		try std.testing.expect(!reportHasCode(clean, .sos_component_mismatch));
+		const sos = findMarker(pristine, 0xda).?;
+		const ns = pristine[sos + 4];
+		try std.testing.expect(ns == 3 or ns == 4);
+		for (1..ns) |selector| {
+			const data = try allocator.dupe(u8, pristine);
+			defer allocator.free(data);
+			const offset = sos + 5 + selector * 2;
+			data[offset] = data[sos + 5];
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try expectOnlyTypedFail(report, .sos_component_mismatch, offset);
+			for (report.findings.items) |finding| {
+				if (finding.code == .sos_component_mismatch) try std.testing.expect(finding.offset_is_exact);
+			}
+		}
+	}
+}
+
+test "sequential SOS length and component count have distinct typed locations" {
+	// T.81 B.2.3: Ls = 6 + 2*Ns, with distinct frame selectors and
+	// 1 <= Ns <= min(4, Nf). Hand-packed entropy codes one gray block.
+	const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{1} ** 64) ++
+		[_]u8{ 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0x10, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0};
+	const cases = [_]struct { sos: []const u8, code: ?jpegz.FindingCode = null, field: usize = 0, failures: usize = 1 }{
+		.{ .sos = &.{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0 } },
+		.{ .sos = &.{ 0xff, 0xda, 0, 6, 0, 0, 63, 0 }, .code = .sos_component_mismatch, .field = 4 },
+		.{ .sos = &.{ 0xff, 0xda, 0, 10, 2, 1, 0, 1, 0, 0, 63, 0 }, .code = .sos_component_mismatch, .field = 4, .failures = 2 },
+		.{ .sos = &.{ 0xff, 0xda, 0, 16, 5, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 63, 0 }, .code = .sos_component_mismatch, .field = 4, .failures = 5 },
+		.{ .sos = &.{ 0xff, 0xda, 0, 8, 255, 1, 0, 0, 63, 0 }, .code = .sos_component_mismatch, .field = 4, .failures = 2 },
+		.{ .sos = &.{ 0xff, 0xda, 0, 2 }, .code = .bad_marker_length, .field = 2 },
+		.{ .sos = &.{ 0xff, 0xda, 0, 5, 1, 1, 0 }, .code = .bad_marker_length, .field = 2 },
+		.{ .sos = &.{ 0xff, 0xda, 0, 7, 1, 1, 0, 0, 63 }, .code = .bad_marker_length, .field = 2 },
+		.{ .sos = &.{ 0xff, 0xda, 0, 9, 1, 1, 0, 0, 63, 0, 0 }, .code = .bad_marker_length, .field = 2 },
+	};
+	const allocator = std.testing.allocator;
+	for ([_]u8{ 0xc0, 0xc1 }) |sof| {
+		for (cases) |case| {
+			const data = try std.mem.concat(allocator, u8, &.{ &header, case.sos, &.{ 0x3f, 0xff, 0xd9 } });
+			defer allocator.free(data);
+			data[findMarker(data, 0xc0).? + 1] = sof;
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			if (case.code) |code| {
+				try expectOnlyTypedFail(report, code, header.len + case.field);
+				var failures: usize = 0;
+				for (report.findings.items) |finding| {
+					if (finding.severity != .fail) continue;
+					failures += 1;
+					try std.testing.expect(finding.offset_is_exact);
+				}
+				try std.testing.expectEqual(case.failures, failures);
+			} else {
+				try std.testing.expect(report.isValid());
+				try std.testing.expectEqual(.decoded, report.codec_check);
+				var decoded = try jpegz.decode(allocator, data);
+				defer decoded.deinit(allocator);
+				var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+				defer oracle.deinit(allocator);
+				try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+			}
+		}
+	}
+}
+
 test "validate: progressive_scan_invalid classifies bad spectral selection, silent on clean" {
     const allocator = std.testing.allocator;
 

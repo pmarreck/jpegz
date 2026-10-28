@@ -96,6 +96,13 @@ fn addFinding(
     }
 }
 
+/// Mark a structurally identified header byte without claiming an EOF cursor
+/// or an entropy decoder's later detection position is the damaged byte.
+fn addExactFinding(report: *ValidationReport, allocator: Allocator, code: FindingCode, offset: usize, detail: []const u8) Allocator.Error!void {
+	try addFinding(report, allocator, .fail, code, @intCast(offset), detail);
+	report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
+}
+
 pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!ValidationReport {
     var report = ValidationReport{
         .overall = .pass,
@@ -121,6 +128,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     // Membership bitmap of component IDs (Ci) declared by the SOF, used
     // to validate SOS component selectors (Cs) cross-segment.
     var sof_comp_ids = [_]bool{false} ** 256;
+    var sof_component_count: u8 = 0;
     var sos_count: u32 = 0; // number of SOS (scan) markers seen
 
     // ── Step 2: Walk markers ──────────────────────────────────
@@ -290,6 +298,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                         try addFinding(&report, allocator, .fail, .sof_component_count_invalid,
                             seg_body_start + 5, "SOF Nf must be >= 1 and segment length must equal 8 + 3*Nf");
                     } else {
+                        sof_component_count = nf;
                         // Record each declared component ID (Ci) for the SOS cross-check.
                         var ci: usize = 0;
                         while (ci < nf) : (ci += 1) {
@@ -323,15 +332,45 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         } else if (marker_byte == Marker.SOS) {
             seen_sos = true;
             sos_count += 1;
+			// T.81 B.2.3: diagnose sequential SOS shape before decoding can
+			// mislabel a header fault as damaged Huffman entropy.
+			const sequential_huffman = report.variant == .baseline_huffman or report.variant == .extended_huffman;
+			if (seen_sof and sequential_huffman) {
+				if (seg_body_start == seg_end or seg_len < 6) {
+					try addExactFinding(&report, allocator, .bad_marker_length, pos,
+						"sequential SOS length must equal 6 + 2*Ns");
+				} else {
+					const ns = data[seg_body_start];
+					if (ns == 0 or ns > 4 or (sof_component_count != 0 and ns > sof_component_count)) {
+						try addExactFinding(&report, allocator, .sos_component_mismatch, seg_body_start,
+							"sequential SOS Ns must be 1..4 and cannot exceed SOF Nf");
+					}
+					if (seg_len != 6 + @as(usize, ns) * 2) {
+						try addExactFinding(&report, allocator, .bad_marker_length, pos,
+							"sequential SOS length must equal 6 + 2*Ns");
+					}
+				}
+			}
             // Validate scan component selectors (Cs) reference SOF-declared
             // components (T.81 §B.2.3). SOS body: Ns, then Ns×(Cs, Td/Ta).
             // Only meaningful once a SOF has been seen (missing SOF is
             // reported separately) — otherwise the bitmap is empty.
             if (seen_sof and seg_body_start < seg_end) {
                 const ns = data[seg_body_start];
+				// Only a complete T.81 selector list establishes a repeated Cs.
+				// JPEG-LS scan constraints remain owned by the T.87 validator.
+				const check_duplicates = report.variant != .jpegls and seg_len == 6 + @as(usize, ns) * 2;
+				var selected = [_]bool{false} ** 256;
                 var cj: usize = 0;
-                while (cj < ns and seg_body_start + 1 + 2 * cj < seg_end) : (cj += 1) {
+				// Reserve Ss, Se and Ah/Al; an excessive Ns must not turn
+				// those trailing parameters into apparent component selectors.
+                while (cj < ns and seg_body_start + 5 + 2 * cj < seg_end) : (cj += 1) {
                     const cs = data[seg_body_start + 1 + 2 * cj];
+					if (check_duplicates and selected[cs]) {
+						try addExactFinding(&report, allocator, .sos_component_mismatch,
+							seg_body_start + 1 + 2 * cj, "SOS repeats a component selector Cs");
+					}
+					selected[cs] = true;
                     if (!sof_comp_ids[cs]) {
                         try addFinding(&report, allocator, .fail, .sos_component_mismatch,
                             seg_body_start + 1 + 2 * cj,

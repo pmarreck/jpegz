@@ -6,7 +6,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Priority: dependency freshness
 
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; do not change settings unasked.
-- [x] Refresh CharLS b2beeae, nixpkgs f20cd90 and zig-overlay e7e40b6 with the package hash unchanged (done 2026-10-18 23:30 EDT, ae68443).
 - [x] Re-lock tools/coverage to corruption_reader 3ea60b7 and make zig-overlay follow a current flake-compat; ./test and a 5-round real-tool coverage smoke run pass (done 2026-10-18 23:58 EDT).
 - [ ] Re-lock tools/coverage after corruption_reader repins performance_profiling 01ae85b (published 2026-10-20 21:50 EDT; our lock reaches it only through corruption_reader 3ea60b7, which still pins a04d62a and printable_binary 3f697d5). Bump root nixpkgs to the current head in the same re-lock.
 - [ ] Reconcile the October 14 inbox with published f1a255a and later yolo c8937a7. The provider hold is released for pin adoption and the sampling packet stays held. Advance one unblocked milestone and send the coordinator a receipt with any genuine owner decisions.
@@ -26,7 +25,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Reject a sequential scan that follows complete component coverage (for example a fourth SOS after Y, Cb, Cr). Needs a post-coverage walk to EOI that leaves missing-EOI files unchanged.
 - [x] Report baseline restart and padding findings at absolute file offsets (done with the distinct-codes item, 2026-10-20).
 - [x] Apply FAIL 62 to mixed padding in progressive and lossless Huffman scans at exact absolute pad-byte offsets, including strict decode and lenient restart recovery, without generic 51 duplication; arithmetic stays excluded (done 2026-10-28 15:52 EDT; delivered by this change).
-- [ ] Give a repeated Csj within one SOS (`sos_duplicate_component`) and the baseline-only `sos_bad_length`/`sos_bad_ns` checks typed findings; they still fall back to 51.
+- [x] Give repeated T.81 SOS selectors and invalid sequential Ns exact finding 55, and bad sequential Ls exact finding 4, before entropy decoding; reserve the scan tail when Ns is excessive; full ./test and valid four-component controls pass (done 2026-10-28 16:51 EDT; delivered by this change).
 - [x] Give restart-after-final-MCU, interval-boundary truncation and non-1 padding their own registry-numbered finding codes with exact offsets, keeping FAIL severity. Baseline/extended sequential Huffman now emits 62, 57, 3 and 55 at absolute offsets with `offset_is_exact`; the generic 51 is no longer added beside a typed FAIL. (2026-10-20 13:30 EDT)
 
 ## Priority: Validate September 30 work order
@@ -65,6 +64,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Build and CLI
 
+- [ ] Investigate gate feedback latency, whole-tree Nix source inputs and artifact reuse; measure compilation, queue/setup and test execution separately while preserving complete coverage (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
 - [ ] Port the requested upstream-first dependency-freshness gate with sibling fallback and set tests for current, stale, missing, offline and ahead-of-sibling cases.
 - [ ] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks; coordinate the unnecessary encoder linkage with libjxlz.
 - [ ] Add U5b progress controls and pure timestamp-injected rendering; verify rendered output with Peter and test terminal/width degradation.

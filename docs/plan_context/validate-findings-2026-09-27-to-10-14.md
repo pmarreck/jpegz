@@ -16,6 +16,21 @@ does not admit a known defect.
 
 ## Distinct finding labels (2026-10-10)
 
+### SOS header findings (2026-10-28)
+
+The common marker walker checks repeated T.81 selectors before entropy
+decoding and reports 55 `sos_component_mismatch` at the repeated Cs byte.
+Sequential Huffman scans also report 55 at invalid Ns, and 4
+`bad_marker_length` at the Ls field when its size is inconsistent. Both
+locations are exact. The selector walk reserves the three trailing parameters
+so an excessive Ns cannot manufacture extra component findings from them.
+JPEG-LS duplicate-selector policy is unchanged.
+
+The normative basis is [T.81 B.2.3 and Table B.3](https://www.w3.org/Graphics/JPEG/itu-t81.pdf#page=41).
+Tests cover baseline, extended sequential, progressive and lossless headers,
+the valid four-component CMYK boundary, short/long lengths, zero/excessive Ns,
+and the complete failure set for an excessive count in a short header.
+
 Registry decision 2026-10-20 12:38 EDT: 62 `entropy_padding_not_ones`
 approved (append-only, FAIL, exact entropy pad-byte offset); reuse 57
 `restart_marker_unexpected`, 3 `truncated_stream` and 55
@@ -139,3 +154,14 @@ encoder. Confirm that once the padding code exists.
 - The provider-flag evidence request of 2026-10-13 was overtaken by the owner's
   release of the JPEG provider hold on 2026-10-15. The sampling research stays
   held.
+
+## Feedback latency observation (2026-10-28)
+
+The local gates for 4fb4c19 reported build-phase spans of 114 seconds for
+native tests, 117 for the package, 143/207/131/152 for the four cross-link
+checks, and 124 for the closure proof. These include compilation; test
+execution was not timed separately, so they do not establish an execution
+budget result. Exact-commit CI completed in 988 seconds. Each derivation
+currently takes the whole source tree, so source-input scope and cache reuse
+need investigation before changing the pipeline. Preserve every required
+suite and verify source completeness before narrowing any inputs.
