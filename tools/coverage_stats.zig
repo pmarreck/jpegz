@@ -33,6 +33,7 @@ pub fn roundsForHalfWidth(half: f64) u64 {
 pub const Class = enum {
     detected,
     accepted,
+    known_defect,
     unsupported,
     indeterminate,
     inconsistent,
@@ -55,6 +56,7 @@ pub fn classify(status: []const u8, rc: i32, verdict: []const u8) Class {
     if (rc == 2) return .io_error;
     if (rc == 0) return if (std.mem.eql(u8, verdict, "valid")) .accepted else .inconsistent;
     if (rc == 1) return if (std.mem.eql(u8, verdict, "corrupt")) .detected else .inconsistent;
+    if (rc == 4) return if (std.mem.eql(u8, verdict, "known_defect")) .known_defect else .inconsistent;
     if (rc == 3) {
         if (std.mem.eql(u8, verdict, "unsupported")) return .unsupported;
         if (std.mem.eql(u8, verdict, "indeterminate")) return .indeterminate;
@@ -71,6 +73,7 @@ pub const Cell = struct {
     judged: u64 = 0,
     detected: u64 = 0,
     accepted: u64 = 0,
+    known_defect: u64 = 0,
     unsupported: u64 = 0,
     indeterminate: u64 = 0,
     inconsistent: u64 = 0,
@@ -172,6 +175,7 @@ fn appendBatch(
         switch (class) {
             .detected => cell.detected += 1,
             .accepted => cell.accepted += 1,
+            .known_defect => cell.known_defect += 1,
             .unsupported => cell.unsupported += 1,
             .indeterminate => cell.indeterminate += 1,
             .inconsistent => cell.inconsistent += 1,
@@ -197,7 +201,7 @@ fn appendBatch(
 }
 
 fn finish(cell: *Cell) void {
-    cell.judged = cell.detected + cell.accepted + cell.unsupported + cell.indeterminate + cell.inconsistent;
+    cell.judged = cell.detected + cell.accepted + cell.known_defect + cell.unsupported + cell.indeterminate + cell.inconsistent;
     if (wilson(cell.detected, cell.judged)) |iv| {
         cell.lo = iv.lo;
         cell.hi = iv.hi;
@@ -209,6 +213,7 @@ fn absorb(into: *Cell, c: Cell) void {
     into.noop += c.noop;
     into.detected += c.detected;
     into.accepted += c.accepted;
+    into.known_defect += c.known_defect;
     into.unsupported += c.unsupported;
     into.indeterminate += c.indeterminate;
     into.inconsistent += c.inconsistent;
@@ -372,7 +377,7 @@ pub fn formatTable(allocator: std.mem.Allocator, cells: []const Cell) ![]u8 {
     });
     defer allocator.free(rounds);
     try buf.appendSlice(allocator, rounds);
-    try buf.appendSlice(allocator, "fixture\tprofile\tapplied\tnoop\tjudged\tcorrupt\twilson95\taccepted\tunsupported\tindeterminate\tinconsistent\tio\ttimeout\tcrash\tharness\n");
+    try buf.appendSlice(allocator, "fixture\tprofile\tapplied\tnoop\tjudged\tcorrupt\twilson95\taccepted\tknown_defect\tunsupported\tindeterminate\tinconsistent\tio\ttimeout\tcrash\tharness\n");
     for (cells) |cell| {
         try appendSanitized(&buf, allocator, cell.fixture);
         try buf.append(allocator, '\t');
@@ -383,8 +388,8 @@ pub fn formatTable(allocator: std.mem.Allocator, cells: []const Cell) ![]u8 {
         defer allocator.free(counts);
         try buf.appendSlice(allocator, counts);
         try appendInterval(&buf, allocator, cell);
-        const rest = try std.fmt.allocPrint(allocator, "\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
-            cell.accepted, cell.unsupported, cell.indeterminate, cell.inconsistent,
+        const rest = try std.fmt.allocPrint(allocator, "\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
+            cell.accepted, cell.known_defect, cell.unsupported, cell.indeterminate, cell.inconsistent,
             cell.io_error, cell.timeout, cell.crash, cell.harness,
         });
         defer allocator.free(rest);
@@ -414,9 +419,9 @@ pub fn formatSummary(allocator: std.mem.Allocator, cells: []const Cell) ![]u8 {
         try appendJsonString(&buf, allocator, cell.fixture);
         try buf.appendSlice(allocator, ",\"profile\":");
         try appendJsonString(&buf, allocator, cell.profile);
-        const counts = try std.fmt.allocPrint(allocator, ",\"applied\":{d},\"noop\":{d},\"judged\":{d},\"detected\":{d},\"accepted\":{d},\"unsupported\":{d},\"indeterminate\":{d},\"inconsistent\":{d},\"io_error\":{d},\"timeout\":{d},\"crash\":{d},\"harness\":{d},", .{
+        const counts = try std.fmt.allocPrint(allocator, ",\"applied\":{d},\"noop\":{d},\"judged\":{d},\"detected\":{d},\"accepted\":{d},\"known_defect\":{d},\"unsupported\":{d},\"indeterminate\":{d},\"inconsistent\":{d},\"io_error\":{d},\"timeout\":{d},\"crash\":{d},\"harness\":{d},", .{
             cell.applied, cell.noop, cell.judged, cell.detected, cell.accepted,
-            cell.unsupported, cell.indeterminate, cell.inconsistent,
+            cell.known_defect, cell.unsupported, cell.indeterminate, cell.inconsistent,
             cell.io_error, cell.timeout, cell.crash, cell.harness,
         });
         defer allocator.free(counts);
@@ -547,6 +552,52 @@ test "classify trusts the exit code only when the verdict agrees" {
     try std.testing.expectEqual(Class.crash, classify("applied", 139, ""));
     try std.testing.expectEqual(Class.harness, classify("applied", 127, ""));
     try std.testing.expectEqual(Class.harness, classify("other", 1, "corrupt"));
+}
+
+test "known-defect exit and verdict must agree across the outcome set" {
+    const verdicts = [_][]const u8{ "valid", "corrupt", "unsupported", "indeterminate", "known_defect" };
+    const expected = [_][]const u8{
+        "accepted", "inconsistent", "inconsistent", "inconsistent", "inconsistent",
+        "inconsistent", "detected", "inconsistent", "inconsistent", "inconsistent",
+        "io_error", "io_error", "io_error", "io_error", "io_error",
+        "inconsistent", "inconsistent", "unsupported", "indeterminate", "inconsistent",
+        "inconsistent", "inconsistent", "inconsistent", "inconsistent", "known_defect",
+    };
+    for (0..5) |rc| {
+        for (verdicts, 0..) |verdict, i| {
+            try std.testing.expectEqualStrings(expected[rc * 5 + i], @tagName(classify("applied", @intCast(rc), verdict)));
+        }
+    }
+}
+
+test "known defects retain a separate count in cells pools and JSON" {
+    const allocator = std.testing.allocator;
+    const report =
+        \\{"status":"applied","path":"/tmp/a","round":0}
+        \\{"status":"applied","path":"/tmp/b","round":1}
+        \\
+    ;
+    const results = "/tmp/a\t1\tcorrupt\n/tmp/b\t4\tknown_defect\n";
+    const batch = try aggregate(allocator, "fixture", "sniper", report, results);
+    defer allocator.free(batch.cells);
+    defer allocator.free(batch.survivors);
+    for (batch.cells) |cell| {
+        try std.testing.expectEqual(@as(u64, 2), cell.judged);
+        try std.testing.expectEqual(@as(u64, 1), cell.detected);
+        try std.testing.expectEqual(@as(u64, 1), cell.known_defect);
+        try std.testing.expectEqual(@as(u64, 0), cell.accepted);
+        try std.testing.expectEqual(@as(u64, 0), cell.harness);
+    }
+    try std.testing.expectEqual(@as(usize, 1), batch.survivors.len);
+    try std.testing.expectEqual(Class.known_defect, batch.survivors[0].class);
+    const summary = try formatSummary(allocator, batch.cells[0..1]);
+    defer allocator.free(summary);
+    const parsed = try std.json.parseFromSlice(struct { known_defect: u64, judged: u64, detected: u64 },
+        allocator, summary, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(u64, 1), parsed.value.known_defect);
+    try std.testing.expectEqual(@as(u64, 2), parsed.value.judged);
+    try std.testing.expectEqual(@as(u64, 1), parsed.value.detected);
 }
 
 test "detection rate ignores no-ops and crashes" {

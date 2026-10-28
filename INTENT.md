@@ -30,8 +30,14 @@ valid input and demonstrated corruption.
   without independent trusted reference information.
 - Proven format violations must fail validation and be reported. Successful
   recovery or continued inspection must not turn that failure into a passing
-  verdict. Peter reaffirmed this priority on September 12, 2026, in response
-  to the JP2 tile-part-count warning downgrade.
+  verdict. The October 23 and 27 rulings, confirmed October 28, establish an
+  exception for known encoder defects: jpegz identifies and reports them as
+  KNOWN_DEFECT, a classification distinct from warning severity, with its own
+  CLI exit code. Their treatment is WARN unless they produce corrupt or
+  unopenable output or existing readers reject the variation. Consumers such
+  as validate receive jpegz's classification, typed cause, location and
+  decoding outcome and apply their own application policy. Successful decoding
+  alone does not establish that a violation is a known encoder defect.
 
 ## Verification
 

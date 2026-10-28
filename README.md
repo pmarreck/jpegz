@@ -48,7 +48,7 @@ three libraries or reconciling three finding registries:
 ```zig
 var result = try jpegz.validateAny(allocator, bytes);
 defer result.deinit(allocator);
-switch (result.verdict) { .valid, .corrupt, .unsupported, .indeterminate => ... }
+switch (result.verdict) { .valid, .known_defect, .corrupt, .unsupported, .indeterminate => ... }
 ```
 
 ```c
@@ -57,7 +57,13 @@ if (jpegz_validate_any(data, len, &r) == JPEGZ_OK) { /* r.verdict, r.findings */
 jpegz_strict_result_free(&r);
 ```
 
-The verdict is deliberately four-way. `unsupported` (well-formed, uses a feature
+The verdict separates `known_defect` from validity and corruption. jpegz
+identifies the encoder defect; warning severity describes its treatment.
+The CLI exits 4 for known defects, 0 for valid input, 1 for corruption, 2 for
+usage/I/O errors and 3 for inconclusive validation. Damage and incomplete
+validation take precedence over a known defect.
+
+`unsupported` (well-formed, uses a feature
 the validator does not cover) and `indeterminate` (no conclusion reached) are
 real answers — collapsing either into pass/fail turns a feature jpegz cannot
 check into either a false clean bill of health or a false accusation of damage.

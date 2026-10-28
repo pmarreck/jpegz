@@ -460,6 +460,12 @@ fn handleRestart(
         var boundary = br.*;
         // All-zero pad bits are a known encoder defect (finding 63): WARN, continue.
         const complete = if (boundary.finishHuffmanSegment()) |_| eob_run.* == 0 else |err| zero: {
+            if (err == error.PaddingNotOnes) {
+                if (options.findings_sink) |sink| try sink.emitExact(.fail, .entropy_padding_not_ones,
+                    base + boundary.padByteOffset(), "mixed Huffman pad bits before restart marker (T.81 F.1.2.3)");
+                if (!options.lenient) return error.BackendError;
+                break :zero eob_run.* == 0;
+            }
             if (err != error.PaddingZeroBits or eob_run.* != 0) break :zero false;
             if (options.findings_sink) |sink| try sink.emitZeroPadding(base + boundary.padByteOffset(), boundary.padBitCount());
             break :zero true;
@@ -661,6 +667,10 @@ fn decodeOneScan(
     if (!recovery.truncated) {
         if (eob_run != 0) return error.BackendError;
         _ = br.finishHuffmanSegment() catch |err| zero: {
+            if (err == error.PaddingNotOnes) {
+                if (options.findings_sink) |sink| try sink.emitExact(.fail, .entropy_padding_not_ones,
+                    entropy_start + br.padByteOffset(), "mixed Huffman pad bits before scan marker (T.81 F.1.2.3)");
+            }
             if (err != error.PaddingZeroBits) return error.BackendError;
             if (options.findings_sink) |sink| try sink.emitZeroPadding(entropy_start + br.padByteOffset(), br.padBitCount());
             br.seekToMarker();

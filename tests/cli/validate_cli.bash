@@ -268,6 +268,48 @@ capture "$jpegz_cli" --simple "$foreign"
 assert_contains "$out" "indeterminate" "foreign bytes report indeterminate"
 [ "$rc" -eq 3 ] && pass "inconclusive input exits 3, distinct from corrupt" || fail "inconclusive input exits 3, distinct from corrupt" "rc=$rc"
 
+# KNOWN_DEFECT is a classification of a recognized encoder mistake. WARN
+# severity alone must not turn it into the ordinary valid/exit-0 outcome.
+known_defect="$fixtures/zero_pad_16x16_420.jpg"
+out=; err=; rc=
+capture "$jpegz_cli" --json "$known_defect"
+[ "$rc" -eq 4 ] && pass "known defect exits 4" || fail "known defect exits 4" "rc=$rc"
+assert_contains "$out" '"verdict":"known_defect"' "JSON classifies the known defect"
+assert_contains "$out" '"severity":"WARN","code":"entropy_padding_zero_bits"' "known defect retains its treatment and typed cause"
+out=; err=; rc=
+capture "$jpegz_cli" --simple "$known_defect"
+assert_contains "$out" 'known_defect' "text classifies the known defect"
+
+# Legal marker fill is an ordinary warning, with the valid/exit-0 outcome.
+ordinary_warning="$TMPDIR/jpegz-cli-fill-$$.jpg"
+{
+	printf '\xff\xd8\xff'
+	tail -c +3 "$fixtures/baseline_2x2_rgb.jpg"
+} > "$ordinary_warning"
+out=; err=; rc=
+capture "$jpegz_cli" --json "$ordinary_warning"
+[ "$rc" -eq 0 ] && pass "ordinary warning exits 0" || fail "ordinary warning exits 0" "rc=$rc"
+assert_contains "$out" '"verdict":"valid"' "ordinary warning remains valid"
+assert_contains "$out" '"severity":"WARN","code":"entropy_fill_bytes"' "ordinary warning control actually warns"
+
+# Exhaust pairs in both orders. This table is the declared batch policy;
+# numeric exit values are identifiers, not an ordering of precedence.
+batch_inputs=("$fixtures/baseline_2x2_rgb.jpg" "$known_defect" "$foreign" "$trunc" "$TMPDIR/jpegz-cli-absent-$$")
+batch_labels=(valid known_defect inconclusive corrupt io_error)
+batch_expected=(
+	0 4 3 1 2
+	4 4 3 1 2
+	3 3 3 1 2
+	1 1 1 1 2
+	2 2 2 2 2
+)
+for i in 0 1 2 3 4; do
+	for j in 0 1 2 3 4; do
+		assert_rc "${batch_expected[i * 5 + j]}" "batch ${batch_labels[i]} + ${batch_labels[j]}" -- \
+			"$jpegz_cli" --quiet "${batch_inputs[i]}" "${batch_inputs[j]}"
+	done
+done
+
 # A corrupt file must still outrank an inconclusive one in the exit code.
 out=; err=; rc=
 capture "$jpegz_cli" --simple "$foreign" "$trunc"
@@ -279,7 +321,7 @@ capture "$jpegz_cli" --json "$fixtures/jxl_delta_palette_valid.jxl"
 assert_contains "$out" '"verdict":"valid"' "JSON exposes the verdict"
 assert_contains "$out" '"format":"jpeg_xl"' "JSON names the format that answered"
 
-rm -f "$smashed" "$foreign" 2>/dev/null
+rm -f "$smashed" "$foreign" "$ordinary_warning" 2>/dev/null
 
 # ── 10b. Locale selection (i18n prepare phase) ───────────────────────
 #

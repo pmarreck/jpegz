@@ -4,15 +4,28 @@ Durable record of Validate's JPEG work orders and false-positive reports from
 that period, kept here so the inbox envelopes can be retired. The
 original files stay private to Validate; only synthetic shapes are recorded.
 
-Verdict policy for all of these: a proven violation of a normative clause is a
-FAIL, and reader tolerance never lowers it. Validate's KNOWN_DEFECT registry
-decides admission by finding code, so jpegz emits a typed finding with an exact
-offset and its own severity, and does not add KNOWN_DEFECT to its ABI. Authority
-is Validate's TERMINOLOGY.md and the shared memory "Validate verdicts - FAIL is
-unexplained damage, KNOWN_DEFECT is an admitted producer defect, WARN is no
-proven violation, limits are reach".
+The October 28 clarification supersedes this queue's earlier verdict policy:
+jpegz owns identifying known JPEG encoder defects and reports KNOWN_DEFECT
+through its API and a distinct CLI exit code. WARN describes their treatment,
+not their classification. validate consumes that classification and applies
+its application policy. Ordinary warnings remain distinct, and corruption or
+incomplete validation must not be hidden by a known defect. The October 23 and
+27 rulings permit WARN treatment unless the defect produces corrupt or
+unopenable output or existing readers reject it. Successful decoding alone
+does not admit a known defect.
 
 ## Distinct finding labels (2026-10-10)
+
+Registry decision 2026-10-20 12:38 EDT: 62 `entropy_padding_not_ones`
+approved (append-only, FAIL, exact entropy pad-byte offset); reuse 57
+`restart_marker_unexpected`, 3 `truncated_stream` and 55
+`sos_component_mismatch`. Conditions: legal all-one and byte-aligned endings
+remain accepted; paired end-of-scan and restart controls identify mixed pad
+bits as 62; live entropy and marker fill are not padding. Applicability is
+Huffman-only, with progressive and lossless covered and arithmetic excluded.
+Preserve multi-scan acceptance, verify generated C declarations and consumer
+mapping, and send consumers the tested commit. All-zero padding was subsequently
+assigned 63 with WARN treatment by the October rulings.
 
 Resolved for sequential Huffman DCT on 2026-10-20: 57 for a restart after the
 final MCU, 3 for EOI at an interval boundary, 62 `entropy_padding_not_ones`
@@ -40,7 +53,8 @@ New numeric codes go through the append-only registry coordinator.
 
 ## Zero-bit entropy padding (2026-09-30, corrected 2026-09-30 and 2026-10-10)
 
-Severity stays FAIL. Validate withdrew its WARN proposal. It wants its own code
+Historical September request, superseded by the October rulings above:
+severity stays FAIL. Validate withdrew its WARN proposal. It wants its own code
 (for example `entropy_padding_not_ones`) with the exact byte offset, instead of
 `huffman_table_corrupt` with a null offset. Keep the existing FAIL for 8 or more
 leftover bits (`bitstream.zig` `finishHuffmanSegment`), and apply the same check

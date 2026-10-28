@@ -17,6 +17,7 @@
  *   2  usage or I/O error (could not even attempt validation)
  *   3  nothing corrupt, but at least one input was unsupported or
  *      indeterminate — "I could not check this" must not read as "fine"
+ *   4  validation completed with at least one recognized encoder defect
  *
  * Verdicts go to stdout; diagnostics about the run go to stderr.
  */
@@ -54,6 +55,7 @@
  * this" as "this is fine", and distinct from 1 so it is not reported to a
  * user as corruption. */
 #define EXIT_INCONCLUSIVE 3
+#define EXIT_KNOWN_DEFECT 4
 
 /* Largest input we will buffer. jpegz borrows the buffer for the call only,
  * so this bounds memory, not correctness. */
@@ -220,6 +222,7 @@ static const char *verdict_color(int verdict, const options_t *o) {
     case JPEGZ_VERDICT_CORRUPT:       return "\033[31m"; /* red    */
     case JPEGZ_VERDICT_UNSUPPORTED:   return "\033[36m"; /* cyan   */
     case JPEGZ_VERDICT_INDETERMINATE: return "\033[33m"; /* yellow */
+    case JPEGZ_VERDICT_KNOWN_DEFECT:  return "\033[33m"; /* yellow */
     default:                          return "";
     }
 }
@@ -360,6 +363,7 @@ static void print_help(void) {
         "\n"
         "VERDICTS:\n"
         "  valid          no problems found\n"
+        "  known_defect   recognized encoder defect; see findings\n"
         "  corrupt        the file is damaged\n"
         "  unsupported    well-formed, but uses a feature jpegz cannot check\n"
         "  indeterminate  no conclusion reached (unrecognized container,\n"
@@ -371,6 +375,7 @@ static void print_help(void) {
         "  2  usage or I/O error\n"
         "  3  nothing corrupt, but at least one input was unsupported or\n"
         "     indeterminate\n"
+        "  4  validation completed with at least one known encoder defect\n"
         "\n"
         "FORMATS:\n"
         "  JPEG and JPEG-LS (T.81 / T.87), JPEG 2000 (T.800, via jp2z), and\n"
@@ -538,10 +543,13 @@ int main(int argc, char **argv) {
          * over a directory could hide a damaged file behind an unsupported
          * one. EXIT_USAGE, once set by an I/O failure, still wins. */
         if (report.verdict == JPEGZ_VERDICT_CORRUPT) {
-            if (exit_code == EXIT_OK || exit_code == EXIT_INCONCLUSIVE) {
+            if (exit_code == EXIT_OK || exit_code == EXIT_INCONCLUSIVE || exit_code == EXIT_KNOWN_DEFECT) {
                 exit_code = EXIT_INVALID;
             }
-        } else if (report.verdict != JPEGZ_VERDICT_VALID && exit_code == EXIT_OK) {
+        } else if (report.verdict == JPEGZ_VERDICT_KNOWN_DEFECT) {
+            if (exit_code == EXIT_OK) exit_code = EXIT_KNOWN_DEFECT;
+        } else if (report.verdict != JPEGZ_VERDICT_VALID &&
+                   (exit_code == EXIT_OK || exit_code == EXIT_KNOWN_DEFECT)) {
             exit_code = EXIT_INCONCLUSIVE;
         }
 

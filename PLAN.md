@@ -3,44 +3,31 @@
 Evidence and earlier request details: [queue context](docs/plan_context/pre-canon-2026-09-24.md).
 Completed history: [plan log](docs/PLAN_LOG.md).
 
-## Priority: dev shell reentry
-
-- [x] Stop a nix dev shell reentry from repeating the libjxlz fetch when that pin is already in the Zig cache (done 2026-10-15 15:54 EDT).
-- [x] Hand the repeated dev-shell zig fetch to the fleet coordinator for a cross-project check and a writing-nix skill note (done 2026-10-15 16:46 EDT).
-
 ## Priority: dependency freshness
 
-- [x] Pin jp2z, libjpeg-turbo, Brotli, CharLS, and the flake lock to their newest published revisions with real hashes; leave unpublished libjxlz commits unpinned and keep OpenJPEG where it is already current (done 2026-10-15 14:56 EDT).
-- [x] Repin JP2Z to published head `91264891`, regenerate the Zig dependency closure hash, pass complete local gates, and publish `8d325c6`; Mechatron Prime passed the exact commit in 14 seconds (done 2026-10-10 20:14 EDT).
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; do not change settings unasked.
-- [x] Add ./corruption-coverage for sniper, bolter, shotgun and nuke, with a pristine gate and Wilson 95% intervals over judged cases only; a 100-round live run on baseline_2x2_rgb.jpg passed with corruption-reader 0.7.0 (done 2026-10-15 14:20 EDT).
-- [x] Release the JPEG provider hold for published-pin adoption. Freshness gates stay, with no stale override and no placeholder hash. The non-luma sampling packet stays held (done 2026-10-15 22:35 EDT).
-- [x] Pin published jp2z yolo a7cc185 in an administrative commit with real package and closure hashes, pass ./test and Mechatron Prime, and send tiffz, rawz and Validate the SHA, package hash and CI result (done 2026-10-18 22:52 EDT, bc01093, CI 117 s).
 - [x] Refresh CharLS b2beeae, nixpkgs f20cd90 and zig-overlay e7e40b6 with the package hash unchanged (done 2026-10-18 23:30 EDT, ae68443).
 - [x] Re-lock tools/coverage to corruption_reader 3ea60b7 and make zig-overlay follow a current flake-compat; ./test and a 5-round real-tool coverage smoke run pass (done 2026-10-18 23:58 EDT).
 - [ ] Re-lock tools/coverage after corruption_reader repins performance_profiling 01ae85b (published 2026-10-20 21:50 EDT; our lock reaches it only through corruption_reader 3ea60b7, which still pins a04d62a and printable_binary 3f697d5). Bump root nixpkgs to the current head in the same re-lock.
 - [ ] Reconcile the October 14 inbox with published f1a255a and later yolo c8937a7. The provider hold is released for pin adoption and the sampling packet stays held. Advance one unblocked milestone and send the coordinator a receipt with any genuine owner decisions.
-- [x] Send the requested safe checkpoint with the JP2 red witness, dirty source state and completed Nix hash-job receipt; leave adoption uncommitted and the sampling packet held (done 2026-10-10 00:29 EDT).
-- [x] Adopt the SIZ tile-origin regression on jp2z 434b9d53 without restoring draft pin 54531e26; ARM64 link gates pass in ./test (done 2026-10-15 14:56 EDT, context: docs/measurements/jp2-tile-origin-2026-10-10.md).
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
 - [ ] Keep the published JP2 pin and its real Nix closure hash; do not restore draft pin 54531e26 or any placeholder hash.
 - [ ] Mirror approved JP2 finding 261 with a red mapping/ABI regression and conditional-severity controls for 252; do not retry the held sampling research.
-- [x] Refresh direct codec source pins and the transitive Zig/Nix lock graph against live upstream heads; update hashes, fix CharLS/Brotli build compatibility, pass tests/build and retain the queued strictness work (done 2026-10-08 21:12 EDT).
-- [x] Retain the latest Zig 0.16.x release, refresh the overlay, track nixpkgs-unstable within seven days of its head and treat newer-series requirements as advisory (done 2026-10-08 21:12 EDT).
 
 ## Priority: Validate false FAILs and labels (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md)
 
+- [x] Expose KNOWN_DEFECT from jpegz as appended Zig/C verdict 4 and CLI exit 4; zero entropy padding keeps WARN treatment, ordinary warnings exit 0, and stronger batch outcomes retain precedence; full ./test passes (done 2026-10-28 15:52 EDT; delivered by this change).
+- [x] Should INTENT.md record the known-defect exception? Answer: yes; jpegz identifies known JPEG defects and reports KNOWN_DEFECT separately from WARN treatment, validate consumes that classification, and corrupt/unopenable output or reader rejection can still require FAIL (done 2026-10-28 15:52 EDT; delivered by this change).
 - [x] Fix the false FAIL on a valid three-scan non-interleaved sequential JPEG (cjpeg -scans 0;1;2) with a red legal test and a malformed undefined-table counterpart. Baseline now decodes split-component sequential frames (T.81 §3.1.116, §A.2, §B.2.3); four cjpeg fixtures match libjpeg-turbo byte for byte; repeated components, early EOI and undefined tables FAIL. (2026-10-20 12:15 EDT)
-- [ ] Padding faults as KNOWN_DEFECT evidence (validate owns the registry and decides KNOWN_DEFECT; jpegz names the defect). Validate's record: docs/plan_context/known_defect_state.md in validate. BDFN ruled 2026-10-23 that files with all-zero padding open fine, so jpegz must not refuse them: they report WARN and decode. Mixed padding stays FAIL. BDFN ruled 2026-10-27 that known defects are not FAILs unless the output is corrupt or unopenable or some existing readers reject it. Zero padding meets neither condition, so validate was asked to admit 63 as a warning-treated KNOWN_DEFECT and to stop 63 from producing FAIL meanwhile.
+- [x] Complete the padding KNOWN_DEFECT contract: jpegz identifies the defect and returns its classification; WARN is treatment, mixed padding stays FAIL, and consumers apply application policy (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 15:52 EDT; delivered by this change).
   - [x] Lenient decoding continues past end-of-scan padding faults when a marker follows, so every instance is reported and recovery matches libjpeg-turbo pixels (done 2026-10-23 10:40 EDT).
   - [x] Code 63 `entropy_padding_zero_bits` for all-zero pad bits (WARN, exact pad byte, bit count in the detail); 62 narrows to mixed bits. Validate verified 63 unused and endorsed it; registry coordinator sign-off 2026-10-23 ~1:55 PM EDT. Conditions: append-only (62 keeps number and name), tests over the set of pad widths 1..7 (all 0 -> 63, mixed -> 62, all 1 -> none; width 1 has no mixed pattern), non-boundary cases unchanged, consumer mapping coordinated with validate. Not a KNOWN_DEFECT admission. (done 2026-10-23 6:30 PM EDT)
   - [x] The same all-zero WARN for progressive and lossless scans (strict decode accepts; lenient and validation report 63 at the exact pad byte). (done 2026-10-23 6:30 PM EDT)
 - [ ] Reject a sequential scan that follows complete component coverage (for example a fourth SOS after Y, Cb, Cr). Needs a post-coverage walk to EOI that leaves missing-EOI files unchanged.
 - [x] Report baseline restart and padding findings at absolute file offsets (done with the distinct-codes item, 2026-10-20).
-- [ ] Apply code 62 to progressive and lossless Huffman scans (T.81 F.1.2.3 also governs them); both still report non-1 padding as 51. Arithmetic coding has no such padding and stays out of scope.
+- [x] Apply FAIL 62 to mixed padding in progressive and lossless Huffman scans at exact absolute pad-byte offsets, including strict decode and lenient restart recovery, without generic 51 duplication; arithmetic stays excluded (done 2026-10-28 15:52 EDT; delivered by this change).
 - [ ] Give a repeated Csj within one SOS (`sos_duplicate_component`) and the baseline-only `sos_bad_length`/`sos_bad_ns` checks typed findings; they still fall back to 51.
 - [x] Give restart-after-final-MCU, interval-boundary truncation and non-1 padding their own registry-numbered finding codes with exact offsets, keeping FAIL severity. Baseline/extended sequential Huffman now emits 62, 57, 3 and 55 at absolute offsets with `offset_is_exact`; the generic 51 is no longer added beside a typed FAIL. (2026-10-20 13:30 EDT)
-  - Registry decision 2026-10-20 12:38 EDT: 62 `entropy_padding_not_ones` approved (append-only, FAIL, offset of the entropy byte holding the non-1 pad bits). Reuse 57 `restart_marker_unexpected`, 3 `truncated_stream` and 55 `sos_component_mismatch`. Conditions: paired tests (legal all-1 and byte-aligned endings stay accepted; non-1 padding gives 62 at the exact byte) on both end-of-scan and restart paths; live entropy bits and FF fill are not padding; state Huffman-only applicability (arithmetic and lossless explicit); keep multi-scan acceptance; verify the generated C header and consumer mapping; send the tested commit to consumers.
 
 ## Priority: Validate September 30 work order
 
@@ -68,6 +55,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## JPEG entropy and comparison coverage
 
+- [ ] Measure the zero-padding treatment change over identical seeded corruption-coverage inputs, reporting known defects separately while preserving the judged-case denominator.
 - [ ] Complete scan consumption, MCU counts, sampling edges, noninterleaved scans, restart cadence and predictor-reset coverage across supported modes.
 - [ ] Complete progressive scan-history and coefficient-range constraints with independent normative review and valid boundary controls.
 - [ ] Classify the known-good corpus as a set and expand reproducible corruption-probe sweeps across JPEG-LS, JPEG 2000 and JPEG XL.

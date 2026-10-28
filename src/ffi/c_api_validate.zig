@@ -119,9 +119,9 @@ export fn jpegz_jp2_validate(data: [*c]const u8, len: usize, out_report: ?*CVali
 // Strict JPEG-family facade
 // ─────────────────────────────────────────────────────────────────────
 //
-// Mirrors `jpegz.validateAny`. The four-way verdict and the leaf's raw code
+// Mirrors `jpegz.validateAny`. The classified verdict and the leaf's raw code
 // both cross the ABI intact: a C consumer must be able to distinguish "clean",
-// "damaged", "I don't cover this feature" and "I could not tell", and to log
+// "damaged", "known encoder defect", "I don't cover this feature" and "I could not tell", and to log
 // the originating validator's own code when jpegz has no name for it.
 
 const FINDING_UNMAPPED: c_int = -1;

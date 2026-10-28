@@ -350,7 +350,7 @@ jpegz_status_t jpegz_jp2_validate(
  * JPEG XL coverage without linking three libraries or reconciling three
  * finding registries.
  *
- * The four-way verdict is the reason this exists alongside the severity-rated
+ * The classified verdict is the reason this exists alongside the severity-rated
  * report above. "Unsupported" and "indeterminate" are real answers: collapsing
  * either into pass/fail turns a feature jpegz cannot check into either a false
  * clean bill of health or a false accusation of damage.
@@ -365,6 +365,9 @@ typedef enum {
      * failure, an untyped leaf error, or an unrecognized container. Never
      * report this to a user as corruption. */
     JPEGZ_VERDICT_INDETERMINATE = 3,
+    /* Recognized encoder defect. Separate from the findings' WARN treatment;
+     * corruption and incomplete validation retain precedence. */
+    JPEGZ_VERDICT_KNOWN_DEFECT  = 4,
 } jpegz_verdict_t;
 
 typedef enum {
@@ -434,7 +437,7 @@ jpegz_status_t jpegz_validate_any(
 void jpegz_strict_result_free(jpegz_strict_result_t *result);
 
 /* Stable lowercase names ("valid", "corrupt", "unsupported",
- * "indeterminate" / "jpeg", "jpeg2000", "jpeg_xl", "unknown"). Never NULL. */
+ * "indeterminate", "known_defect" / "jpeg", "jpeg2000", "jpeg_xl", "unknown"). Never NULL. */
 const char *jpegz_verdict_name(int verdict);
 const char *jpegz_validation_format_name(int format);
 

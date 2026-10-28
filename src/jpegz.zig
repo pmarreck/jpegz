@@ -490,7 +490,7 @@ pub fn validate(
 pub const sniff = facade.sniff;
 
 /// Translate the severity-rated T.81 / T.87 report into the family-wide
-/// four-way result, so a caller reading `validateAny` never has to know which
+/// classified result, so a caller reading `validateAny` never has to know which
 /// leg answered. Recovered entropy truncation and restart faults are corrupt;
 /// legal fill and metadata warnings do not invalidate an otherwise sound file.
 fn strictFromReport(
@@ -514,9 +514,11 @@ fn strictFromReport(
     };
     errdefer result.deinit(allocator);
     try result.findings.ensureTotalCapacity(allocator, report.findings.items.len);
+    var known_defect = false;
     for (report.findings.items) |finding| {
         switch (finding.code) {
             .missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => result.verdict = .corrupt,
+            .entropy_padding_zero_bits => known_defect = true,
             else => {},
         }
         const detail = if (finding.detail) |value| try allocator.dupe(u8, value) else null;
@@ -530,6 +532,10 @@ fn strictFromReport(
             .detail = detail,
         });
     }
+    // Recognition belongs to the codec. Neither a warning alone nor a
+    // successful decode admits a known defect; incomplete checks and damage
+    // retain precedence even when this recognized pattern is also present.
+    if (known_defect and result.verdict == .valid) result.verdict = .known_defect;
     return result;
 }
 
@@ -614,7 +620,7 @@ pub const jpeg2000 = struct {
         0x00, 0x00, 0x00, 0x0C, 'j', 'P', ' ', ' ', 0x0D, 0x0A, 0x87, 0x0A,
     };
 
-    /// Strict pure-Zig validation with an honest four-way result. Unlike the
+    /// Strict pure-Zig validation with classified outcomes. Unlike the
     /// legacy severity report, unsupported features and internal uncertainty
     /// cannot be mistaken for a valid codestream.
     pub fn strictValidate(

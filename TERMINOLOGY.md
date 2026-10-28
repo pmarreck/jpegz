@@ -9,8 +9,11 @@
 - EBCOT: JPEG 2000's embedded block coding with optimized truncation.
 - LOCO-I: the predictive coding algorithm used by JPEG-LS.
 - Q-coder: the binary arithmetic coder used by arithmetic JPEG.
-- Strict verdict: valid, corrupt, unsupported or indeterminate. Unsupported
+- Strict verdict: valid, known_defect, corrupt, unsupported or indeterminate. Unsupported
   features and inconclusive checks remain distinguishable from validity.
+- Known defect: an identified encoder mistake reported by the codec, separate
+  from its warning or failure treatment. Reader tolerance alone does not
+  establish this classification.
 - Mutation rejection: the observed rate at which a validator rejects modified
   inputs. It is not corruption sensitivity unless the inputs' invalidity is
   independently established.

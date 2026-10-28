@@ -235,8 +235,12 @@ const parseSegmentLength = @import("segment.zig").parseSegmentLength;
 /// mutation caused desynchronization. No sample-domain or image-content claim.
 pub fn validate(data: []const u8, sink: *findings_mod.FindingsSink) Error!void {
 	var offset: usize = 0;
+	const findings_start = sink.items().len;
 	validateSyntax(data, &offset, sink) catch |err| {
-		if (err != error.NotImplemented) {
+		const typed = for (sink.items()[findings_start..]) |finding| {
+			if (finding.severity == .fail) break true;
+		} else false;
+		if (err != error.NotImplemented and !typed) {
 			try sink.emit(.fail, if (err == error.TruncatedStream) .truncated_stream else .huffman_table_corrupt,
 				@intCast(@min(offset, data.len)), @errorName(err));
 		}
@@ -355,9 +359,14 @@ fn validateEntropy(data: []const u8, start: usize, frame: *const FrameInfo, scan
 
 /// All-zero pad bits are a known encoder defect (finding 63, T.81 §F.1.2.3):
 /// report the WARN and return the marker that follows them. Every other
-/// segment-boundary fault keeps its error. `base` is the file offset of
+/// segment-boundary fault keeps its error; mixed padding emits FAIL 62.
+/// `base` is the file offset of
 /// `br.data[0]`.
 fn zeroPadMarker(br: *bitstream.BitReader, err: anyerror, base: usize, sink: *findings_mod.FindingsSink) Error!u8 {
+	if (err == error.PaddingNotOnes) {
+		try sink.emitExact(.fail, .entropy_padding_not_ones, base + br.padByteOffset(),
+			"mixed Huffman pad bits before marker (T.81 F.1.2.3)");
+	}
 	if (err != error.PaddingZeroBits) return entropyError(br);
 	try sink.emitZeroPadding(base + br.padByteOffset(), br.padBitCount());
 	br.seekToMarker();
@@ -555,11 +564,15 @@ fn decodeScan(
                     // A known encoder defect (finding 63): WARN and continue.
                     if (options.findings_sink) |sink| try sink.emitZeroPadding(entropy_start + boundary.padByteOffset(), boundary.padBitCount());
                 } else {
+                    if (err == error.PaddingNotOnes) {
+                        if (options.findings_sink) |sink| try sink.emitExact(.fail, .entropy_padding_not_ones,
+                            entropy_start + boundary.padByteOffset(), "mixed Huffman pad bits before restart marker (T.81 F.1.2.3)");
+                    }
                     if (!options.lenient) return error.BackendError;
-                    if (options.findings_sink) |sink| {
+                    if (err != error.PaddingNotOnes) if (options.findings_sink) |sink| {
                         try sink.emit(.fail, .huffman_table_corrupt, @intCast(br.byte_pos),
                             "invalid Huffman entropy or padding at restart boundary");
-                    }
+                    };
                 }
                 br.seekToMarker();
                 if (!br.marker_seen) {
@@ -637,6 +650,10 @@ fn decodeScan(
     }
 
     const marker = br.finishHuffmanSegment() catch |err| zero: {
+        if (err == error.PaddingNotOnes) {
+            if (options.findings_sink) |sink| try sink.emitExact(.fail, .entropy_padding_not_ones,
+                entropy_start + br.padByteOffset(), "mixed Huffman pad bits before scan marker (T.81 F.1.2.3)");
+        }
         if (err != error.PaddingZeroBits) return error.BackendError;
         if (options.findings_sink) |sink| try sink.emitZeroPadding(entropy_start + br.padByteOffset(), br.padBitCount());
         br.seekToMarker();

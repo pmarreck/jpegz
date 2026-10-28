@@ -41,6 +41,10 @@ static const unsigned char baseline_2x2_rgb[] = {
 };
 static const size_t baseline_2x2_rgb_len = sizeof(baseline_2x2_rgb);
 
+static const uint8_t zero_padding[] = {
+#embed "../unit/fixtures/zero_pad_16x16_420.jpg"
+};
+
 /* Counted by the macro rather than hand-tallied in the PASS line: the
  * literal "30 assertions" had already drifted once. A number a human has
  * to remember to bump is a number that lies. */
@@ -79,6 +83,16 @@ static int stream_abort_cb(void *ctx, const uint8_t *row, size_t row_len, uint32
 }
 
 int main(void) {
+	{
+		jpegz_strict_result_t defect = {0};
+		ASSERT(jpegz_validate_any(zero_padding, sizeof zero_padding, &defect) == JPEGZ_OK,
+		       "known encoder defect validation completes");
+		ASSERT(JPEGZ_VERDICT_KNOWN_DEFECT == 4 && defect.verdict == JPEGZ_VERDICT_KNOWN_DEFECT,
+		       "known defect has its own appended verdict");
+		ASSERT(strcmp(jpegz_verdict_name(defect.verdict), "known_defect") == 0,
+		       "C API names the known-defect classification");
+		jpegz_strict_result_free(&defect);
+	}
     /* Version is non-empty. */
     const char *v = jpegz_version();
     ASSERT(v != NULL && v[0] != '\0', "jpegz_version() returns non-empty");

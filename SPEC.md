@@ -69,19 +69,27 @@ coefficient band; a decoded run overflow is an error even in recovery mode.
 ## 3. Validation contract
 
 `validateAny` sniffs the family and returns a `StrictValidationResult` with
-a four-way verdict: valid, corrupt, unsupported, or indeterminate.
+a classified verdict: valid, known_defect, corrupt, unsupported, or indeterminate.
 Unrecognized input is indeterminate. Findings preserve source, mapped code,
 raw leaf code, and available location information.
 
 The older severity report remains available through `validate` and
 `jpeg2000.validate`. Its `isValid()` accepts warnings. The facade supplies
-the four-way vocabulary and classifies missing EOI, recovered entropy truncation and
+the classified vocabulary and classifies missing EOI, recovered entropy truncation and
 missing/misordered restart markers as corrupt, even when their findings have
 warning severity. Legal fill and metadata warnings remain valid. A codec check
 that returns `NotImplemented` maps to unsupported; a skipped check maps to
 indeterminate. Known corruption takes precedence. The Zig legacy report's
 `codec_check` records whether decoding ran; its `isValid()` stays severity-based.
 This does not establish complete codec coverage for every decoded variant.
+
+jpegz owns recognition of known JPEG encoder defects. All-zero Huffman padding
+is `known_defect` (appended verdict value 4), with typed finding 63 and WARN
+treatment. Ordinary warnings remain distinct. Corruption and incomplete checks
+retain precedence; decoding still accepts the recognized padding defect. The
+CLI reports `known_defect` in text/JSON and exits 4 when validation completes
+with known defects. Batch exit precedence is I/O/usage (2), corrupt (1),
+inconclusive (3), known defect (4), then valid (0).
 
 JPEG XL findings keep validity, severity and completion separate. Nonzero
 padding and incomplete trailing box headers are corrupt even when libjxlz

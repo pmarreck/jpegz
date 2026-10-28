@@ -1,6 +1,43 @@
 const std = @import("std");
 const jpegz = @import("jpegz");
 
+test "known encoder defects have their own verdict without hiding corruption" {
+	const allocator = std.testing.allocator;
+	const zero = @embedFile("fixtures/zero_pad_16x16_420.jpg");
+	const dc_table = [_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0};
+	const lossless_header = [_]u8{ 0xff, 0xd8, 0xff, 0xc3, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0 } ++
+		dc_table ++ [_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, 0, 0 };
+	const lossless_zero = lossless_header ++ [_]u8{ 0, 0xff, 0xd9 };
+	const progressive_header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{16} ** 64) ++
+		[_]u8{ 0xff, 0xc2, 0, 11, 8, 0, 8, 0, 16, 1, 1, 0x11, 0 } ++ dc_table ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0x10 } ++ ([_]u8{0} ** 6) ++ [_]u8{1} ++ ([_]u8{0} ** 9) ++ [_]u8{0x10} ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 0, 0 };
+	const progressive_zero = progressive_header ++ [_]u8{ 0, 0xff, 0xda, 0, 8, 1, 1, 0, 1, 63, 0, 0, 0xff, 0xd9 };
+	const cases = [_]struct { bytes: []const u8, verdict: u8, pad_offset: u64 = 293 }{
+		.{ .bytes = zero, .verdict = 4 }, // Appended KNOWN_DEFECT wire value.
+		.{ .bytes = &lossless_zero, .verdict = 4, .pad_offset = lossless_header.len },
+		.{ .bytes = &progressive_zero, .verdict = 4, .pad_offset = progressive_header.len },
+		.{ .bytes = zero[0 .. zero.len - 2], .verdict = 1 }, // Missing EOI wins.
+		.{ .bytes = @embedFile("fixtures/baseline_2x2_rgb.jpg"), .verdict = 0 },
+	};
+	for (cases) |case| {
+		var result = try jpegz.validateAny(allocator, case.bytes);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(case.verdict, @intFromEnum(result.verdict));
+		try std.testing.expectEqual(case.verdict == 0, result.isValid());
+		if (case.verdict != 4) continue;
+		var found = false;
+		for (result.findings.items) |finding| {
+			if (finding.code != .entropy_padding_zero_bits) continue;
+			found = true;
+			try std.testing.expectEqual(jpegz.Severity.warn, finding.severity);
+			try std.testing.expect(finding.offset_is_exact);
+			try std.testing.expectEqual(@as(?u64, case.pad_offset), finding.offset);
+		}
+		try std.testing.expect(found);
+	}
+}
+
 test "JPEG 2000 facade identifies the SIZ tile-origin invariant at its marker" {
 	// T.800 B.3: XTOsiz <= XOsiz < XTOsiz + XTsiz, and likewise in Y.
 	// These SIZ-only controls assess this finding, not full-stream validity.
@@ -858,7 +895,7 @@ test "JPEG facade warns on zero padding from a known encoder and still decodes" 
 	const padded = @embedFile("fixtures/zero_pad_16x16_420.jpg");
 	var result = try jpegz.validateAny(std.testing.allocator, padded);
 	defer result.deinit(std.testing.allocator);
-	try std.testing.expectEqual(jpegz.StrictVerdict.valid, result.verdict);
+	try std.testing.expectEqual(jpegz.StrictVerdict.known_defect, result.verdict);
 	var warned: usize = 0;
 	for (result.findings.items) |finding| {
 		try std.testing.expect(finding.severity != .fail);

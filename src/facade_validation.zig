@@ -1,6 +1,6 @@
 //! Honest JPEG 2000 and JPEG XL validation result translation.
 //!
-//! The facade preserves each leaf's raw finding code and four-way outcome.
+//! The facade preserves each leaf's raw finding code and validation outcome.
 //! Unknown future leaf codes fail closed as indeterminate instead of being
 //! silently promoted to valid or mislabeled as corrupt.
 
@@ -23,6 +23,9 @@ pub const StrictVerdict = enum(u8) {
     corrupt,
     unsupported,
     indeterminate,
+    /// Recognized encoder defect, distinct from ordinary warning treatment.
+    /// Appended wire value: existing verdicts retain their numbers.
+    known_defect = 4,
 };
 
 pub const ValidatorSource = enum(u8) {

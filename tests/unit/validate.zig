@@ -246,6 +246,7 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 	// then EOB2, forcing marker lookahead before the last block decrements EOB.
 	const eob7 = [_]u8{ 0xff, 0xc4, 0, 20, 0x10 } ++ ([_]u8{0} ** 6) ++ [_]u8{1} ++ ([_]u8{0} ** 9) ++ [_]u8{0x10};
 	const eob6 = [_]u8{ 0xff, 0xc4, 0, 20, 0x10 } ++ ([_]u8{0} ** 5) ++ [_]u8{1} ++ ([_]u8{0} ** 10) ++ [_]u8{0x10};
+	const eob5 = [_]u8{ 0xff, 0xc4, 0, 20, 0x10 } ++ ([_]u8{0} ** 4) ++ [_]u8{1} ++ ([_]u8{0} ** 11) ++ [_]u8{0x10};
 	const lookahead = [_]u8{ 0xff, 0xc4, 0, 21, 0x10, 1, 0, 0, 0, 1 } ++ ([_]u8{0} ** 11) ++ [_]u8{ 1, 0x10 };
 	const cases = [_]struct {
 		dc: []const u8 = &.{0x3f},
@@ -262,24 +263,32 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 		// byte indexes of the DC or AC scan.
 		zero_pad_scan: enum { dc, ac } = .dc,
 		zero_pad_at: []const usize = &.{},
+		mixed_pad_at: []const usize = &.{},
+		mixed_pad_scan: enum { dc, ac, refinement } = .dc,
 	}{
 		.{}, // Two blocks, byte-aligned EOB2.
 		.{ .dc = &.{0x1f}, .ac = &.{0x01}, .width = 17 }, // Three blocks, partial edge.
 		.{ .ac = &.{0x60}, .table = &lookahead }, // Marker lookahead with pending EOB.
 		.{ .ac = &.{0x01}, .table = &eob6 }, // One all-one padding bit.
+		.{ .ac = &.{0x03}, .table = &eob5 }, // Two all-one AC padding bits.
+		.{ .ac = &.{0x01}, .table = &eob5, .valid = false, .mixed_pad_scan = .ac, .mixed_pad_at = &.{0} },
+		.{ .ac = &.{0x00}, .table = &eob5, .zero_pad_scan = .ac, .zero_pad_at = &.{0} },
 		.{ .ac = &.{ 0x00, 0xff, 0xff } }, // Legal marker fill.
 		.{ .ri = 2 }, // Exact final interval needs no RST.
 		.{ .ri = 3 }, // Short final interval.
 		.{ .width = 32, .ri = 2, .dc = &.{ 0x3f, 0xff, 0xd0, 0x3f }, .ac = &.{ 0x00, 0xff, 0xd0, 0x00 } },
+		.{ .width = 32, .ri = 2, .dc = &.{ 0x3f, 0xff, 0xd0, 0x3f }, .ac = &.{ 0x01, 0xff, 0xd0, 0x03 }, .table = &eob5, .valid = false, .recovered_boundary_failure = true, .mixed_pad_scan = .ac, .mixed_pad_at = &.{0} },
 		.{ .width = 40, .ri = 3, .dc = &.{ 0x1f, 0xff, 0xd0, 0x3f }, .ac = &.{ 0x01, 0xff, 0xd0, 0x00 } },
 		.{ .refine = &.{0x00} }, // Zero history requires no correction bits.
 		.{ .ac = &.{0x60}, .table = &lookahead, .refine = &.{ 0x00, 0x7f } }, // AC1=+2, correction0.
+		.{ .ac = &.{0x60}, .table = &lookahead, .refine = &.{ 0x00, 0x7e }, .valid = false, .mixed_pad_scan = .refinement, .mixed_pad_at = &.{1} },
 		.{ .ac = &.{0x60}, .table = &lookahead, .refine = &.{ 0x00, 0xff, 0x00 } }, // AC1=+3, stuffed correction1.
-		.{ .dc = &.{0x3e}, .valid = false }, // Zero DC padding bit.
+		.{ .dc = &.{0x3e}, .valid = false, .mixed_pad_at = &.{0} }, // Mixed DC padding bits.
 		.{ .table = &eob6, .zero_pad_scan = .ac, .zero_pad_at = &.{0} }, // One zero AC padding bit.
 		.{ .dc = &.{0x00}, .zero_pad_at = &.{0} }, // Six zero DC padding bits.
 		.{ .width = 32, .ri = 2, .dc = &.{ 0x00, 0xff, 0xd0, 0x00 }, .ac = &.{ 0x00, 0xff, 0xd0, 0x00 }, .zero_pad_at = &.{ 0, 3 } }, // Zero padding at RST and EOI.
-		.{ .dc = &.{0x3d}, .valid = false }, // Mixed DC padding bits.
+		.{ .dc = &.{0x3d}, .valid = false, .mixed_pad_at = &.{0} },
+		.{ .width = 32, .ri = 2, .dc = &.{ 0x3f, 0xff, 0xd0, 0x3d }, .ac = &.{ 0x00, 0xff, 0xd0, 0x00 }, .valid = false, .mixed_pad_at = &.{3} },
 		.{ .ac = &.{ 0x00, 0x00 }, .valid = false }, // Surplus entropy byte.
 		.{ .ac = &.{ 0x00, 0xff, 0x00 }, .valid = false }, // Surplus stuffed byte.
 		.{ .dc = &.{0x7f}, .width = 8, .valid = false }, // EOB2 exceeds one block.
@@ -290,7 +299,7 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 		.{ .dc = &.{0x00}, .width = 65, .ac = &.{ 0x01, 0x01, 0x01 }, .valid = false, .insufficient_count = 1 }, // Byte-aligned missing ninth DC block.
 		.{ .dc = &.{0x1f}, .width = 17, .valid = false, .insufficient_count = 1 }, // EOB2 undersupplies three blocks.
 		.{ .ac = &.{0x60}, .table = &lookahead, .refine = &.{0x00}, .valid = false, .insufficient_count = 1 }, // Missing correction for a prior nonzero.
-		.{ .width = 32, .ri = 2, .dc = &.{ 0x3e, 0xff, 0xd0, 0x3f }, .ac = &.{ 0x00, 0xff, 0xd0, 0x00 }, .valid = false, .recovered_boundary_failure = true },
+		.{ .width = 32, .ri = 2, .dc = &.{ 0x3e, 0xff, 0xd0, 0x3f }, .ac = &.{ 0x00, 0xff, 0xd0, 0x00 }, .valid = false, .recovered_boundary_failure = true, .mixed_pad_at = &.{0} },
 		.{ .width = 32, .ri = 2, .dc = &.{ 0x3f, 0xff, 0xd0, 0x3f }, .ac = &.{ 0x01, 0xff, 0xd0, 0x00 }, .valid = false, .recovered_boundary_failure = true }, // EOB crosses restart.
 		.{ .width = 40, .ri = 3, .dc = &.{ 0x1f, 0xff, 0xd0, 0x3f }, .ac = &.{ 0x00, 0xff, 0xd0, 0x00 }, .valid = false, .insufficient_count = 1 },
 		.{ .width = 64, .ri = 3, .dc = &.{ 0x3f, 0xff, 0xd0, 0x3f, 0xff, 0xd1, 0x3f }, .ac = &.{ 0x01, 0xff, 0xd0, 0x01, 0xff, 0xd1, 0x00 }, .valid = false, .insufficient_count = 2 },
@@ -329,8 +338,20 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 		var report = try jpegz.validate(allocator, data);
 		defer report.deinit(allocator);
 		try std.testing.expectEqual(case.valid or case.insufficient_count > 0, report.isValid());
+		const dc_start = header.len + dri.len + case.table.len + 10;
+		const mixed_start = switch (case.mixed_pad_scan) {
+			.dc => dc_start,
+			.ac => dc_start + case.dc.len + ac_sos.len,
+			.refinement => dc_start + case.dc.len + ac_sos.len + case.ac.len + refinement_header.len,
+		};
+		if (case.mixed_pad_at.len > 0) {
+			try expectMixedPadFailures(report.findings.items, mixed_start, case.mixed_pad_at);
+			var sink = jpegz.FindingsSink.init(allocator);
+			defer sink.deinit();
+			try std.testing.expectError(error.BackendError, jpegz.decodeWithOptions(allocator, data, .{ .findings_sink = &sink }));
+			try expectMixedPadFailures(sink.items(), mixed_start, case.mixed_pad_at);
+		}
 		if (case.zero_pad_at.len > 0) {
-			const dc_start = header.len + dri.len + case.table.len + 10;
 			const scan_start = if (case.zero_pad_scan == .dc) dc_start else dc_start + case.dc.len + ac_sos.len;
 			try expectZeroPadWarnings(report.findings.items, scan_start, case.zero_pad_at);
 		}
@@ -343,10 +364,11 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 			var boundary_failures: usize = 0;
 			for (sink.items()) |finding| {
 				if (finding.code == .insufficient_data and finding.severity == .warn) insufficient += 1;
-				if (finding.code == .huffman_table_corrupt and finding.severity == .fail) boundary_failures += 1;
+				if (finding.severity == .fail and finding.code == (if (case.mixed_pad_at.len > 0) jpegz.FindingCode.entropy_padding_not_ones else .huffman_table_corrupt)) boundary_failures += 1;
 			}
 			try std.testing.expectEqual(case.insufficient_count, insufficient);
 			try std.testing.expectEqual(@as(usize, if (case.recovered_boundary_failure) 1 else 0), boundary_failures);
+			if (case.mixed_pad_at.len > 0) try expectMixedPadFailures(sink.items(), mixed_start, case.mixed_pad_at);
 			if (case.recovery_ac) |ac| {
 				const ac_start = header.len + dri.len + case.table.len + 10 + case.dc.len + ac_sos.len;
 				const complete = try std.mem.concat(allocator, u8, &.{ data[0..ac_start], ac, data[ac_start + case.ac.len ..] });
@@ -366,6 +388,22 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 /// also fall back to the generic huffman_table_corrupt bucket.
 fn expectOnlyTypedFail(report: jpegz.ValidationReport, code: jpegz.FindingCode, offset: u64) !void {
 	return expectOnlyTyped(report, .fail, code, offset);
+}
+
+/// Match the complete set of mixed-padding FAILs to exact entropy-byte indexes,
+/// excluding the generic Huffman fallback in validation and decoder sinks.
+fn expectMixedPadFailures(findings: anytype, base: usize, indexes: []const usize) !void {
+	var count: usize = 0;
+	for (findings) |finding| {
+		try std.testing.expect(finding.code != .huffman_table_corrupt);
+		if (finding.code != .entropy_padding_not_ones) continue;
+		try std.testing.expect(count < indexes.len);
+		try std.testing.expectEqual(jpegz.Severity.fail, finding.severity);
+		try std.testing.expect(finding.offset_is_exact);
+		try std.testing.expectEqual(@as(?u64, base + indexes[count]), finding.offset);
+		count += 1;
+	}
+	try std.testing.expectEqual(indexes.len, count);
 }
 
 fn expectOnlyTyped(report: jpegz.ValidationReport, severity: jpegz.Severity, code: jpegz.FindingCode, offset: u64) !void {
@@ -409,7 +447,9 @@ fn expectZeroPadWarnings(findings: anytype, base: usize, indexes: []const usize)
 }
 
 test "zero entropy padding warns and decodes to libjpeg-turbo pixels" {
-	// The synthetic Intel JPEG Library 1.51 pattern: pad bits before EOI are 0
+	// Synthetic reproduction of zero padding also observed in encoder output:
+	// this fixture is ImageMagick output with its final entropy byte edited.
+	// Pad bits before EOI are 0
 	// (T.81 F.1.2.3). Pad bits carry no image data, so strict decoding must
 	// accept the file and match libjpeg-turbo, which ignores them.
 	const data = @embedFile("fixtures/zero_pad_16x16_420.jpg");
@@ -533,7 +573,7 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		.{ .entropy = &.{0x0e}, .verdict = .corrupt, .recoverable_boundary_error = true, .code = .entropy_padding_not_ones, .offset = 141 }, // One zero in the four final padding bits.
 		.{ .entropy = &.{ 0x0f, 0x00 }, .verdict = .corrupt }, // Extra whole entropy byte.
 		.{ .entropy = &.{ 0x0f, 0xff, 0x00 }, .verdict = .corrupt }, // Stuffed extra payload is not marker fill.
-		.{ .entropy = &.{0x00}, .verdict = .valid, .code = .entropy_padding_zero_bits, .severity = .warn, .offset = 141 }, // Four 0 pad bits: a known encoder defect.
+		.{ .entropy = &.{0x00}, .verdict = .known_defect, .legacy_valid = true, .code = .entropy_padding_zero_bits, .severity = .warn, .offset = 141 }, // Four 0 pad bits: a known encoder defect.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xff }, .verdict = .valid }, // Legal fill before EOI.
 		.{ .entropy = &.{ 0x0f, 0xff, 0xd0 }, .verdict = .corrupt, .code = .restart_marker_unexpected, .offset = 142 }, // No restart after the final MCU.
 		.{ .entropy = &.{0x00}, .width = 16, .verdict = .valid }, // Two blocks exactly fill one byte.
@@ -544,8 +584,8 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		.{ .entropy = &.{ 0x0f, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
 		.{ .entropy = &.{ 0x0e, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt, .recoverable_boundary_error = true, .code = .entropy_padding_not_ones, .offset = 147 },
 		.{ .entropy = &.{ 0x0e, 0xff, 0xd0, 0x0e }, .width = 16, .restart = 1, .verdict = .corrupt, .recoverable_boundary_error = true, .padding_faults = 2, .code = .entropy_padding_not_ones, .offset = 147 }, // Every faulty segment is reported, not only the first.
-		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid, .code = .entropy_padding_zero_bits, .severity = .warn, .offset = 147 }, // Zero padding before RST0.
-		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x00 }, .width = 16, .restart = 1, .verdict = .valid, .code = .entropy_padding_zero_bits, .severity = .warn, .offset = 150 }, // Zero padding in both segments.
+		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .known_defect, .legacy_valid = true, .code = .entropy_padding_zero_bits, .severity = .warn, .offset = 147 }, // Zero padding before RST0.
+		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x00 }, .width = 16, .restart = 1, .verdict = .known_defect, .legacy_valid = true, .code = .entropy_padding_zero_bits, .severity = .warn, .offset = 150 }, // Zero padding in both segments.
 		.{ .entropy = &.{ 0x0f, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
 		.{ .entropy = &.{ 0x0f, 0xff, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
 		.{ .entropy = &.{ 0x0f, 0xff, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
@@ -590,7 +630,7 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 				try std.testing.expectEqualSlices(u8, oracle.pixels, recovered.pixels);
 			} else |err| if (err != error.NotImplemented) return err;
 		}
-		if (case.verdict == .valid) {
+		if (case.verdict == .valid or case.verdict == .known_defect) {
 			var decoded = try jpegz.decode(allocator, data);
 			defer decoded.deinit(allocator);
 			var oracle = jpegz.internal.wrapperDecode(allocator, data) catch |err| switch (err) {
@@ -623,16 +663,18 @@ test "lossless entropy boundaries classify complete samples and restart interval
 		recoverable_boundary_error: bool = false,
 		decode_error: jpegz.DecodeError = error.BackendError,
 		zero_pad_at: []const usize = &.{}, // Entropy byte indexes of all-zero padding.
+		mixed_pad_at: []const usize = &.{},
 	}{
 		.{ .entropy = &.{0x7f}, .valid = true },
 		.{ .entropy = &.{0x00}, .width = 8, .valid = true },
 		.{ .entropy = &.{ 0x00, 0x7f }, .width = 9, .valid = true },
 		.{ .entropy = &.{ 0x7f, 0xff, 0xff }, .valid = true }, // Marker fill.
-		.{ .entropy = &.{0x7e}, .valid = false }, // Mixed padding bits.
+		.{ .entropy = &.{0x7e}, .valid = false, .mixed_pad_at = &.{0} }, // Mixed padding bits.
+		.{ .entropy = &.{ 0x7f, 0xff, 0xd0, 0x7e }, .height = 2, .restart = 1, .valid = false, .mixed_pad_at = &.{3} },
 		.{ .entropy = &.{0x00}, .valid = true, .zero_pad_at = &.{0} }, // Seven zero padding bits.
 		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = true, .zero_pad_at = &.{0} },
 		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x00 }, .height = 2, .restart = 1, .valid = true, .zero_pad_at = &.{ 0, 3 } },
-		.{ .entropy = &.{0x3f}, .valid = false }, // Extra sample within final byte.
+		.{ .entropy = &.{0x3f}, .valid = false, .mixed_pad_at = &.{0} }, // Extra sample within final byte.
 		.{ .entropy = &.{ 0x7f, 0x00 }, .valid = false },
 		.{ .entropy = &.{ 0x7f, 0xff, 0x00 }, .valid = false },
 		.{ .entropy = &.{ 0x7f, 0xff, 0xd0 }, .valid = false },
@@ -644,7 +686,7 @@ test "lossless entropy boundaries classify complete samples and restart interval
 		.{ .entropy = &.{ 0x7f, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = true },
 		.{ .entropy = &.{ 0x00, 0xff, 0xd0, 0x00 }, .width = 8, .height = 2, .restart = 8, .valid = true },
 		.{ .entropy = &.{ 0x7f, 0xff, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = true },
-		.{ .entropy = &.{ 0x7e, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = false, .recoverable_boundary_error = true },
+		.{ .entropy = &.{ 0x7e, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = false, .recoverable_boundary_error = true, .mixed_pad_at = &.{0} },
 		.{ .entropy = &.{ 0x7f, 0x00, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = false },
 		.{ .entropy = &.{ 0x7f, 0xff, 0x00, 0xff, 0xd0, 0x7f }, .height = 2, .restart = 1, .valid = false },
 		// H.1.1 requires whole MCU rows, even if Ri exceeds the image size.
@@ -666,6 +708,14 @@ test "lossless entropy boundaries classify complete samples and restart interval
 		var report = try jpegz.validate(allocator, data);
 		defer report.deinit(allocator);
 		try std.testing.expectEqual(case.valid, report.isValid());
+		if (case.mixed_pad_at.len > 0) {
+			const entropy_start = data.len - 2 - case.entropy.len;
+			try expectMixedPadFailures(report.findings.items, entropy_start, case.mixed_pad_at);
+			var sink = jpegz.FindingsSink.init(allocator);
+			defer sink.deinit();
+			try std.testing.expectError(error.BackendError, jpegz.decodeWithOptions(allocator, data, .{ .findings_sink = &sink }));
+			try expectMixedPadFailures(sink.items(), entropy_start, case.mixed_pad_at);
+		}
 		if (case.zero_pad_at.len > 0) {
 			const entropy_start = data.len - 2 - case.entropy.len;
 			try expectZeroPadWarnings(report.findings.items, entropy_start, case.zero_pad_at);
@@ -701,7 +751,7 @@ test "lossless entropy boundaries classify complete samples and restart interval
 			try std.testing.expect(std.mem.allEqual(u8, recovered.pixels, 128));
 			try std.testing.expectEqual(@as(usize, 1), sink.items().len);
 			try std.testing.expectEqual(jpegz.Severity.fail, sink.items()[0].severity);
-			try std.testing.expectEqual(jpegz.FindingCode.huffman_table_corrupt, sink.items()[0].code);
+			try expectMixedPadFailures(sink.items(), data.len - 2 - case.entropy.len, case.mixed_pad_at);
 		}
 	}
 }
