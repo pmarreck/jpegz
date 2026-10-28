@@ -47,7 +47,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Reproduce and fix the non-luma-dominant sampling panic with synthetic inputs and valid sampling controls; return typed failure or support the layout without out-of-bounds access.
 - [ ] Reproduce SOF1 with component ids 0/1/2 and Huffman table pairs 0/1/2; accept legal table ids 0-3 and distinguish any remaining private-stream failure.
 - [ ] Verify JP2 leaf offset semantics; preserve exact in-buffer offsets and represent EOF or declared extents without claiming nonexistent byte locations.
-- [ ] Reproduce zero-bit entropy padding; add its own typed FAIL finding and exact byte offset, retain the excess-entropy FAIL, and verify T.81 F.1.2.3 (Validate's September 30 correction confirms severity).
+- [x] Reproduce zero-bit entropy padding with its own typed finding and exact byte offset (T.81 F.1.2.3). Superseded on severity by the BDFN rulings of 2026-10-23 and 2026-10-27: all-zero padding is WARN 63 and decodes, mixed padding is FAIL 62. Landed in 8fd246d (done 2026-10-23 6:30 PM EDT).
 - [ ] Publish green bounded fixes and send Validate/tiffz exact SHA, package hash, scope and remaining blockers; preserve 5c5191a and 6ef766c.
 
 ## Priority: DHT memory safety
