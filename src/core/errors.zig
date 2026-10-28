@@ -213,4 +213,6 @@ pub const FindingCode = enum(u32) {
     profile_violation = 259,
     // T.800 E.2's encoder formula is informative; the leaf reports WARN.
     reversible_exponent_mismatch = 260,
+	// Mirrored from the approved leaf registry: strict FAIL / lenient WARN.
+	cblk_contribution_ends_ff = 261,
 };

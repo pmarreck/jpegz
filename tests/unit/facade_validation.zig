@@ -363,6 +363,13 @@ test "JP2 dependency findings retain wire identities and severities" {
 		.{ .raw = 259, .name = "profile_violation", .severity = .fail, .verdict = .corrupt },
 		// E.2's encoder formula is informative, not a normative constraint.
 		.{ .raw = 260, .name = "reversible_exponent_mismatch", .severity = .warn, .verdict = .valid },
+		// No-PTERM under-read is a heuristic warning; proven termination
+		// violations retain the leaf's FAIL rather than sharing one treatment.
+		.{ .raw = 252, .name = "entropy_under_read", .severity = .warn, .verdict = .valid },
+		.{ .raw = 252, .name = "entropy_under_read", .severity = .fail, .verdict = .corrupt },
+		// The contribution ending is proven invalid even with WARN treatment.
+		.{ .raw = 261, .name = "cblk_contribution_ends_ff", .severity = .fail, .verdict = .corrupt },
+		.{ .raw = 261, .name = "cblk_contribution_ends_ff", .severity = .warn, .verdict = .corrupt },
 	};
 	for (cases) |case| {
 		const mapped = jpegz.facade.mapJp2Finding(case.raw, case.severity, true);
@@ -372,7 +379,15 @@ test "JP2 dependency findings retain wire identities and severities" {
 		try std.testing.expectEqual(case.raw, @intFromEnum(code));
 		try std.testing.expectEqualStrings(case.name, @tagName(code));
 	}
-	for ([_]u32{ 261, 299, 999 }) |raw| {
+	for (std.meta.tags(jpegz.Severity)) |severity| {
+		const proven = jpegz.facade.mapJp2Finding(261, severity, true);
+		try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, proven.verdict);
+		try std.testing.expectEqual(severity, proven.severity);
+		const conditional = jpegz.facade.mapJp2Finding(252, severity, true);
+		try std.testing.expectEqual(if (severity == .fail) jpegz.StrictVerdict.corrupt else .valid, conditional.verdict);
+		try std.testing.expectEqual(severity, conditional.severity);
+	}
+	for ([_]u32{ 262, 299, 999 }) |raw| {
 		const mapped = jpegz.facade.mapJp2Finding(raw, .fail, true);
 		try std.testing.expectEqual(jpegz.StrictVerdict.indeterminate, mapped.verdict);
 		try std.testing.expectEqual(@as(?jpegz.FindingCode, null), mapped.code);
@@ -582,7 +597,7 @@ test "JPEG 2000 mapping preserves every public leaf code and fails closed" {
         1,   2,   3,   4,   5,
         140, 141, 142, 143, 144,
         145, 146, 207, 208, 250,
-        251, 252, 253, 254,
+        251, 252, 253, 254, 261,
     };
     for (known_codes) |raw| {
         const mapped = jpegz.facade.mapJp2Finding(raw, .warn, true);
@@ -592,7 +607,7 @@ test "JPEG 2000 mapping preserves every public leaf code and fails closed" {
             @intFromEnum(mapped.code.?),
         );
         try std.testing.expectEqual(
-            if (raw == 145) jpegz.StrictVerdict.unsupported else jpegz.StrictVerdict.valid,
+            if (raw == 145) jpegz.StrictVerdict.unsupported else if (raw == 261) jpegz.StrictVerdict.corrupt else jpegz.StrictVerdict.valid,
             mapped.verdict,
         );
     }

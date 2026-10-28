@@ -10,7 +10,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Reconcile the October 14 inbox with published f1a255a and later yolo c8937a7. The provider hold is released for pin adoption and the sampling packet stays held. Advance one unblocked milestone and send the coordinator a receipt with any genuine owner decisions.
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
 - [ ] Keep the published JP2 pin and its real Nix closure hash; do not restore draft pin 54531e26 or any placeholder hash.
-- [ ] Mirror approved JP2 finding 261 with a red mapping/ABI regression and conditional-severity controls for 252; do not retry the held sampling research.
+- [x] Mirror approved JP2 finding 261 through Zig/C wire identity and classify its proven violation as corrupt regardless of severity; preserve conditional 252 treatment, keep unknown codes inconclusive, and pass full ./test (done 2026-10-28 19:06 EDT; delivered by this change).
 
 ## Priority: Validate false FAILs and labels (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md)
 
@@ -23,7 +23,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [x] Reject additional sequential Huffman SOS after complete component coverage with exact FAIL 55; skip opaque metadata, stop at first EOI and preserve missing-EOI decode outcomes; full ./test passes (done 2026-10-28 17:21 EDT; delivered by this change).
 - [x] Apply FAIL 62 to mixed padding in progressive and lossless Huffman scans at exact absolute pad-byte offsets, including strict decode and lenient restart recovery, without generic 51 duplication; arithmetic stays excluded (done 2026-10-28 15:52 EDT; delivered by this change).
 - [x] Give repeated T.81 SOS selectors and invalid sequential Ns exact finding 55, and bad sequential Ls exact finding 4, before entropy decoding; reserve the scan tail when Ns is excessive; full ./test and valid four-component controls pass (done 2026-10-28 16:51 EDT; delivered by this change).
-- [x] Give restart-after-final-MCU, interval-boundary truncation and non-1 padding their own registry-numbered finding codes with exact offsets, keeping FAIL severity. Baseline/extended sequential Huffman now emits 62, 57, 3 and 55 at absolute offsets with `offset_is_exact`; the generic 51 is no longer added beside a typed FAIL. (2026-10-20 13:30 EDT)
 
 ## Priority: Validate September 30 work order
 

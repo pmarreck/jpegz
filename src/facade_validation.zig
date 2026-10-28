@@ -148,8 +148,9 @@ pub fn mapJp2Finding(raw: u32, severity: Severity, container_ok: bool) MappedFin
     if (raw == @intFromEnum(jp2z.FindingCode.jp2_unsupported_marker_ignored)) {
         return .{ .verdict = .unsupported, .code = code, .severity = severity };
     }
+	// Finding 261 proves invalid termination even with lenient WARN treatment.
     return .{
-        .verdict = if (severity == .fail) .corrupt else .valid,
+		.verdict = if (severity == .fail or code == .cblk_contribution_ends_ff) .corrupt else .valid,
         .code = code,
         .severity = severity,
     };

@@ -16,8 +16,9 @@ valid input and demonstrated corruption.
 - Detect provably malformed streams while preserving valid encodings, including
   uncommon and inefficient ones. A mutation can produce a different valid image.
 - Keep demonstrated detection, spec-derived but untested checks and changes
-  that cannot be established as invalid from the file alone separate. Peter
-  explicitly set this evidence boundary on September 6, 2026.
+  that cannot be established as invalid from the file alone separate. SCS
+  (Senior Construct Swarmlord) explicitly set this evidence boundary on
+  September 6, 2026.
 - Provide typed findings and available locations through Zig and C interfaces;
   callers should not need to reconcile the JPEG-family validators themselves.
 - Keep computation in a buffer-based core; callers own I/O and memory lifetime.
@@ -62,5 +63,5 @@ is the permitted container-metadata dependency.
 - [LICENSING_NOTES.md](LICENSING_NOTES.md) and
   [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): provenance and attribution.
 
-Migrated from the accepted project overview and Peter's September detection
+Migrated from the accepted project overview and SCS's September detection
 directions. Implementation limitations do not narrow the intended coverage.

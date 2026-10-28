@@ -106,6 +106,11 @@ int main(void) {
         ASSERT(n != NULL && n[0] != '\0', "finding_code_name returns non-empty");
         ASSERT(strcmp(n, "truncated_stream") == 0,
                "finding_code_name matches the Zig enum tag");
+		ASSERT(JPEGZ_FINDING_CBLK_CONTRIBUTION_ENDS_FF == 261,
+		       "approved JP2 finding keeps wire value 261 in the generated header");
+		ASSERT(strcmp(jpegz_finding_code_name((jpegz_finding_code_t)261),
+		              "cblk_contribution_ends_ff") == 0,
+		       "approved JP2 finding 261 has its stable C ABI name");
 
         /* Distinct codes must not collapse onto one string — a table that
          * returns the same label for everything would pass a single-value

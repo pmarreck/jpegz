@@ -227,6 +227,28 @@ also remains to audit. This change does not claim either part is complete.
   release of the JPEG provider hold on 2026-10-15. The sampling research stays
   held.
 
+### JP2 finding 261 and conditional severity (2026-10-28)
+
+The facade now mirrors approved finding 261 as `cblk_contribution_ends_ff`,
+with its numeric identity and name available in Zig and the generated C
+header/API. No registry allocation or provider pin change was needed.
+The first red tests found an indeterminate mapping and an unknown C name.
+
+The contribution ending is a proven format violation. Lenient WARN treatment
+must therefore retain a corrupt classified verdict. A draft expectation had
+equated WARN with valid; review against the accepted intent exposed that
+mistake before publication. Corrected tests failed with expected corrupt but
+actual valid, and the mapper now preserves severity independently of validity.
+All declared severity tiers are checked. Finding 252 keeps its conditional
+behavior: the no-PTERM heuristic warning alone is not proof of corruption;
+leaf-reported failures remain corrupt. Unknown future codes remain
+indeterminate. This does not complete the broader JP2 warning-class audit.
+
+The complete local test entry point passed native tests, 76 C ABI assertions,
+84 CLI checks, production, all four cross-link checks, the dependency closure
+and consumer controls. The registry is append-only and earlier values retain
+their identities. Held sampling research remains held.
+
 ## Feedback latency observation (2026-10-28)
 
 The local gates for 4fb4c19 reported build-phase spans of 114 seconds for

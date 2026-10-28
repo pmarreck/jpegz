@@ -107,6 +107,12 @@ number preserved in the detail. Bounds alone do not establish exactness;
 the pinned leaf does not yet provide exactness metadata. The older JP2
 severity-only report retains its existing location behavior pending review.
 
+JP2 finding 261 (`cblk_contribution_ends_ff`) classifies as corrupt even when
+the leaf uses warning treatment. The facade preserves that supplied severity.
+Finding 252 (`entropy_under_read`) remains conditional: a heuristic warning
+alone does not establish corruption, while a leaf-reported failure remains
+corrupt. Other JP2 warning classes still require review.
+
 Strict validation must account for decoded entropy and surface recovery.
 DHT construction rejects oversubscribed code counts and reserved all-ones
 codes before code narrowing or lookup-table writes (T.81 Annex C). Legal
