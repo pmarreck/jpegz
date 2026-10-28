@@ -260,8 +260,65 @@ currently takes the whole source tree, so source-input scope and cache reuse
 need investigation before changing the pipeline. Preserve every required
 suite and verify source completeness before narrowing any inputs.
 
-The no-C consumer check currently invokes the compiler from the master test
-runner's development shell. Move that preparation into a declared Nix check,
-preserve its required-C negative control and disabled-JP2 positive control, and include it in
-the exact-commit target manifest. Private scratch alone does not establish a
-preventive filesystem boundary; the derivation must provide that boundary.
+The no-C consumer check formerly invoked the compiler from the master test
+runner's development shell. It now runs in `checks.<system>.no-c-consumer`,
+with Zig as its only declared native build input and no codec libraries in
+scope. The required-C negative control and disabled-JP2 positive control stay
+paired with the validation-only consumer. All three passed in the Nix sandbox;
+the combined compilation/check phase took 45 seconds. The complete entry point
+and exact-commit manifest both reach this check. Private scratch alone would
+not establish the preventive filesystem boundary supplied by the derivation.
+
+## Coverage tooling refresh (2026-10-28)
+
+Both lock files now use nixpkgs `58deea654ec5dd0644f31c840a07c29fa0592528`.
+The optional coverage flake pins published corruption-reader
+`1ec8cbe4f246bd60156bff3cdc5865f99d64ec4b` (0.9.0), reaching
+performance-profiling `01ae85bdd434b019b1c5512a39f2766665eab9de` and
+printable-binary `cdefa95e4590fa016967e0e6ccb3b96c19c44c7e`.
+Nix generated the source hashes. The JP2/JXL codec pins and Zig dependency
+closure hash remain unchanged.
+
+`packages.<system>.coverage-stats` exposes the statistics executable already
+built by the native test graph. Its installed copy passes the driver suite.
+Default preparation uses `nix build` with no output link and ignores stale
+`zig-out` statistics binaries. Tests classify regular files and usable
+symlinks as executable artifacts, and reject directories, nonexecutable files,
+missing files and failed builds before requesting any mutation. The six
+bootstrap cases failed against the old path before implementation.
+
+The original four-fixture smoke request stopped before mutation because the
+pristine JPEG-LS fixture returns `indeterminate`. Existing strict-facade tests
+require that result; this refresh does not relabel it valid. The default-fixture
+mismatch remains open. A separate explicit three-fixture campaign completed
+with the fresh Nix-built CLI, statistics helper and reader:
+
+| Parameter | Value |
+| --- | --- |
+| Fixtures | `baseline_2x2_rgb.jpg`, `jp2_8x8_rgb.jp2`, `jxl_delta_palette_valid.jxl` |
+| Profiles | sniper, bolter, shotgun, nuke |
+| Rounds per fixture/profile | 5 |
+| Master | `0x6a7065677a` |
+| Limits | One job, five seconds per validation, 2 GiB address space per process |
+| Applied/judged | 60/60 |
+| Corrupt/accepted/known defect/indeterminate | 31/18/0/11 |
+| No-op/unsupported/inconsistent/I/O/timeout/crash/harness error | All zero |
+| Pooled corrupt/judged, Wilson 95% | 51.7%, [39.3%, 63.8%] |
+
+The smoke campaign ran through the shared Linux isolation runner after its
+filesystem-denial and private-state contract passed with the same frozen
+script bytes. Inputs were read-only public fixtures; mutations and reports
+lived in private namespace scratch. The 11 indeterminate cases remain in the
+judged denominator. These are observed outcomes, not independently established
+malformed labels or a before/after detection claim. JPEG-LS has no mutation
+result in this campaign.
+
+The final complete `./test` passed native tests, 76 C ABI assertions, 84 CLI
+checks, the installed statistics driver suite, the production build, all four
+cross-link checks, closure validation and all three no-C consumer controls.
+Its wrapper recorded 129 seconds of production preparation followed by 132
+seconds in the complete entry point, while a parallel explicit Nix batch
+prepared the other required targets. These are mixed preparation/evaluation/
+waiting spans, not isolated test execution times. The slowest reported final
+cross-build phase was 197 seconds. All ten manifest targets were realized
+locally; exact-commit CI follows publication.

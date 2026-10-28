@@ -5,8 +5,10 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Priority: dependency freshness
 
-- [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; do not change settings unasked.
-- [ ] Re-lock tools/coverage after corruption_reader repins performance_profiling 01ae85b (published 2026-10-20 21:50 EDT; our lock reaches it only through corruption_reader 3ea60b7, which still pins a04d62a and printable_binary 3f697d5). Bump root nixpkgs to the current head in the same re-lock.
+- [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; client terminal and activation shortcut requested, settings unchanged.
+- [x] Re-lock tools/coverage to corruption_reader 1ec8cbe, reaching performance_profiling 01ae85b and printable_binary cdefa95; refresh both nixpkgs locks to 58deea6, pass full ./test and a 60-case three-format real-tool smoke; JPEG-LS pristine gate remains open (done 2026-10-28 19:53 EDT; delivered by this change).
+- [x] Expose coverage-stats through a declared Nix output, replace its dev-shell compiler bootstrap, reject unusable artifacts before mutation and pass installed-copy controls plus full ./test (done 2026-10-28 19:53 EDT; delivered by this change).
+- [ ] Resolve the corruption-coverage default JPEG-LS fixture mismatch: strict validation intentionally returns indeterminate, so the pristine gate refuses it; preserve unsupported classifications and the reported denominator.
 - [ ] Reconcile the October 14 inbox with published f1a255a and later yolo c8937a7. The provider hold is released for pin adoption and the sampling packet stays held. Advance one unblocked milestone and send the coordinator a receipt with any genuine owner decisions.
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
 - [ ] Keep the published JP2 pin and its real Nix closure hash; do not restore draft pin 54531e26 or any placeholder hash.
@@ -14,12 +16,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Priority: Validate false FAILs and labels (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md)
 
-- [x] Expose KNOWN_DEFECT from jpegz as appended Zig/C verdict 4 and CLI exit 4; zero entropy padding keeps WARN treatment, ordinary warnings exit 0, and stronger batch outcomes retain precedence; full ./test passes (done 2026-10-28 15:52 EDT; delivered by this change).
-- [x] Should INTENT.md record the known-defect exception? Answer: yes; jpegz identifies known JPEG defects and reports KNOWN_DEFECT separately from WARN treatment, validate consumes that classification, and corrupt/unopenable output or reader rejection can still require FAIL (done 2026-10-28 15:52 EDT; delivered by this change).
-- [x] Complete the padding KNOWN_DEFECT contract: jpegz identifies the defect and returns its classification; WARN is treatment, mixed padding stays FAIL, and consumers apply application policy (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 15:52 EDT; delivered by this change).
-  - [x] Lenient decoding continues past end-of-scan padding faults when a marker follows, so every instance is reported and recovery matches libjpeg-turbo pixels (done 2026-10-23 10:40 EDT).
-  - [x] Code 63 `entropy_padding_zero_bits` for all-zero pad bits (WARN, exact pad byte, bit count in the detail); 62 narrows to mixed bits. Validate verified 63 unused and endorsed it; registry coordinator sign-off 2026-10-23 ~1:55 PM EDT. Conditions: append-only (62 keeps number and name), tests over the set of pad widths 1..7 (all 0 -> 63, mixed -> 62, all 1 -> none; width 1 has no mixed pattern), non-boundary cases unchanged, consumer mapping coordinated with validate. Not a KNOWN_DEFECT admission. (done 2026-10-23 6:30 PM EDT)
-  - [x] The same all-zero WARN for progressive and lossless scans (strict decode accepts; lenient and validation report 63 at the exact pad byte). (done 2026-10-23 6:30 PM EDT)
 - [x] Reject additional sequential Huffman SOS after complete component coverage with exact FAIL 55; skip opaque metadata, stop at first EOI and preserve missing-EOI decode outcomes; full ./test passes (done 2026-10-28 17:21 EDT; delivered by this change).
 - [x] Apply FAIL 62 to mixed padding in progressive and lossless Huffman scans at exact absolute pad-byte offsets, including strict decode and lenient restart recovery, without generic 51 duplication; arithmetic stays excluded (done 2026-10-28 15:52 EDT; delivered by this change).
 - [x] Give repeated T.81 SOS selectors and invalid sequential Ns exact finding 55, and bad sequential Ls exact finding 4, before entropy decoding; reserve the scan tail when Ns is excessive; full ./test and valid four-component controls pass (done 2026-10-28 16:51 EDT; delivered by this change).
@@ -31,8 +27,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Obtain Validate's private SOF1 replay; if still failing, reproduce its first typed finding with a synthetic regression before changing the decoder; keep originals private.
 - [x] Bound JP2 strict-facade positions by the input, preserve reported extents in detail, fill host cursors and retain corruption; public bit-mutation regression, production CLI JSON and full ./test pass (done 2026-10-28 18:17 EDT; delivered by this change).
 - [ ] Finish JP2 leaf exactness metadata and audit legacy severity-report locations; the provider cursor/anchor/extent contract is pending, so bounds alone must not imply exactness (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
-- [x] Reproduce zero-bit entropy padding with its own typed finding and exact byte offset (T.81 F.1.2.3). Superseded on severity by the BDFN rulings of 2026-10-23 and 2026-10-27: all-zero padding is WARN 63 and decodes, mixed padding is FAIL 62. Landed in 8fd246d (done 2026-10-23 6:30 PM EDT).
-- [ ] Publish green bounded fixes and send Validate/tiffz exact SHA, package hash, scope and remaining blockers; preserve 5c5191a and 6ef766c.
+- [x] Publish bounded fixes through 446274f, preserving 5c5191a and 6ef766c; send Validate/tiffz exact SHAs, package hashes, scope and remaining private replay/provider blockers after exact-commit CI passes (done 2026-10-28 19:26 EDT).
 
 ## Priority: DHT memory safety
 
@@ -63,7 +58,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Build and CLI
 
 - [ ] Investigate gate feedback latency, whole-tree Nix source inputs and artifact reuse; measure compilation, queue/setup and test execution separately while preserving complete coverage (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
-- [ ] Move no-C consumer compilation into a Nix check, retain negative controls and disposable scratch, and reach it through ./test and exact-commit CI (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
+- [x] Move no-C consumer compilation into a Nix check with all three paired controls and disposable scratch; full ./test passes and the exact-commit manifest includes the check (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 19:53 EDT; delivered by this change).
 - [ ] Port the requested upstream-first dependency-freshness gate with sibling fallback and set tests for current, stale, missing, offline and ahead-of-sibling cases.
 - [ ] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks; coordinate the unnecessary encoder linkage with libjxlz.
 - [ ] Add U5b progress controls and pure timestamp-injected rendering; verify rendered output with Peter and test terminal/width degradation.

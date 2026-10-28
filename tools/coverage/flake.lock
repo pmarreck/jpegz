@@ -10,16 +10,16 @@
         "random": "random"
       },
       "locked": {
-        "lastModified": 1792379621,
-        "narHash": "sha256-dwYLTcP6rwfp/PZWS5E6iGkf805eYQ8U1VJxqsHKKug=",
+        "lastModified": 1793211049,
+        "narHash": "sha256-11fyQeB5AQzw2zYxk/8ks1+fgHbEzw3Mknh27uoh7Uo=",
         "ref": "refs/heads/yolo",
-        "rev": "3ea60b7ca7eeb37f2551d93bf01796e29ec2b389",
-        "revCount": 84,
+        "rev": "1ec8cbe4f246bd60156bff3cdc5865f99d64ec4b",
+        "revCount": 93,
         "type": "git",
         "url": "ssh://git@github.com/pmarreck/corruption_reader"
       },
       "original": {
-        "rev": "3ea60b7ca7eeb37f2551d93bf01796e29ec2b389",
+        "rev": "1ec8cbe4f246bd60156bff3cdc5865f99d64ec4b",
         "type": "git",
         "url": "ssh://git@github.com/pmarreck/corruption_reader"
       }
@@ -37,16 +37,17 @@
       "original": {
         "owner": "pmarreck",
         "repo": "dotfiles",
+        "rev": "20184a1fba9cc3fba49fa0ab6ff94431d1842ecc",
         "type": "github"
       }
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1792116957,
-        "narHash": "sha256-EjZqHKObBfIOeHZnMRVV87HB3pPq/WBkmRJWyFxmZu8=",
+        "lastModified": 1793195608,
+        "narHash": "sha256-lNZLwWf5tYNKjothaoFq/VZYvzaclmLafjgMdUlpJPQ=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "f20cd90e28fe0403873f473b29e42662cd86e8c4",
+        "rev": "58deea654ec5dd0644f31c840a07c29fa0592528",
         "type": "github"
       },
       "original": {
@@ -66,34 +67,34 @@
         "printable-binary": "printable-binary"
       },
       "locked": {
-        "lastModified": 1790992769,
-        "narHash": "sha256-q91ilwgMo7qnB7m6BI69jdZl1xAN1r/c/FMAJGIpSRU=",
+        "lastModified": 1792547411,
+        "narHash": "sha256-f9USri0gLjFll9sqsRcBbHCbip9g0aJzCl2MO5GWLxM=",
         "owner": "pmarreck",
         "repo": "performance_profiling",
-        "rev": "a04d62a441a5b9315e81f6277f57f7eddb9a57af",
+        "rev": "01ae85bdd434b019b1c5512a39f2766665eab9de",
         "type": "github"
       },
       "original": {
         "owner": "pmarreck",
         "repo": "performance_profiling",
-        "rev": "a04d62a441a5b9315e81f6277f57f7eddb9a57af",
+        "rev": "01ae85bdd434b019b1c5512a39f2766665eab9de",
         "type": "github"
       }
     },
     "printable-binary": {
       "flake": false,
       "locked": {
-        "lastModified": 1784919354,
-        "narHash": "sha256-N6ISjPumvcLoPoYAWErmN5Y4QMFqvjE7kcgUdJH2UY0=",
+        "lastModified": 1791825923,
+        "narHash": "sha256-oYMEwcN0+S4DeAAySJNB3SiDITCiKmQWzO2HOGGvZLM=",
         "owner": "pmarreck",
         "repo": "printable_binary",
-        "rev": "3f697d53f447144e9ba1b73c4217b382f32b4d62",
+        "rev": "cdefa95e4590fa016967e0e6ccb3b96c19c44c7e",
         "type": "github"
       },
       "original": {
         "owner": "pmarreck",
         "repo": "printable_binary",
-        "rev": "3f697d53f447144e9ba1b73c4217b382f32b4d62",
+        "rev": "cdefa95e4590fa016967e0e6ccb3b96c19c44c7e",
         "type": "github"
       }
     },

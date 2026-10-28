@@ -97,10 +97,15 @@ if [[ -z $jpegz || -z $cr || -z $stats ]]; then
 fi
 
 if [[ -z $stats ]]; then
-	stats=$root/zig-out/bin/jpegz-coverage-stats
-	if [[ ! -x $stats ]]; then
-		nix develop "$root" -c zig build coverage-stats --prefix "$root/zig-out" >&2 || exit 2
+	if ! stats_output=$(nix build "$root#coverage-stats" --no-link --print-out-paths); then
+		echo "corruption-coverage: could not prepare the Nix statistics artifact." >&2
+		exit 2
 	fi
+	stats=$stats_output/bin/jpegz-coverage-stats
+fi
+if [[ ! -f $stats || ! -x $stats ]]; then
+	echo "corruption-coverage: statistics artifact is not an executable file: $stats" >&2
+	exit 2
 fi
 if [[ -z $jpegz ]]; then
 	jpegz=$root/zig-out/bin/jpegz

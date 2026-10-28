@@ -206,6 +206,22 @@
           dontFixup = true;
         };
 
+		noCConsumerCheck = pkgs.stdenv.mkDerivation {
+			pname = "jpegz-no-c-consumer";
+			version = "0.0.1";
+			src = ./.;
+			nativeBuildInputs = [ zigPkg ];
+			dontConfigure = true;
+			buildPhase = ''
+				export HOME=$TMPDIR
+				bash tests/cli/no_c_consumer.bash
+			'';
+			installPhase = ''
+				mkdir -p $out
+				echo "no-C consumer controls passed" > $out/result
+			'';
+		};
+
         mkJpegzPackage = { optimize ? "ReleaseFast" }:
           pkgs.stdenv.mkDerivation {
             pname = "jpegz";
@@ -266,9 +282,17 @@
             timeout 600 zig build test -Doptimize=ReleaseSafe ${zigTargetFlag} ${depFlags} || { echo "Tests failed"; exit 1; }
           '';
           installPhase = ''
+            zig build coverage-stats -Doptimize=ReleaseSafe ${zigTargetFlag} ${depFlags} --prefix $out
             mkdir -p $out
             echo "tests passed" > $out/result
           '';
+		  doInstallCheck = true;
+		  installCheckPhase = ''
+		    runHook preInstallCheck
+		    bash tests/cli/corruption_coverage.bash "$out/bin/jpegz-coverage-stats"
+		    runHook postInstallCheck
+		  '';
+		  meta.mainProgram = "jpegz-coverage-stats";
         };
 
         # Foreign-target compile/link gates. Vendored static OpenJPEG is what
@@ -352,9 +376,11 @@
         packages.default = mkJpegzPackage {};
         packages.jpegz = self.packages.${system}.default;
         packages.validator = validatorPackage;
+		packages.coverage-stats = jpegzTestCheck;
 
         checks = {
           dependency-compatibility = dependencyCompatibilityCheck;
+		  no-c-consumer = noCConsumerCheck;
           build = self.packages.${system}.default;
           test = jpegzTestCheck;
           cross-windows = mkCrossLinkCheck "x86_64-windows-gnu";
@@ -368,7 +394,8 @@
           # Interactive builds use native C libraries and the same
           # codec source pins as sandboxed builds. CHARLS_SRC supplies
           # the CharLS sources for compilation by Zig.
-          packages = [ zigPkg pkgs.git pkgs.cacert libjpegNativePkg openjpegNativePkg brotliNativePkg pkgs.hyperfine pkgs.pkg-config ];
+          packages = [ zigPkg pkgs.bash pkgs.coreutils pkgs.git pkgs.cacert libjpegNativePkg openjpegNativePkg brotliNativePkg pkgs.hyperfine pkgs.pkg-config ]
+		    ++ pkgs.lib.optionals isLinux [ pkgs.bubblewrap ];
           CHARLS_SRC = charlsSrc;
           BROTLI_INCLUDE_DIR = "${brotliNativePkg.dev}/include";
           BROTLI_LIB_DIR = "${brotliNativePkg.lib}/lib";
