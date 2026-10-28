@@ -81,6 +81,7 @@ annotate=[
 	tests/unit/fixtures/seq_23x19_422_rev_rst.jpg = Sequential 4:2:2 three scans in reversed component order, DRI=3
 	tests/unit/fixtures/seq_23x19_rgb12_420_3scan.jpg = 12-bit SOF1 three-scan non-interleaved sequential 4:2:0
 	tests/unit/fixtures/zero_pad_16x16_420.jpg = Synthetic zero-padding JPEG (ImageMagick 16x16 4:2:0, final entropy byte 0x4F->0x40): known-encoder-defect WARN at 293, decodes
+	tests/unit/validate.zig = JPEG validation findings, entropy boundaries, sequential coverage and SOF1 component/table classifier controls
 	tools/coverage/flake.nix = Private corruption-reader 0.7 pin used only by ./corruption-coverage
 	tools/coverage_stats.zig = Wilson intervals and jpegz verdict classes for ./corruption-coverage
 	tools/facade_validator_probe.zig = Production-shaped validation-only ELF used for dependency-closure proof.

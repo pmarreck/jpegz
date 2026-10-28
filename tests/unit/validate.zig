@@ -1756,3 +1756,86 @@ test "post-coverage inspection preserves missing-EOI decode outcomes" {
 	try std.testing.expectEqualSlices(u8, complete.pixels, decoded.pixels);
 	try std.testing.expectEqual(@as(usize, 0), sink.items().len);
 }
+
+// Preserve the libjpeg-generated entropy while moving its table definitions
+// and selectors together. Six specifications share one DHT with Lh=626:
+// luma DC/AC, chroma DC/AC, and a second copy of the chroma pair.
+// Omit APP0 so arbitrary component IDs do not claim JFIF conformance.
+fn sof1TableFixture(allocator: std.mem.Allocator, dc_shift: u8, ac_shift: u8, first_id: u8) ![]u8 {
+	const source = fixture_baseline_2x2_rgb;
+	const data = try std.mem.concat(allocator, u8, &.{
+		source[0..2], source[20..177], &.{ 0xff, 0xc4, 0x02, 0x72 },
+		source[181..210], source[214..393], source[397..426], source[430..609],
+		source[397..426], source[430..609], source[609..],
+	});
+	const sof = 140;
+	const dht = 159;
+	const sos = dht + 628;
+	data[sof + 1] = 0xc1;
+	const specifications = [_]usize{ 4, 33, 212, 241, 420, 449 };
+	for (0..3) |component| {
+		const index: u8 = @intCast(component);
+		const dc = (index + dc_shift) % 4;
+		const ac = (index + ac_shift) % 4;
+		data[dht + specifications[component * 2]] = dc;
+		data[dht + specifications[component * 2 + 1]] = 0x10 | ac;
+		data[sof + 10 + component * 3] = first_id +% index;
+		data[sos + 5 + component * 2] = first_id +% index;
+		data[sos + 6 + component * 2] = (dc << 4) | ac;
+	}
+	return data;
+}
+
+test "SOF1 accepts every component ID and all four Huffman destinations" {
+	const allocator = std.testing.allocator;
+	var original = try jpegz.internal.wrapperDecode(allocator, fixture_baseline_2x2_rgb);
+	defer original.deinit(allocator);
+	for (0..256) |raw_id| {
+		const data = try sof1TableFixture(allocator, 0, 0, @intCast(raw_id));
+		defer allocator.free(data);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expect(report.isValid());
+		try std.testing.expectEqual(.decoded, report.codec_check);
+		var decoded = try jpegz.internal.cleanroomDecode(allocator, data);
+		defer decoded.deinit(allocator);
+		var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+		defer oracle.deinit(allocator);
+		try std.testing.expectEqualSlices(u8, original.pixels, oracle.pixels);
+		try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+	}
+	// Classify all 256 Td/Ta bytes. For legal selectors, relocate matching
+	// definitions too; changing selectors alone would also change the codebook.
+	for (0..256) |raw| {
+		const selector: u8 = @intCast(raw);
+		const dc = selector >> 4;
+		const ac = selector & 15;
+		const valid = dc < 4 and ac < 4;
+		const data = try sof1TableFixture(allocator, if (valid) dc else 0, if (valid) ac else 0, 0);
+		defer allocator.free(data);
+		data[787 + 6] = selector;
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expectEqual(valid, report.isValid());
+		if (!valid) continue;
+		try std.testing.expectEqual(.decoded, report.codec_check);
+		var decoded = try jpegz.internal.cleanroomDecode(allocator, data);
+		defer decoded.deinit(allocator);
+		var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+		defer oracle.deinit(allocator);
+		try std.testing.expectEqualSlices(u8, original.pixels, oracle.pixels);
+		try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+	}
+	for (0..4) |shift| {
+		const defined: u8 = @intCast(shift);
+		const missing = (defined + 3) % 4;
+		for ([_]u8{ (missing << 4) | defined, (defined << 4) | missing }) |selector| {
+			const data = try sof1TableFixture(allocator, defined, defined, 0);
+			defer allocator.free(data);
+			data[787 + 6] = selector;
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
+		}
+	}
+}

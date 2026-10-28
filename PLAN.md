@@ -22,7 +22,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
   - [x] Code 63 `entropy_padding_zero_bits` for all-zero pad bits (WARN, exact pad byte, bit count in the detail); 62 narrows to mixed bits. Validate verified 63 unused and endorsed it; registry coordinator sign-off 2026-10-23 ~1:55 PM EDT. Conditions: append-only (62 keeps number and name), tests over the set of pad widths 1..7 (all 0 -> 63, mixed -> 62, all 1 -> none; width 1 has no mixed pattern), non-boundary cases unchanged, consumer mapping coordinated with validate. Not a KNOWN_DEFECT admission. (done 2026-10-23 6:30 PM EDT)
   - [x] The same all-zero WARN for progressive and lossless scans (strict decode accepts; lenient and validation report 63 at the exact pad byte). (done 2026-10-23 6:30 PM EDT)
 - [x] Reject additional sequential Huffman SOS after complete component coverage with exact FAIL 55; skip opaque metadata, stop at first EOI and preserve missing-EOI decode outcomes; full ./test passes (done 2026-10-28 17:21 EDT; delivered by this change).
-- [x] Report baseline restart and padding findings at absolute file offsets (done with the distinct-codes item, 2026-10-20).
 - [x] Apply FAIL 62 to mixed padding in progressive and lossless Huffman scans at exact absolute pad-byte offsets, including strict decode and lenient restart recovery, without generic 51 duplication; arithmetic stays excluded (done 2026-10-28 15:52 EDT; delivered by this change).
 - [x] Give repeated T.81 SOS selectors and invalid sequential Ns exact finding 55, and bad sequential Ls exact finding 4, before entropy decoding; reserve the scan tail when Ns is excessive; full ./test and valid four-component controls pass (done 2026-10-28 16:51 EDT; delivered by this change).
 - [x] Give restart-after-final-MCU, interval-boundary truncation and non-1 padding their own registry-numbered finding codes with exact offsets, keeping FAIL severity. Baseline/extended sequential Huffman now emits 62, 57, 3 and 55 at absolute offsets with `offset_is_exact`; the generic 51 is no longer added beside a typed FAIL. (2026-10-20 13:30 EDT)
@@ -30,7 +29,8 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Priority: Validate September 30 work order
 
 - [ ] Reproduce and fix the non-luma-dominant sampling panic with synthetic inputs and valid sampling controls; return typed failure or support the layout without out-of-bounds access.
-- [ ] Reproduce SOF1 with component ids 0/1/2 and Huffman table pairs 0/1/2; accept legal table ids 0-3 and distinguish any remaining private-stream failure.
+- [x] Verify SOF1 with component IDs 0/1/2 and DHT Lh=626; all 256 cyclic ID triplets and 16 legal DC/AC destination pairs match libjpeg pixels, while 240 out-of-range selectors and eight undefined-table controls fail; no decoder change needed, full ./test passes (done 2026-10-28 17:45 EDT; delivered by this change).
+- [ ] Obtain Validate's private SOF1 replay; if still failing, reproduce its first typed finding with a synthetic regression before changing the decoder; keep originals private.
 - [ ] Verify JP2 leaf offset semantics; preserve exact in-buffer offsets and represent EOF or declared extents without claiming nonexistent byte locations.
 - [x] Reproduce zero-bit entropy padding with its own typed finding and exact byte offset (T.81 F.1.2.3). Superseded on severity by the BDFN rulings of 2026-10-23 and 2026-10-27: all-zero padding is WARN 63 and decodes, mixed padding is FAIL 62. Landed in 8fd246d (done 2026-10-23 6:30 PM EDT).
 - [ ] Publish green bounded fixes and send Validate/tiffz exact SHA, package hash, scope and remaining blockers; preserve 5c5191a and 6ef766c.
@@ -64,6 +64,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Build and CLI
 
 - [ ] Investigate gate feedback latency, whole-tree Nix source inputs and artifact reuse; measure compilation, queue/setup and test execution separately while preserving complete coverage (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
+- [ ] Move no-C consumer compilation into a Nix check, retain negative controls and disposable scratch, and reach it through ./test and exact-commit CI (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
 - [ ] Port the requested upstream-first dependency-freshness gate with sibling fallback and set tests for current, stale, missing, offline and ahead-of-sibling cases.
 - [ ] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks; coordinate the unnecessary encoder linkage with libjxlz.
 - [ ] Add U5b progress controls and pure timestamp-injected rendering; verify rendered output with Peter and test terminal/width degradation.

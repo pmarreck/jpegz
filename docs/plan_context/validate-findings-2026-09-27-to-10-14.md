@@ -142,6 +142,26 @@ symbol is 0xFA. `djpeg -strict` decodes all three private streams. Accept table
 ids 0-3 and any component id. The exact failing check is unconfirmed; the
 suspects are table id 2 and component id 0.
 
+Synthetic controls passed on 2026-10-28 without a decoder change. They preserve
+the entropy from the libjpeg-generated 8-bit baseline fixture, switch to SOF1,
+remove its JFIF claim, and combine six Huffman specifications into one DHT
+with Lh=626. The third component receives its own copy of the chroma pair.
+Component IDs and corresponding selectors move together across all 256 cyclic
+triplets, including 0/1/2 and the 255/0/1 wrap boundary.
+
+A separate classifier covers every Td/Ta byte: the 16 legal pairs move their
+matching definitions too, preserving the encoded codebooks, while the 240
+out-of-range selectors fail. Eight controls select undefined DC or AC tables
+within the legal 0..3 range and also fail. Every valid case decodes in the
+cleanroom path and matches both its libjpeg-turbo oracle and the original
+pixels. These controls establish support for the reported header shape, not
+the validity of the private originals. A private replay remains open.
+
+The complete local test entry point passed native/CLI/C ABI checks, production,
+all four cross-link checks, the dependency closure and consumer negative
+controls. The regression uses the JPEG-specific validation API so this test
+binary does not acquire unrelated JPEG XL/Brotli linkage.
+
 ## Full-stream Huffman false reject (2026-09-27)
 
 A 160x109 4:2:0 EXIF thumbnail from the Intel JPEG Library. Count vectors for
@@ -187,3 +207,9 @@ budget result. Exact-commit CI completed in 988 seconds. Each derivation
 currently takes the whole source tree, so source-input scope and cache reuse
 need investigation before changing the pipeline. Preserve every required
 suite and verify source completeness before narrowing any inputs.
+
+The no-C consumer check currently invokes the compiler from the master test
+runner's development shell. Move that preparation into a declared Nix check,
+preserve its required-C negative control and disabled-JP2 positive control, and include it in
+the exact-commit target manifest. Private scratch alone does not establish a
+preventive filesystem boundary; the derivation must provide that boundary.
