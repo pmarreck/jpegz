@@ -515,10 +515,12 @@ fn strictFromReport(
     errdefer result.deinit(allocator);
     try result.findings.ensureTotalCapacity(allocator, report.findings.items.len);
     var known_defect = false;
+	var unchecked_marker = false;
     for (report.findings.items) |finding| {
         switch (finding.code) {
             .missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => result.verdict = .corrupt,
             .entropy_padding_zero_bits => known_defect = true,
+			.unknown_marker => unchecked_marker = true,
             else => {},
         }
         const detail = if (finding.detail) |value| try allocator.dupe(u8, value) else null;
@@ -533,6 +535,7 @@ fn strictFromReport(
             .detail = detail,
         });
     }
+	if (unchecked_marker and result.verdict == .valid) result.verdict = .indeterminate;
     // Recognition belongs to the codec. Neither a warning alone nor a
     // successful decode admits a known defect; incomplete checks and damage
     // retain precedence even when this recognized pattern is also present.

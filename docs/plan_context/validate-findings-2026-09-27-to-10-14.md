@@ -443,6 +443,102 @@ Its phase-timing output was unavailable after context truncation; that total
 must not be presented as isolated test execution. The native derivation's
 combined compilation/test phase took 116 seconds and the no-C consumer phase
 took 50 seconds. Fresh execution remains a separate measurement task.
-Exact-commit CI verification follows publication. Reserved markers and
-JFIF density/version/thumbnail semantics remain open; these controls do not
-settle every label in the original 170-byte sweep.
+Published `d7f627a28f6b4dd96e348450c7f9ced1a3abfd10` passes all eleven
+exact-commit CI targets, October 29 01:09:03Z..01:09:22Z (19 seconds, prepared
+artifact reuse). Its fetched archive hash is
+`jpegz-0.1.0-staw4K1vFAASj4ArDhJN7TC6sTjsc_Nh5ZWfxUtIJz4g`.
+The coordinator and consumers received the immutable registry receipt.
+The coordinator acknowledged and reconciled the code-64 shipment at
+21:15 EDT; that acknowledgment does not establish consumer adoption.
+Reserved markers and JFIF density/version/thumbnail semantics remain open;
+these controls do not settle every label in the original 170-byte sweep.
+
+### Remaining sweep labels and JFIF edition boundaries
+
+The public fixture and XOR-255 operator give these interpretations of the
+83 previously surviving offsets. This is a clause-based partition, not a
+fresh runtime detection-rate measurement.
+
+| Offsets | Count | Interpretation |
+| --- | ---: | --- |
+| 3 | 1 | APP0 becomes reserved marker FF1F; marker semantics are unrecognized. |
+| 6..10 | 5 | Changed APP0 identifier; generic application data is permitted. |
+| 11..12 | 2 | Versions become 254.01 or 1.254; historical/future-version treatment requires a declared edition policy. |
+| 13 | 1 | Units becomes 255; invalid in 1.02, but this fixture declares 1.01 and its historical rule remains unverified. |
+| 14..17 | 4 | Densities become 65281 or 254, both nonzero. |
+| 18..19 | 2 | One thumbnail dimension becomes 255, the other stays zero; no thumbnail payload is required. |
+| 25..88 | 64 | Quantizers remain nonzero; changed pixels are permitted. |
+| 100 | 1 | SOF component ID changes without its SOS reference; finding 55 owns this mismatch. |
+| 157..159 | 3 | Invalid sequential SOS fields; approved finding 64 now owns these. |
+
+[T.871 10.1](https://www.itu.int/rec/dologin_pub.asp?id=T-REC-T.871-201105-I%21%21PDF-E&lang=f&type=items#page=12)
+requires nonzero densities and Lp=16+3*HthumbnailA*VthumbnailA. It permits
+either base-thumbnail dimension to be zero; 10.1 explicitly says that means
+no thumbnail. Its version requirement is specifically 1.02. The earlier
+1992 text and historical 1.01 files must remain distinct from a claim of
+conformance to this formalized edition. The 2011 scope also limits sample
+precision to eight bits; do not silently use that newer profile restriction
+to reject otherwise supported historical JPEG processes.
+
+[T.81 Table B.1](https://www.w3.org/Graphics/JPEG/itu-t81.pdf#page=36)
+reserves FF02..FFBF. A successful decoder that skips such a segment does not
+establish its unknown semantics. Extension/reserved-marker treatment needs
+an explicit coverage result, preserving independently demonstrated corruption.
+Reserved-marker treatment reuses existing finding 5; it requests no wire value.
+
+The persisted declared-JFIF units classifier fails at units=3: expected
+FAIL, observed INFO. Native derivation
+`wj1r9v6wrkhcg9rbq189bbg0jyw7nxjl-jpegz-tests-0.0.1.drv` reports 266/267
+tests passed, with C ABI 101/101 and CLI 84/84. Legal density and all 512
+zero-product thumbnail controls pass. The coordinator received a request
+for candidate 65 `jfif_metadata_invalid`, initially for units only.
+
+At 21:16 EDT the coordinator approved 65 with rejection restricted to a
+recognized complete JFIF 1.02 header. The initial red test's first witness
+used 1.01, whose historical units rule was not established by the supplied
+primary sources. Its expected rejection was therefore an unsupported
+cross-edition assumption, not proof of that file's invalidity. Correct the
+test to obtain an actual 1.02 red witness before implementing the approved
+check; keep valid 1.01 controls. Any 1.01 rejection needs historical normative
+or implementation evidence. Density, thumbnail, future-version and precision
+rules are outside this allocation's initial rejection scope.
+
+Reserved-marker regressions independently failed in native derivation
+`8fg5vy0clcz2i354m568dqwbagiv1mm5-jpegz-tests-0.0.1.drv`: FF02 produced
+valid instead of indeterminate, and FF00 outside entropy produced valid
+instead of corrupt. The run had 266/269 passing Zig tests; its third failure
+was the original unevidenced 1.01-units expectation. Corrected 1.02 and
+native/C ABI/CLI tests were then run before implementation.
+
+The corrected 1.02 regression also fails with the original implementation:
+`17y16jxcdw4fyac9aha5h3xdfnkhdhjj-jpegz-tests-0.0.1.drv` reports 266/270
+Zig tests passing, including failures for invalid units, complete-header
+recognition, reserved markers and FF00. The C ABI's first invalid 1.02 units
+case fails its verdict assertion. All twelve new CLI assertions fail while
+the previous 84 pass. The approved enum/name alone already exists in this
+red run; no validation behavior had changed.
+
+The minimal implementation checks only complete, available 1.02 headers
+and identifies the units field as a metadata/profile violation. The version
+gate has classifier controls across all 256 values of either version byte;
+these verify the rejection scope without claiming other versions valid.
+Reserved FF02..FFBF now produce a located warning with existing code 5 and
+an indeterminate strict verdict. FF00 outside entropy produces exact FAIL 5.
+Opaque APP/comment controls remain valid, and unknown-marker uncertainty
+does not hide actual corruption or erase the known zero-padding cause.
+Complete `./test` and all eleven declared output/check targets passed at
+21:26 EDT. Native derivation
+`rl5fhsyhw9fjhwf0hwksdlh1qh5gd7vy-jpegz-tests-0.0.1.drv` covers 271 Zig tests,
+119 C ABI assertions and 96 CLI checks. All 190 reserved-byte values,
+17 assigned application/comment controls, 256 units values, 512 version-gate
+cases and incomplete header boundaries pass. Legal density and zero-product
+thumbnail controls match libjpeg pixels under the evidenced 1.02 version;
+valid 1.01 unit controls also retain pixel parity.
+
+Preparation took 182 seconds and the complete entry point then took 17 seconds
+using those prepared results. Native compilation/test execution remains a
+mixed 118-second phase; no-C consumer compilation/controls took 51 seconds.
+This is correctness and artifact-reuse evidence, not a fresh execution-budget
+measurement. Exact-commit CI and the registry shipment receipt follow
+publication. Historical 1.01 units, future-version semantics and wider JFIF
+constraints remain open.

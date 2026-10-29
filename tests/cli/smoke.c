@@ -115,6 +115,10 @@ int main(void) {
 		       "sequential scan finding appends 64 and preserves progressive 59");
 		ASSERT(strcmp(jpegz_finding_code_name((jpegz_finding_code_t)64), "sequential_scan_invalid") == 0,
 		       "sequential scan finding has its stable C ABI name");
+		ASSERT(JPEGZ_FINDING_JFIF_METADATA_INVALID == 65,
+		       "JFIF metadata finding appends its approved wire value");
+		ASSERT(strcmp(jpegz_finding_code_name((jpegz_finding_code_t)65), "jfif_metadata_invalid") == 0,
+		       "JFIF metadata finding has its stable C ABI name");
 
         /* Distinct codes must not collapse onto one string — a table that
          * returns the same label for everything would pass a single-value
@@ -386,6 +390,43 @@ int main(void) {
 				ASSERT(locations && failures == (cases[c].second == NULL ? 1u : 2u),
 				       "SOS causes retain their exact original and host field bytes");
 				ASSERT(first && second, "SOS details name fields, observed values and requirements");
+				jpegz_strict_result_free(&r);
+			}
+			free(copy);
+		}
+
+		{
+			ASSERT(baseline_2x2_rgb_len > 20 && memcmp(baseline_2x2_rgb + 6, "JFIF\0", 5) == 0,
+			       "JFIF units control has the complete declared identifier");
+			uint8_t *copy = malloc(baseline_2x2_rgb_len);
+			ASSERT(copy != NULL, "JFIF units control buffer allocated");
+			const uint8_t units[] = {0, 1, 2, 3, 255};
+			for (size_t c = 0; c < sizeof units; c++) {
+				memcpy(copy, baseline_2x2_rgb, baseline_2x2_rgb_len);
+				copy[12] = 2; /* JFIF 1.02, the approved rejection scope. */
+				copy[13] = units[c];
+				jpegz_strict_result_t r = {0};
+				ASSERT(jpegz_validate_any(copy, baseline_2x2_rgb_len, &r) == JPEGZ_OK,
+				       "JFIF validation returns through the ABI");
+				ASSERT(r.verdict == (units[c] <= 2 ? JPEGZ_VERDICT_VALID : JPEGZ_VERDICT_CORRUPT),
+				       "JFIF 1.02 units distinguish valid metadata from a profile violation");
+				if (units[c] > 2) {
+					size_t failures = 0;
+					int exact = 1, detail = 0;
+					char observed[32];
+					snprintf(observed, sizeof observed, "units=%u", (unsigned)units[c]);
+					for (size_t i = 0; i < r.findings_len; i++) {
+						const jpegz_strict_finding_t f = r.findings[i];
+						if (f.severity != JPEGZ_SEVERITY_FAIL) continue;
+						failures++;
+						exact &= f.code == JPEGZ_FINDING_JFIF_METADATA_INVALID && f.offset == 13 &&
+							f.host_offset == 13 && f.offset_is_exact;
+						detail |= f.detail != NULL && strstr(f.detail, observed) != NULL &&
+							strstr(f.detail, "0, 1 or 2") != NULL;
+					}
+					ASSERT(exact && failures == 1, "JFIF profile violation retains exact original and host metadata bytes");
+					ASSERT(detail, "JFIF metadata detail gives observed and allowed unit values");
+				}
 				jpegz_strict_result_free(&r);
 			}
 			free(copy);

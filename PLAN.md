@@ -6,20 +6,17 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Priority: dependency freshness
 
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; client terminal and activation shortcut requested, settings unchanged.
-- [x] Re-lock tools/coverage to corruption_reader 1ec8cbe, reaching performance_profiling 01ae85b and printable_binary cdefa95; refresh both nixpkgs locks to 58deea6, pass full ./test and a 60-case three-format real-tool smoke; JPEG-LS pristine gate remains open (done 2026-10-28 19:53 EDT; delivered by this change).
 - [x] Expose coverage-stats through a declared Nix output, replace its dev-shell compiler bootstrap, reject unusable artifacts before mutation and pass installed-copy controls plus full ./test (done 2026-10-28 19:53 EDT; delivered by this change).
 - [ ] Resolve the corruption-coverage default JPEG-LS fixture mismatch; owner choice requested among three supported defaults, an audited inconclusive JPEG-LS control, or retaining the blocked campaign; preserve classifications and denominators.
 - [x] Reconcile the October 14 pin question: coordinator finds no additional hidden owner decision; the provider pin hold was released October 15, sampling remains held, and private replays, JP2 exactness and the two explicit owner questions retain separate items (done 2026-10-28 20:47 EDT; coordinator decision).
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
 - [ ] Keep the published JP2 pin and its real Nix closure hash; do not restore draft pin 54531e26 or any placeholder hash.
-- [x] Mirror approved JP2 finding 261 through Zig/C wire identity and classify its proven violation as corrupt regardless of severity; preserve conditional 252 treatment, keep unknown codes inconclusive, and pass full ./test (done 2026-10-28 19:06 EDT; delivered by this change).
 
 ## Priority: Validate September 30 work order
 
 - [ ] Reproduce and fix the non-luma-dominant sampling panic with synthetic inputs and valid sampling controls; return typed failure or support the layout without out-of-bounds access.
 - [ ] Obtain Validate's private SOF1 replay; if still failing, reproduce its first typed finding with a synthetic regression before changing the decoder; keep originals private.
 - [ ] Finish JP2 leaf exactness metadata and audit legacy severity-report locations; the provider cursor/anchor/extent contract is pending, so bounds alone must not imply exactness (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
-- [x] Publish bounded fixes through 446274f, preserving 5c5191a and 6ef766c; send Validate/tiffz exact SHAs, package hashes, scope and remaining private replay/provider blockers after exact-commit CI passes (done 2026-10-28 19:26 EDT).
 
 ## Priority: DHT memory safety
 
@@ -34,9 +31,12 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Complete the separate libjxlz arithmetic scaling sweep; published e1c521d contains baseline 923d3c4c unchanged (228 fixed-size rows, hash verified), and the provider has a request for published scaling evidence or a bounded sweep (context: docs/plan_context/pre-canon-2026-09-24.md).
 - [x] Verify libjxlz benchmark-history publication: 923d3c4c is an ancestor of published e1c521d, and all 228 fixed-size rows retain SHA-256 3e7b42191359de69231e34e4f235480f655b6a632fbd033599c50a60fbe83195; scaling remains a separate request (done 2026-10-28 20:15 EDT).
 - [ ] Finish adjudicating validate's 170-byte XOR sweep: sequential SOS fields and APP0 identifiers now have normative/classifier controls; review reserved markers and JFIF density/version/thumbnail semantics without assuming each mutation is malformed (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
+- [x] Reject invalid units in complete recognized JFIF 1.02 with approved 65; correct the unevidenced 1.01 expectation, obtain an actual 1.02 red witness, and pass every units/version byte, generic APP0, bounds, exact native/C ABI/CLI locations and complete ./test (done 2026-10-28 21:26 EDT; delivered by this change).
+- [x] Diagnose reserved FF02..FFBF as inconclusive with existing 5, reject zero marker bytes outside entropy, and pass corruption/known-defect precedence, opaque APP/comment controls and complete ./test (done 2026-10-28 21:26 EDT; delivered by this change).
+- [ ] Publish the JFIF-65 and marker-coverage fixes, verify exact-commit CI and deliver the edition-scoped registry receipt; historical 1.01 units and future versions remain separate adjudication work.
 - [x] Reject invalid sequential SOS fields with approved append-only 64, exact original/host bytes and observed/required nibble details; all 256 values per field in SOF0/SOF1, C ABI and complete ./test pass; exact-commit CI follows publication (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 21:07 EDT; delivered by this change).
 - [x] Reject zero DQT entries with exact finding 52; all 64 positions, legal 8/16-bit boundaries, half-zero words and 192 incomplete-table cases pass with complete ./test (done 2026-10-28 21:07 EDT; delivered by this change).
-- [ ] Publish the SOS/DQT fixes and JP2 finding-membership guard, verify exact-commit CI and deliver the approved code-64 registry receipt with remaining scope limits.
+- [x] Publish d7f627a with SOS/DQT fixes and JP2 finding-membership guard; all eleven exact-commit CI targets pass in 19 seconds using prepared artifacts, and immutable code-64/package-hash receipts reach the coordinator and consumers (done 2026-10-28 21:09 EDT; commit d7f627a).
 - [ ] Evaluate validate's coverage-range API without exempting whole constrained segments or changing denominators to improve scores.
 - [ ] Review newly published jp2z/libjxlz work before future pin changes; verify private-source access and preserve strict corruption precedence.
 - [ ] Verify jp2z pixel APIs and component-resolution oracles before replacing OpenJPEG; retain the T.800 edition limit and unresolved warning-class review.

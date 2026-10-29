@@ -159,6 +159,21 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         const marker_byte = data[pos];
         const marker_offset = pos - 1; // include the 0xFF
         pos += 1;
+		// T.81 B.1.1.2 excludes zero as a marker byte. Entropy stuffing
+		// and opaque APP payloads are consumed separately below.
+		if (marker_byte == 0) {
+			try addExactFinding(&report, allocator, .unknown_marker, marker_offset + 1,
+				"zero marker byte outside entropy is forbidden by T.81 B.1.1.2");
+			return report;
+		}
+		// Reserved semantics cannot be established by decoding around them.
+		if (marker_byte >= 0x02 and marker_byte <= 0xbf) {
+			const detail = try std.fmt.allocPrint(allocator,
+				"reserved JPEG marker FF{X:0>2}; marker semantics are not checked", .{marker_byte});
+			defer allocator.free(detail);
+			try addFinding(&report, allocator, .warn, .unknown_marker, marker_offset + 1, detail);
+			report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
+		}
 
         // ── Standalone markers (no length) ─────────────────────
         if (isStandaloneMarker(marker_byte)) {
@@ -214,6 +229,17 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             // thumbnail; a JFXX APP0 extension is a thumbnail by definition.
             if (marker_byte == 0xE0) {
                 const body = data[seg_body_start..seg_end];
+				const jfif_header_bytes: usize = 14;
+				// The approved metadata rule is edition-specific. Generic APP0,
+				// incomplete headers and other versions do not establish it.
+				if (body.len >= jfif_header_bytes and std.mem.eql(u8, body[0..5], "JFIF\x00") and
+					body[5] == 1 and body[6] == 2 and body[7] > 2)
+				{
+					const detail = try std.fmt.allocPrint(allocator,
+						"JFIF 1.02 metadata/profile violation: units={d}; expected 0, 1 or 2", .{body[7]});
+					defer allocator.free(detail);
+					try addExactFinding(&report, allocator, .jfif_metadata_invalid, seg_body_start + 7, detail);
+				}
                 if (body.len >= 14 and std.mem.eql(u8, body[0..5], "JFIF\x00")) {
                     if (body[12] != 0 and body[13] != 0)
                         try addFinding(&report, allocator, .info, .embedded_thumbnail_present,

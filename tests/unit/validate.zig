@@ -1267,6 +1267,123 @@ test "APP0 identifiers are classified without requiring every JPEG to be JFIF" {
 	}
 }
 
+test "JFIF nonzero density boundaries and zero-product thumbnails remain legal" {
+	const allocator = std.testing.allocator;
+	const body = findMarker(fixture_baseline_2x2_rgb, 0xe0).? + 4;
+	for ([_]usize{ 8, 10 }) |field| {
+		for ([_]u16{ 1, 254, 255, 256, 65281, 65535 }) |density| {
+			const data = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
+			defer allocator.free(data);
+			std.mem.writeInt(u16, data[body + field..][0..2], density, .big);
+			data[body + 6] = 2;
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try std.testing.expect(report.isValid());
+			var decoded = try jpegz.decode(allocator, data);
+			defer decoded.deinit(allocator);
+			var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+			defer oracle.deinit(allocator);
+			try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+		}
+	}
+	// T.871 10.1 permits either base-thumbnail dimension to be zero.
+	// Every independent change keeps their product zero and Lp=16 correct.
+	for ([_]usize{ 12, 13 }) |field| {
+		for (0..256) |value| {
+			const data = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
+			defer allocator.free(data);
+			data[body + field] = @intCast(value);
+			data[body + 6] = 2;
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try std.testing.expect(report.isValid());
+			try std.testing.expect(!reportHasCode(report, .embedded_thumbnail_present));
+			var decoded = try jpegz.decode(allocator, data);
+			defer decoded.deinit(allocator);
+			var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+			defer oracle.deinit(allocator);
+			try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+		}
+	}
+}
+
+test "JFIF density units classify every byte only for the declared profile" {
+	const allocator = std.testing.allocator;
+	const body = findMarker(fixture_baseline_2x2_rgb, 0xe0).? + 4;
+	// A generic APP0 payload does not acquire JFIF field constraints.
+	for (0..5) |field| {
+		const data = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
+		defer allocator.free(data);
+		data[body + field] ^= 0xff;
+		data[body + 6] = 2;
+		data[body + 7] = 255;
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expect(report.isValid());
+	}
+	// The approved rejection scope is complete JFIF 1.02. Valid 1.01
+	// controls remain supported without imposing unverified historical rules.
+	for ([_]u8{ 2, 1 }) |minor| {
+		for (0..256) |units| {
+			if (minor == 1 and units > 2) continue;
+			const data = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
+			defer allocator.free(data);
+			data[body + 6] = minor;
+			data[body + 7] = @intCast(units);
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			if (units > 2) {
+				try expectExactTypedFailures(report, .jfif_metadata_invalid, body + 7, 1);
+			} else {
+				try std.testing.expect(report.isValid());
+				var decoded = try jpegz.decode(allocator, data);
+				defer decoded.deinit(allocator);
+				var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+				defer oracle.deinit(allocator);
+				try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+			}
+		}
+	}
+}
+
+test "JFIF units checking requires a complete declared and available header" {
+	const allocator = std.testing.allocator;
+	const body = [_]u8{ 'J', 'F', 'I', 'F', 0, 1, 2, 255, 0, 1, 0, 1, 0, 0 };
+	for (0..body.len + 1) |length| {
+		const header = [_]u8{ 0xff, 0xd8, 0xff, 0xe0, 0, @intCast(length + 2) };
+		const data = try std.mem.concat(allocator, u8, &.{ &header, body[0..length], fixture_baseline_2x2_rgb[20..] });
+		defer allocator.free(data);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expectEqual(length == body.len, reportHasCode(report, .jfif_metadata_invalid));
+	}
+	const complete = [_]u8{ 0xff, 0xd8, 0xff, 0xe0, 0, 16 } ++ body;
+	for (0..complete.len) |length| {
+		var report = try jpegz.validate(allocator, complete[0..length]);
+		defer report.deinit(allocator);
+		try std.testing.expect(!reportHasCode(report, .jfif_metadata_invalid));
+	}
+}
+
+test "JFIF units rejection is gated by the complete evidenced version set" {
+	const allocator = std.testing.allocator;
+	const body = findMarker(fixture_baseline_2x2_rgb, 0xe0).? + 4;
+	for ([_]usize{ 5, 6 }) |field| {
+		for (0..256) |version_byte| {
+			const data = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
+			defer allocator.free(data);
+			data[body + 5] = 1;
+			data[body + 6] = 2;
+			data[body + field] = @intCast(version_byte);
+			data[body + 7] = 255;
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			const evidenced = data[body + 5] == 1 and data[body + 6] == 2;
+			try std.testing.expectEqual(evidenced, reportHasCode(report, .jfif_metadata_invalid));
+		}
+	}
+}
+
 test "sequential SOS fields classify every byte by the declared scan process" {
 	// T.81 B.2.3/Table B.3: sequential DCT uses Ss=0, Se=63, Ah=Al=0.
 	// Two one-bit zero codes encode DC zero and EOB, followed by six pad ones.

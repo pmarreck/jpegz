@@ -100,6 +100,23 @@ Registry values are append-only and shared with sibling validators.
 Use `jpegz_finding_code_name()` for display; do not duplicate the name table.
 Code-number changes require the coordination recorded in PLAN.md.
 
+Sequential SOF0/SOF1 SOS fields require Ss=0, Se=63 and Ah=Al=0. Invalid
+values report finding 64 at the exact field byte, naming the observed and
+required values and the Ah/Al nibble. Zero quantization entries report
+finding 52 at the start of the 8-bit entry or 16-bit word. Legal quantizer
+values remain accepted, including 16-bit words with one zero byte.
+
+A complete recognized JFIF 1.02 APP0 header with units outside 0..2 reports
+FAIL/corrupt with finding 65 at the exact units byte. This identifies a
+metadata/profile violation. Its initial rejection scope does not establish
+rules for older or future versions, density, thumbnail lengths or precision.
+Generic application payloads retain their independent interpretation.
+
+Reserved FF02..FFBF markers report warning 5 with an indeterminate strict
+verdict because their semantics are unchecked. A zero marker byte outside
+entropy is forbidden and reports FAIL 5. Both retain their original and
+host marker-byte locations. Demonstrated corruption retains precedence.
+
 JP2 strict reports retain positions within the supplied buffer, including
 nonexact EOF cursors, and copy them to the standalone host offset. A leaf
 position beyond the buffer has null byte/host offsets, with its reported

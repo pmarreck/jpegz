@@ -354,6 +354,78 @@ test "SOF3 standalone markers cannot masquerade as unsupported length-prefixed s
 	}
 }
 
+test "reserved JPEG marker semantics remain inconclusive after successful pixel decoding" {
+	const allocator = std.testing.allocator;
+	const pristine = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xe0 }, pristine[2..4]);
+	for (2..0xc0) |marker| {
+		const data = try allocator.dupe(u8, pristine);
+		defer allocator.free(data);
+		data[3] = @intCast(marker);
+		var result = try jpegz.validateAny(allocator, data);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(jpegz.StrictVerdict.indeterminate, result.verdict);
+		var notices: usize = 0;
+		for (result.findings.items) |finding| {
+			if (finding.code != .unknown_marker) continue;
+			notices += 1;
+			try std.testing.expectEqual(jpegz.Severity.warn, finding.severity);
+			try std.testing.expectEqual(@as(?u64, 3), finding.offset);
+			try std.testing.expectEqual(finding.offset, finding.host_offset);
+			try std.testing.expect(finding.offset_is_exact);
+		}
+		try std.testing.expectEqual(@as(usize, 1), notices);
+	}
+	// T.81 application/comment payloads remain opaque, with assigned markers.
+	for ([_]u8{ 0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7,
+		0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xee, 0xef, 0xfe }) |marker|
+	{
+		const data = try allocator.dupe(u8, pristine);
+		defer allocator.free(data);
+		data[3] = marker;
+		var result = try jpegz.validateAny(allocator, data);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(jpegz.StrictVerdict.valid, result.verdict);
+	}
+	const padded = @embedFile("fixtures/zero_pad_16x16_420.jpg");
+	for ([_]bool{ false, true }) |truncate| {
+		const data = try allocator.dupe(u8, if (truncate) padded[0 .. padded.len - 2] else padded);
+		defer allocator.free(data);
+		data[3] = 0x1f;
+		var result = try jpegz.validateAny(allocator, data);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(if (truncate) jpegz.StrictVerdict.corrupt else .indeterminate, result.verdict);
+		if (!truncate) {
+			var known_cause = false;
+			for (result.findings.items) |finding| {
+				if (finding.code == .entropy_padding_zero_bits) known_cause = true;
+			}
+			try std.testing.expect(known_cause);
+		}
+	}
+}
+
+test "zero marker byte outside entropy is malformed rather than opaque APP data" {
+	const allocator = std.testing.allocator;
+	const pristine = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	const data = try allocator.dupe(u8, pristine);
+	defer allocator.free(data);
+	data[3] = 0;
+	var result = try jpegz.validateAny(allocator, data);
+	defer result.deinit(allocator);
+	try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
+	var failures: usize = 0;
+	for (result.findings.items) |finding| {
+		if (finding.severity != .fail) continue;
+		failures += 1;
+		try std.testing.expectEqual(jpegz.FindingCode.unknown_marker, finding.code.?);
+		try std.testing.expectEqual(@as(?u64, 3), finding.offset);
+		try std.testing.expectEqual(finding.offset, finding.host_offset);
+		try std.testing.expect(finding.offset_is_exact);
+	}
+	try std.testing.expectEqual(@as(usize, 1), failures);
+}
+
 test "JP2 mapping recognizes only declared JP2 findings" {
 	for (0..512) |value| {
 		const raw: u32 = @intCast(value);

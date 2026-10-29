@@ -280,6 +280,28 @@ out=; err=; rc=
 capture "$jpegz_cli" --simple "$known_defect"
 assert_contains "$out" 'known_defect' "text classifies the known defect"
 
+# Mutations are streamed from read-only fixtures; offsets are zero-based.
+capture bash -c '{ head -c 12 "$2"; printf "\x02\x03"; tail -c +15 "$2"; } | "$1" --json -' _ \
+	"$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg"
+[ "$rc" -eq 1 ] && pass "invalid JFIF 1.02 units exit 1" || fail "invalid JFIF 1.02 units exit 1" "rc=$rc"
+assert_contains "$out" '"verdict":"corrupt"' "invalid JFIF units are a profile violation"
+assert_contains "$out" '"severity":"FAIL","code":"jfif_metadata_invalid"' "JFIF units retain their typed cause"
+assert_contains "$out" '"offset":13,"host_offset":13,"offset_is_exact":true' "JFIF units retain exact metadata locations"
+
+for marker in 1f 00; do
+	capture bash -c '{ head -c 3 "$2"; printf "%b" "\\x$3"; tail -c +5 "$2"; } | "$1" --json -' _ \
+		"$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg" "$marker"
+	if [ "$marker" = 1f ]; then
+		[ "$rc" -eq 3 ] && pass "reserved JPEG marker exits inconclusive" || fail "reserved JPEG marker exits inconclusive" "rc=$rc"
+		assert_contains "$out" '"verdict":"indeterminate"' "unrecognized reserved semantics remain inconclusive"
+	else
+		[ "$rc" -eq 1 ] && pass "zero JPEG marker byte exits corrupt" || fail "zero JPEG marker byte exits corrupt" "rc=$rc"
+		assert_contains "$out" '"verdict":"corrupt"' "zero marker byte outside entropy is malformed"
+	fi
+	assert_contains "$out" '"code":"unknown_marker"' "marker diagnostic uses its existing typed identity"
+	assert_contains "$out" '"offset":3,"host_offset":3,"offset_is_exact":true' "marker diagnostic retains exact locations"
+done
+
 # Legal marker fill is an ordinary warning, with the valid/exit-0 outcome.
 ordinary_warning="$TMPDIR/jpegz-cli-fill-$$.jpg"
 {

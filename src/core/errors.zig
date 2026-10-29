@@ -124,6 +124,9 @@ pub const FindingCode = enum(u32) {
 	// Registry-approved 2026-10-28: sequential DCT SOS fields must use
 	// Ss=0, Se=63 and Ah=Al=0 (T.81 B.2.3/Table B.3). Exact field location.
 	sequential_scan_invalid = 64,
+	// Registry-approved 2026-10-28, initially complete JFIF 1.02 APP0
+	// headers whose density units are outside 0..2. Exact metadata field.
+	jfif_metadata_invalid = 65,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────
     lossless_predictor_invalid = 100,
