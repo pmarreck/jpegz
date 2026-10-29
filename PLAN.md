@@ -30,8 +30,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 - [ ] Complete the separate libjxlz arithmetic scaling sweep; published e1c521d contains baseline 923d3c4c unchanged (228 fixed-size rows, hash verified), and the provider has a request for published scaling evidence or a bounded sweep (context: docs/plan_context/pre-canon-2026-09-24.md).
 - [x] Finish the original 170-byte XOR sweep adjudication: the original 83 survivors comprise 75 valid changes, five corrupt cases and three unchecked cases; all 170 replay as 90 corrupt, 75 valid and five indeterminate without treating every mutation as malformed (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-29 11:58 EDT; commit a7ddd65).
-- [x] Publish 0fb5947 with the evidenced historical JFIF 1.01 units extension; all eleven exact-commit CI targets pass in 20 seconds using prepared artifacts, and immutable receipts are delivered before code 67 starts (done 2026-10-29 11:39 EDT; commit 0fb5947).
-- [x] Implement approved 67 jfif_version_unchecked after native/C ABI/CLI red witnesses; all version bytes, bounds and mixed-cause orders pass complete ./test and the public replay changes only offsets 11/12 to indeterminate, preserving 90 corrupt cases (done 2026-10-29 11:55 EDT; delivered by this change).
 - [x] Publish a7ddd65 with approved future JFIF notice 67; all eleven exact-commit CI targets pass in 18 seconds with prepared reuse, and immutable registry/package-hash receipts are delivered to coordinator and consumers (done 2026-10-29 11:58 EDT; commit a7ddd65).
 - [x] Evaluate Validate's coverage-range API: its pristine unexaminable ranges exclude whole mutation events from a secondary denominator; DQT, APP0, entropy and unchecked features do not qualify for blanket exemptions, so retain the 170-case denominator and per-mutant labels (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-29 12:02 EDT; documented by this change).
 - [ ] Finish provider qualification after source review of jp2z 0c2162b and libjxlz e1c521d; facade 197 is shipped, while complete approved libjxlz CI, real-input integration and cold private-source access remain required before any pin change (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
@@ -39,7 +37,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [x] Publish e8ef262 with facade 197 and checked JXL evidence; all eleven exact-commit CI targets pass in 18 seconds with prepared reuse, and immutable receipts reach coordinator and consumers without claiming provider adoption (done 2026-10-29 12:41 EDT; commit e8ef262).
 - [ ] Verify jp2z pixel APIs and component-resolution oracles before replacing OpenJPEG; retain the T.800 edition limit and unresolved warning-class review.
 - [x] Reproduce both OpenJPEG component-count narrowing and two-component layout crashes; literal supported/unsupported sets, independent component-plane controls and complete ./test pass without changing the pixel API or provider pins (done 2026-10-29 13:25 EDT; delivered by this change).
-- [ ] Publish the JP2 component-layout correction; verify all eleven exact-commit CI targets and deliver immutable receipts before continuing the mutation-operator audit.
+- [x] Publish abb3eb3 with the JP2 component-layout correction; all eleven exact-commit CI targets pass in 16 seconds with prepared reuse, and immutable receipts reach the coordinator and consumers before the mutation-operator audit (done 2026-10-29 13:30 EDT; commit abb3eb3).
 
 ## JPEG entropy and comparison coverage
 
@@ -47,7 +45,9 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Complete scan consumption, MCU counts, sampling edges, noninterleaved scans, restart cadence and predictor-reset coverage across supported modes.
 - [ ] Complete progressive scan-history and coefficient-range constraints with independent normative review and valid boundary controls.
 - [ ] Classify the known-good corpus as a set and expand reproducible corruption-probe sweeps across JPEG-LS, JPEG 2000 and JPEG XL.
-- [ ] Align local mutation usage with corruption_probe a43f2cf algorithm v2: sparse shotgun flips 8-16 distinct bits in a contained 32-byte window; dense overwrite is nuke; preserve v1 history and never compare unlike definitions.
+- [x] Select the requested variable sparse-shotgun geometry after a red profile-set witness; literal facade controls, 436 independent reader cases and complete ./test pass, preserving operator identities and historical measurements (done 2026-10-29 13:46 EDT; delivered by this change).
+- [ ] Publish the mutation-profile correction, verify exact-commit CI and deliver the scoped receipt before repairing the fuzz entry point.
+- [ ] Move ./fuzz compilation into canonical Nix derivations and replace unsupported duration flags with bounded iteration campaigns; include fixed seed replay in ./test and preserve isolated execution.
 - [ ] Compare proven malformed fixtures and false rejects against prior art; report demonstrated detection, hypothetical detectability and valid changes separately.
 - [ ] Confirm consumer promotion through tiffz.jpegz and rerun the private full-PDF experiment without publishing originals or mutants (context: docs/plan_context/pre-canon-2026-09-24.md).
 

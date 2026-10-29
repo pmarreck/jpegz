@@ -175,6 +175,31 @@ else
 	sed -n '1,20p' "$work/table.txt" >&2
 fi
 
+# Compare complete requested profile sets, including an explicit fixed-count
+# profile, so the variable default cannot silently rewrite a caller's choice.
+for selection in default explicit; do
+	profile_args=()
+	case $selection in
+		default) expected_profiles=$'sniper\nbolter\nshotgun_variable\nnuke' ;;
+		explicit)
+			profile_args=(--profiles shotgun,nuke,shotgun_variable)
+			expected_profiles=$'shotgun\nnuke\nshotgun_variable'
+			;;
+	esac
+	profile_log=$work/profiles-$selection.log
+	FAKE_CR_LOG=$profile_log JPEGZ=$work/jpegz CORRUPTION_READER=$work/cr JPEGZ_COVERAGE_STATS=$stats \
+		bash "$driver" --rounds 1 --jobs 1 "${profile_args[@]}" --out-dir "$work/profiles-$selection" "$fixture" \
+		> "$work/profiles-$selection.out" 2> "$work/profiles-$selection.err"
+	rc=$?
+	actual_profiles=$(awk '{print $2}' "$profile_log")
+	if [[ $rc -eq 0 && $actual_profiles == "$expected_profiles" ]]; then
+		ok "mutation profile selection preserves the declared set ($selection)"
+	else
+		bad "mutation profile selection preserves the declared set ($selection, rc=$rc)"
+		printf 'expected profiles:\n%s\nactual profiles:\n%s\n' "$expected_profiles" "$actual_profiles" >&2
+	fi
+done
+
 FAKE_JPEGZ_PRISTINE=corrupt JPEGZ=$work/jpegz CORRUPTION_READER=$work/cr JPEGZ_COVERAGE_STATS=$stats \
 	bash "$driver" --rounds 1 --profiles sniper --out-dir "$work/bad" "$fixture" > "$work/bad-out.txt" 2> "$work/bad-err.txt"
 rc=$?

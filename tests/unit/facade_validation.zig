@@ -954,19 +954,19 @@ test "JPEG XL formerly unsupported corpus now validates completely" {
     }
 }
 
-test "JPEG XL sniper bolter and shotgun mutations are independently corrupt" {
+test "JPEG XL signature bit, byte and full-header mutations are independently corrupt" {
     const good = @embedFile("fixtures/jxl_delta_palette_valid.jxl");
-    var sniper = good.*;
-    sniper[0] ^= 0x01;
-    var bolter = good.*;
-    bolter[0] = 0;
-    var shotgun = good.*;
-    @memset(shotgun[0..12], 0);
+    var flipped_signature_bit = good.*;
+    flipped_signature_bit[0] ^= 0x01;
+    var cleared_signature_byte = good.*;
+    cleared_signature_byte[0] = 0;
+    var cleared_signature = good.*;
+    @memset(cleared_signature[0..12], 0);
     const Case = struct { label: []const u8, bytes: []const u8 };
     const cases = [_]Case{
-        .{ .label = "sniper one-bit signature flip", .bytes = &sniper },
-        .{ .label = "bolter one-byte signature overwrite", .bytes = &bolter },
-        .{ .label = "shotgun twelve-byte signature overwrite", .bytes = &shotgun },
+        .{ .label = "one-bit signature flip", .bytes = &flipped_signature_bit },
+        .{ .label = "one signature byte cleared", .bytes = &cleared_signature_byte },
+        .{ .label = "twelve-byte signature cleared", .bytes = &cleared_signature },
     };
     for (cases) |case| {
         var result = try jpegz.jpegxl.validate(std.testing.allocator, case.bytes, jpegz.jpegxl.default_options);
@@ -978,23 +978,23 @@ test "JPEG XL sniper bolter and shotgun mutations are independently corrupt" {
     }
 }
 
-test "JPEG 2000 known-good and three mutation strengths classify as a set" {
+test "JPEG 2000 known-good and signature mutations classify as a set" {
     const good = @embedFile("fixtures/jp2_8x8_rgb.jp2");
     var valid = try jpegz.jpeg2000.strictValidate(std.testing.allocator, good);
     defer valid.deinit(std.testing.allocator);
     try std.testing.expectEqual(jpegz.StrictVerdict.valid, valid.verdict);
 
-    var sniper = good.*;
-    sniper[8] ^= 0x01;
-    var bolter = good.*;
-    bolter[4] = 0;
-    var shotgun = good.*;
-    @memset(shotgun[0..12], 0);
+    var flipped_signature_bit = good.*;
+    flipped_signature_bit[8] ^= 0x01;
+    var cleared_signature_byte = good.*;
+    cleared_signature_byte[4] = 0;
+    var cleared_signature = good.*;
+    @memset(cleared_signature[0..12], 0);
     const Case = struct { label: []const u8, bytes: []const u8 };
     const cases = [_]Case{
-        .{ .label = "sniper one-bit JP2 signature flip", .bytes = &sniper },
-        .{ .label = "bolter one-byte JP2 signature overwrite", .bytes = &bolter },
-        .{ .label = "shotgun full JP2 signature overwrite", .bytes = &shotgun },
+        .{ .label = "one-bit JP2 signature flip", .bytes = &flipped_signature_bit },
+        .{ .label = "one JP2 signature byte cleared", .bytes = &cleared_signature_byte },
+        .{ .label = "full JP2 signature cleared", .bytes = &cleared_signature },
     };
     for (cases) |case| {
         var result = try jpegz.jpeg2000.strictValidate(std.testing.allocator, case.bytes);

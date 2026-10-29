@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Observed rejection rate of mutated known-good inputs.
 #
-# corruption-reader 0.7 (docs/consumer_cli.md in that project) draws sniper,
-# bolter, shotgun and nuke cases. jpegz --json judges each changed copy.
+# corruption-reader's consumer CLI draws sniper, bolter, shotgun_variable and
+# nuke cases. jpegz --json judges each changed copy.
 # tools/coverage_stats.zig turns those judgments into Wilson 95% intervals.
 #
 # "Corrupt" here means jpegz said so. A mutation can remain a valid encoding,
@@ -30,9 +30,15 @@ usage: ./corruption-coverage [--rounds N] [--master SEED] [--profiles a,b]
                              [--jobs N] [--timeout SECS] [--out-dir DIR] [FIXTURE...]
 
 Mutate known-good files with corruption-reader profiles (default sniper,bolter,
-shotgun,nuke) and report how often jpegz calls the result corrupt. The Wilson
+shotgun_variable,nuke) and report how often jpegz calls the result corrupt. The Wilson
 95% interval is corrupt/judged. It is an observed rejection rate, not a proof
 that every mutated file is invalid.
+
+shotgun_variable flips 8..16 distinct bits in a contained 32-byte window.
+The explicit shotgun profile always flips 16 bits; nuke overwrites bytes.
+Retain the raw case records and compare only matching profile definitions,
+RNG/seed derivation, input bytes and seeds. Historical dense shotgun results
+use a different definition and must remain separate.
 
 Default rounds: 100. Default master: 0x6a7065677a. With no FIXTURE, uses four
 pristine files from tests/unit/fixtures. A chosen file that jpegz does not
@@ -46,7 +52,7 @@ EOF
 
 rounds=100
 master=0x6a7065677a
-profiles=sniper,bolter,shotgun,nuke
+profiles=sniper,bolter,shotgun_variable,nuke
 jobs=1
 timeout_secs=30
 out_dir=
@@ -167,7 +173,7 @@ for fixture in "${fixtures[@]}"; do
 	fi
 	bytes=$(wc -c < "$fixture" | tr -d ' ')
 	if [[ $bytes -lt 4096 ]]; then
-		echo "note: $fixture is $bytes bytes. nuke's 4096-byte window does not fit, so that profile replaces the whole file. shotgun skips inputs shorter than 32 bytes." >&2
+		echo "note: $fixture is $bytes bytes. nuke's 4096-byte window does not fit, so that profile replaces the whole file. shotgun and shotgun_variable skip inputs shorter than 32 bytes." >&2
 	fi
 done
 

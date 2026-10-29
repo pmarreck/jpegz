@@ -1160,3 +1160,85 @@ receipts are recorded above. The frozen fixture hashes are:
 | 255 | `0b6dae7187a8b3df5902258c3a49d72acc7e885d9c5665e3ec26fb9ed2a39cdf` |
 | 256 | `c153cded5f89377318f153b092f6d277e134f24c7360118c8fb9cb73da227c2f` |
 | 257 | `060997238f55634f1f62a70f64191ddb6477aea88452098343fd717f50bf0ddb` |
+
+Published `abb3eb3305d6ce61379bba91dfd216fa50120310` passed all eleven
+exact-commit Mechatron Prime CI targets October 29 17:28:43Z..17:28:59Z
+(16 seconds, prepared reuse). The fetched package hash is
+`jpegz-0.1.0-staw4FNRFQBMaetj-w1XV_BkY854kIfQABxHN7IWA_qA`.
+The coordinator and five consumers received immutable receipts, and the
+coordinator received a verified native pointer. Provider qualification and
+the separate pixel-backend replacement remain open.
+
+### Mutation profile definitions, October 29
+
+The requested historical `corruption_probe a43f2cf` contract names sparse
+shotgun as 8..16 distinct bits within a contained 32-byte window. Source
+inspection of the pinned corruption-reader `1ec8cbe` found two separate
+profiles: `shotgun` always flips 16 bits, while `shotgun_variable` draws 8..16.
+A failing isolated driver test established that the default requested the
+fixed-count profile. The corrected default requests the variable profile;
+complete ordered-set controls also prove that explicit profile choices,
+including the fixed-count profile, pass through unchanged. Two existing
+facade tests now use literal names for signature bit flips, cleared bytes and
+cleared headers. Their cleared-byte controls are also distinct from bolter's
+XOR with 0xFF. Fixtures and expected corruption verdicts did not change.
+
+This aligns sparse-shotgun geometry, not cross-tool case identity. Reader
+case-record version 2, RNG and seed-derivation tags, resolved profile hashes,
+source bytes, master seed and rounds remain necessary replay context. Reader
+nuke fits a short input, whereas the historical probe rejects an undersize
+window. Both require the replacement block as a whole to differ; individual
+bytes can remain equal by coincidence. Therefore even matching operator
+names do not establish interchangeable cases or comparable percentages.
+Historical v1 dense-shotgun reports and later fixed-count profiles retain
+their original definitions; no recorded measurements or denominators changed.
+
+The corrected isolated orchestration checks pass. The first complete
+verification passed after 228 seconds of preparation, including 138 seconds
+mixed native compilation/execution, and a 23-second cached entry point. A
+second full verification passed the final literal-label refactor: all 285
+native tests, 223 C ABI assertions, 134 CLI assertions, production, four
+cross-link targets, source/dependency controls, closure and the no-C consumer.
+Preparation took 194 seconds with a 123-second mixed native build phase; the
+cached complete entry point took 19 seconds. Publication and exact-commit CI
+remain required for the shipment checkpoint.
+
+An independent byte-level oracle checked the prepared reader executable
+(SHA-256 `2a36190c433bbcbde2edb8925c0667441ad3e66bf6041f2b478c286b19ef5853`)
+inside the qualified disposable filesystem boundary. Master seed 42, rounds
+0..63 and all-zero 32/64-byte inputs produced 128 fixed-count cases, each with
+exactly 16 changed bits, and 128 variable-count cases, each with 8..16 changed
+bits. Both sizes observed every variable count in that interval. Changed bits
+fit a 32-byte window and lengths stayed constant. Both profiles skipped all
+64 rounds on a 31-byte input, producing 128 recorded undersize no-ops.
+
+Nuke used rounds 0..3 on lengths 0, 1, 31, 32, 4095, 4096 and 4097. The empty
+input produced four no-ops. For every nonempty length, paired all-zero and
+all-0xFF sources established the actual overwritten interval: exactly
+min(length, 4096) contiguous bytes shared the same generated output while
+the exterior retained the differing source values. Each output retained its
+input length. This tested 48 nonempty outputs. An earlier oracle incorrectly
+required every random byte to differ from its original; that failed at 4095
+bytes because individual replacement bytes can coincide. Source review and
+the two-source control corrected the oracle rather than changing the reader.
+An earlier harness invocation also failed on an Awk built-in variable name;
+neither failed invocation qualified the complete oracle.
+
+The successful check covered 436 case records including 132 no-ops. It
+preserves reader record version 2, RNG `random drbg 2026-08-04 v1` and derivation
+`corruption_reader case seed v1`; these tags do not claim probe replay parity.
+Resolved profile BLAKE3 values are:
+
+| Profile | BLAKE3 |
+| --- | --- |
+| shotgun | `56415319753576ba7cb3eab3db55c8d710acab0795e0e4e880795f54cb909ad4` |
+| shotgun_variable | `e35b1cebd10005fc0c6002f4c3e1d118867bee68b7592aa88595893870b6c9fe` |
+| nuke | `11cc581600484f1ae66a27fd2d4e082ead22ad31f77dd0e697a4cbcdc2c7c65b` |
+
+The retained oracle script SHA-256 is
+`5735253240c9d43bdf651d03ebe235f6195f273e3a14d1e1c64d324a1f3bfa2c`;
+its successful stdout receipt, including raw case records, is
+`d75e8a55b1909a550e556dee7ee020e08bce5cbb6066e6f5b1bf207ed25fd29d`.
+These are bounded operator checks, not malformed-input detection rates or a
+general proof over all seeds. Queue waiting was kept separate from execution;
+no fresh suite runtime-budget pass is claimed.
