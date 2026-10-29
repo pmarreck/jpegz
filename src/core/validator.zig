@@ -103,6 +103,15 @@ fn addExactFinding(report: *ValidationReport, allocator: Allocator, code: Findin
 	report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
 }
 
+fn checkSequentialScanField(report: *ValidationReport, allocator: Allocator, offset: usize,
+	name: []const u8, observed: u8, required: u8) Allocator.Error!void
+{
+	if (observed == required) return;
+	const detail = try std.fmt.allocPrint(allocator, "sequential SOS {s}={d}; required {d}", .{ name, observed, required });
+	defer allocator.free(detail);
+	try addExactFinding(report, allocator, .sequential_scan_invalid, offset, detail);
+}
+
 pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!ValidationReport {
     var report = ValidationReport{
         .overall = .pass,
@@ -232,9 +241,18 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                         qp, "DQT Pq must be 0 or 1 and Tq must be 0..3");
                     break; // table size is ambiguous once Pq is invalid
                 }
-                // Advance past this table: 1 header byte + 64 coefficients
-                // (1 byte each for Pq=0, 2 bytes each for Pq=1).
-                qp += 1 + @as(usize, 64) * (@as(usize, pq) + 1);
+				const elements_per_table: usize = 64;
+				const element_bytes = @as(usize, pq) + 1;
+				const table_bytes = 1 + elements_per_table * element_bytes;
+				// A partial table cannot borrow coefficient bytes from the next segment.
+				if (table_bytes > seg_end - qp) break;
+				for (0..elements_per_table) |index| {
+					const offset = qp + 1 + index * element_bytes;
+					const zero = data[offset] == 0 and (pq == 0 or data[offset + 1] == 0);
+					if (zero) try addExactFinding(&report, allocator, .quantization_table_corrupt,
+						offset, "DQT quantization element Qk must be nonzero");
+				}
+				qp += table_bytes;
             }
         }
 
@@ -391,6 +409,12 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                     const ah = ahal >> 4;
                     const al = ahal & 0x0F;
                     switch (report.variant) {
+						.baseline_huffman, .extended_huffman => {
+							try checkSequentialScanField(&report, allocator, spec_off, "Ss", ss, 0);
+							try checkSequentialScanField(&report, allocator, spec_off + 1, "Se", se, 63);
+							try checkSequentialScanField(&report, allocator, spec_off + 2, "Ah (high nibble)", ah, 0);
+							try checkSequentialScanField(&report, allocator, spec_off + 2, "Al (low nibble)", al, 0);
+						},
                         .progressive_huffman, .progressive_arithmetic => {
                             // T.81 §G.1.1.1.1: Ss,Se ≤ 63 and Ah,Al ≤ 13; a DC
                             // scan (Ss=0) must have Se=0; an AC scan (Ss≠0) must

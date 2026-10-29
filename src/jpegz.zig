@@ -528,6 +528,7 @@ fn strictFromReport(
             .code = finding.code,
             .severity = finding.severity,
             .offset = finding.offset,
+			.host_offset = finding.offset,
             .offset_is_exact = finding.offset_is_exact,
             .detail = detail,
         });

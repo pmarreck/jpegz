@@ -354,6 +354,26 @@ test "SOF3 standalone markers cannot masquerade as unsupported length-prefixed s
 	}
 }
 
+test "JP2 mapping recognizes only declared JP2 findings" {
+	for (0..512) |value| {
+		const raw: u32 = @intCast(value);
+		const declared = switch (raw) {
+			1...5, 140...146, 207, 208, 250...261 => true,
+			else => false,
+		};
+		for (std.meta.tags(jpegz.Severity)) |severity| {
+			for ([_]bool{ false, true }) |container_ok| {
+				const mapped = jpegz.facade.mapJp2Finding(raw, severity, container_ok);
+				try std.testing.expectEqual(declared, mapped.code != null);
+				if (!declared) {
+					try std.testing.expectEqual(jpegz.StrictVerdict.indeterminate, mapped.verdict);
+					try std.testing.expectEqual(jpegz.Severity.warn, mapped.severity);
+				}
+			}
+		}
+	}
+}
+
 test "JP2 dependency findings retain wire identities and severities" {
 	const cases = [_]struct { raw: u32, name: []const u8, severity: jpegz.Severity, verdict: jpegz.StrictVerdict }{
 		.{ .raw = 255, .name = "zero_bitplane_overflow", .severity = .fail, .verdict = .corrupt },

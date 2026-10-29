@@ -366,3 +366,83 @@ the native check's statistics artifact. The preceding tooling commit took
 1,029 seconds in CI. This establishes reuse of the prepared artifacts across
 the two source locations. It measures cached CI verification, with fresh
 runtime timing still open.
+
+## Sequential SOS parameters and zero quantizers (2026-10-28)
+
+A persisted regression initially failed: a hand-packed valid 8x8 grayscale
+SOF0 stream with only SOS Ss changed to 1 is reported as passing. Its legal
+control passes cleanroom/libjpeg pixel comparison. The native check reports
+259/260 tests passed, with 76 C ABI assertions and 84 CLI checks passing.
+The failing derivation is `di44k9mmlp3ic0fwhknwjh2mmi7rppsl-jpegz-tests-0.0.1.drv`.
+
+[T.81 B.2.3 and Table B.3](https://www.w3.org/Graphics/JPEG/itu-t81.pdf#page=42)
+require sequential DCT Ss=0, Se=63 and Ah=Al=0. The new test varies each
+field byte through 0..255 for SOF0/SOF1 while the other fields stay legal, and
+includes valid progressive, lossless and arithmetic controls. The first red
+run stops at the Ss=1 witness; it does not establish results for every later
+case. The shared public 170-byte fixture's SHA-256 remains
+`4d2181d706292465831abd1e3460e22a5518ac91a4bc2ae96d1e54f17f8068f2`,
+and its reported offsets 157..159 are the corresponding three field bytes.
+
+The registry coordinator approved append-only 64 `sequential_scan_invalid`
+on October 28 at 20:47 EDT, initially for SOF0/SOF1. The contract requires
+FAIL/corrupt, the exact original-input field byte and details naming the
+field, observed value and required value. Ah/Al share a byte, with the
+relevant nibble identified in each detail. Existing 59 keeps its progressive
+meaning. These malformed sequential parameters have not been admitted to the
+known-encoder-defect exception. The implementation now reports each bad field
+with this approved code. Native and C ABI controls verify the wire identity,
+verdict, exact original and host offsets, and observed/required details.
+The C controls exposed a missing host-offset copy in the classic strict
+adapter; copying the original-input offset fixes that independent regression.
+
+The coordinator also reconciled the historical October 14 pin question:
+the provider hold was released October 15 and the inspected evidence contains
+no additional hidden owner decision. Sampling remains held. Private original
+replays and JP2 exactness remain provider dependencies; the JPEG-LS default
+campaign and client-terminal questions remain explicit owner questions.
+
+### APP0 and quantization controls
+
+All 1,280 independent byte changes across the five-byte JFIF identifier
+remain accepted JPEGs, with exact identifier recognition and cleanroom/libjpeg
+pixel parity. [JFIF 1.02](https://www.w3.org/Graphics/JPEG/jfif3.pdf) permits
+distinct application-defined APP0 data. Altering the identifier therefore
+does not by itself establish malformed generic JPEG syntax.
+
+The public 170-byte fixture has 64 nonzero quantizer entries and no entry
+equal to 255, so its XOR-255 sweep generated no zero quantizer. Separate
+8-bit and 16-bit regressions did reproduce missing FAIL 52 at a zero entry
+(byte 7 of a hand-packed stream). Legal 1/255 and 1/256/65535 controls pass
+independent pixel comparison; the 16-bit fixture uses a 12-bit SOF1 process.
+The new bounded table walk reports zero words at exact field starts and
+retains words with one zero byte. Its intermediate native run passed 262/263
+tests, with only the pending sequential-SOS regression failing. The final run
+also passes all 192 incomplete-table boundary cases.
+
+### Complete local verification
+
+The complete `./test` entry point and all eleven declared output/check targets
+passed on October 28 at 21:07 EDT. The final native derivation
+`0mwwhhc9sa89kc2qqslw6s3a0dhg26j4-jpegz-tests-0.0.1.drv` passes 265 Zig tests,
+101 C ABI assertions and 84 CLI checks. This includes every sequential field
+byte in SOF0/SOF1, all APP0 identifier controls and both quantizer widths.
+All four cross-link checks, the validation closure, source-input controls,
+coverage-statistics artifact and three no-C consumer controls also pass.
+
+A new JP2 classifier-set regression initially failed because the facade
+accepted identifiers belonging only to other codec families. The facade now
+checks membership in the pinned JP2 provider's enum before translating it.
+The test covers raw values 0..511 across all severity and container states,
+including the new classic-JPEG code 64. Approved JP2 codes and the existing
+261/252 corruption rules retain their behavior; unknown JP2 codes remain
+inconclusive.
+
+The bounded verification job finished successfully in about 215 seconds.
+Its phase-timing output was unavailable after context truncation; that total
+must not be presented as isolated test execution. The native derivation's
+combined compilation/test phase took 116 seconds and the no-C consumer phase
+took 50 seconds. Fresh execution remains a separate measurement task.
+Exact-commit CI verification follows publication. Reserved markers and
+JFIF density/version/thumbnail semantics remain open; these controls do not
+settle every label in the original 170-byte sweep.

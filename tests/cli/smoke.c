@@ -111,6 +111,10 @@ int main(void) {
 		ASSERT(strcmp(jpegz_finding_code_name((jpegz_finding_code_t)261),
 		              "cblk_contribution_ends_ff") == 0,
 		       "approved JP2 finding 261 has its stable C ABI name");
+		ASSERT(JPEGZ_FINDING_SEQUENTIAL_SCAN_INVALID == 64 && JPEGZ_FINDING_PROGRESSIVE_SCAN_INVALID == 59,
+		       "sequential scan finding appends 64 and preserves progressive 59");
+		ASSERT(strcmp(jpegz_finding_code_name((jpegz_finding_code_t)64), "sequential_scan_invalid") == 0,
+		       "sequential scan finding has its stable C ABI name");
 
         /* Distinct codes must not collapse onto one string — a table that
          * returns the same label for everything would pass a single-value
@@ -341,6 +345,51 @@ int main(void) {
                       "unrecognized_container") == 0,
                "the explanation is unrecognized_container");
         jpegz_strict_result_free(&ur);
+
+		{
+			size_t sos = 0;
+			for (size_t i = 0; i + 1 < baseline_2x2_rgb_len; i++) {
+				if (baseline_2x2_rgb[i] == 0xff && baseline_2x2_rgb[i + 1] == 0xda) { sos = i; break; }
+			}
+			ASSERT(sos != 0 && sos + 4 < baseline_2x2_rgb_len, "SOS control exists");
+			const size_t ss = sos + 5 + 2 * baseline_2x2_rgb[sos + 4];
+			ASSERT(ss + 2 < baseline_2x2_rgb_len, "SOS parameter control is complete");
+			const struct { size_t byte; uint8_t value; const char *first; const char *second; } cases[] = {
+				{0, 7, "Ss=7; required 0", NULL},
+				{1, 17, "Se=17; required 63", NULL},
+				{2, 0x30, "Ah (high nibble)=3; required 0", NULL},
+				{2, 0x05, "Al (low nibble)=5; required 0", NULL},
+				{2, 0x21, "Ah (high nibble)=2; required 0", "Al (low nibble)=1; required 0"},
+			};
+			uint8_t *copy = malloc(baseline_2x2_rgb_len);
+			ASSERT(copy != NULL, "SOS control buffer allocated");
+			for (size_t c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+				memcpy(copy, baseline_2x2_rgb, baseline_2x2_rgb_len);
+				copy[ss + cases[c].byte] = cases[c].value;
+				jpegz_strict_result_t r = {0};
+				ASSERT(jpegz_validate_any(copy, baseline_2x2_rgb_len, &r) == JPEGZ_OK,
+				       "invalid SOS validation returns through the ABI");
+				ASSERT(r.verdict == JPEGZ_VERDICT_CORRUPT, "invalid sequential SOS is corrupt");
+				size_t failures = 0;
+				int locations = 1, first = 0, second = cases[c].second == NULL;
+				for (size_t i = 0; i < r.findings_len; i++) {
+					const jpegz_strict_finding_t f = r.findings[i];
+					if (f.severity != JPEGZ_SEVERITY_FAIL) continue;
+					failures++;
+					locations &= f.code == JPEGZ_FINDING_SEQUENTIAL_SCAN_INVALID && f.offset_is_exact &&
+						f.offset == (int64_t)(ss + cases[c].byte) && f.host_offset == f.offset;
+					if (f.detail != NULL) {
+						first |= strstr(f.detail, cases[c].first) != NULL;
+						if (cases[c].second != NULL) second |= strstr(f.detail, cases[c].second) != NULL;
+					}
+				}
+				ASSERT(locations && failures == (cases[c].second == NULL ? 1u : 2u),
+				       "SOS causes retain their exact original and host field bytes");
+				ASSERT(first && second, "SOS details name fields, observed values and requirements");
+				jpegz_strict_result_free(&r);
+			}
+			free(copy);
+		}
 
         /* A truncated JPEG is genuine damage — the gate must be able to fire. */
         jpegz_strict_result_t cr = {0};

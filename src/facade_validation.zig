@@ -134,6 +134,7 @@ pub const MappedFinding = struct {
 };
 
 fn mappedJp2Code(raw: u32, container_ok: bool) ?FindingCode {
+	if (std.enums.fromInt(jp2z.FindingCode, raw) == null) return null;
     if (raw == @intFromEnum(jp2z.FindingCode.missing_soi)) {
         return if (container_ok) .jp2_invalid_codestream else .jp2_invalid_signature;
     }

@@ -390,6 +390,19 @@ fn expectOnlyTypedFail(report: jpegz.ValidationReport, code: jpegz.FindingCode, 
 	return expectOnlyTyped(report, .fail, code, offset);
 }
 
+fn expectExactTypedFailures(report: jpegz.ValidationReport, code: jpegz.FindingCode, offset: u64, expected: usize) !void {
+	try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
+	var count: usize = 0;
+	for (report.findings.items) |finding| {
+		if (finding.severity != .fail) continue;
+		try std.testing.expectEqual(code, finding.code);
+		try std.testing.expectEqual(@as(?u64, offset), finding.offset);
+		try std.testing.expect(finding.offset_is_exact);
+		count += 1;
+	}
+	try std.testing.expectEqual(expected, count);
+}
+
 /// Match the complete set of mixed-padding FAILs to exact entropy-byte indexes,
 /// excluding the generic Huffman fallback in validation and decoder sinks.
 fn expectMixedPadFailures(findings: anytype, base: usize, indexes: []const usize) !void {
@@ -1001,6 +1014,84 @@ fn reportHasCode(report: jpegz.ValidationReport, code: jpegz.FindingCode) bool {
     return false;
 }
 
+test "DQT entries reject zero at every position and accept legal boundaries" {
+	// T.81 Table B.4 requires 8-bit Qk in 1..255. Zero DC/EOB entropy
+	// keeps the pixel control constant while each quantizer value changes.
+	const pristine = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{1} ** 64) ++
+		[_]u8{ 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0x10, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0, 0x3f, 0xff, 0xd9 };
+	const allocator = std.testing.allocator;
+	for (0..64) |index| {
+		for ([_]u8{ 1, 255, 0 }) |value| {
+			const data = try allocator.dupe(u8, &pristine);
+			defer allocator.free(data);
+			const offset = 7 + index;
+			data[offset] = value;
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			if (value == 0) {
+				try expectExactTypedFailures(report, .quantization_table_corrupt, offset, 1);
+			} else {
+				try std.testing.expect(report.isValid());
+				try std.testing.expect(!reportHasCode(report, .quantization_table_corrupt));
+				var decoded = try jpegz.decode(allocator, data);
+				defer decoded.deinit(allocator);
+				var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+				defer oracle.deinit(allocator);
+				try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+			}
+		}
+	}
+}
+
+test "16-bit DQT entries distinguish zero words from zero bytes" {
+	// T.81 permits Pq=1 with a 12-bit SOF1 process; either byte may be zero.
+	const pristine = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 131, 0x10 } ++ ([_]u8{ 0, 1 } ** 64) ++
+		[_]u8{ 0xff, 0xc1, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0x10, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0, 0x3f, 0xff, 0xd9 };
+	const allocator = std.testing.allocator;
+	for (0..64) |index| {
+		for ([_]u16{ 1, 256, 65535, 0 }) |value| {
+			const data = try allocator.dupe(u8, &pristine);
+			defer allocator.free(data);
+			const offset = 7 + 2 * index;
+			std.mem.writeInt(u16, data[offset..][0..2], value, .big);
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			if (value == 0) {
+				try expectExactTypedFailures(report, .quantization_table_corrupt, offset, 1);
+			} else {
+				try std.testing.expect(report.isValid());
+				var decoded = try jpegz.decode(allocator, data);
+				defer decoded.deinit(allocator);
+				var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+				defer oracle.deinit(allocator);
+				try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+			}
+		}
+	}
+}
+
+test "incomplete DQT tables stay inside the declared segment" {
+	const allocator = std.testing.allocator;
+	const entries = [_]u8{1} ** 128;
+	for ([_]u8{ 0, 1 }) |pq| {
+		const complete_bytes = 64 * (@as(usize, pq) + 1);
+		for (0..complete_bytes) |available| {
+			const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, @intCast(3 + available), pq << 4 };
+			const data = try std.mem.concat(allocator, u8, &.{ &header, entries[0..available] });
+			defer allocator.free(data);
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
+		}
+	}
+}
+
 test "validate: quantization_table_corrupt classifies bad Pq/Tq, silent on clean" {
     const allocator = std.testing.allocator;
 
@@ -1149,6 +1240,78 @@ test "sequential SOS length and component count have distinct typed locations" {
 				try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
 			}
 		}
+	}
+}
+
+test "APP0 identifiers are classified without requiring every JPEG to be JFIF" {
+	// JFIF 1.02 identifies its APP0 by all five bytes and permits other uses.
+	const allocator = std.testing.allocator;
+	const identifier = findMarker(fixture_baseline_2x2_rgb, 0xe0).? + 4;
+	try std.testing.expectEqualSlices(u8, "JFIF\x00", fixture_baseline_2x2_rgb[identifier..][0..5]);
+	for (0..5) |field| {
+		for (0..256) |raw| {
+			const data = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
+			defer allocator.free(data);
+			data[identifier + field] = @intCast(raw);
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try std.testing.expect(report.isValid());
+			try std.testing.expectEqual(raw == fixture_baseline_2x2_rgb[identifier + field],
+				reportHasCode(report, .jfif_metadata_present));
+			var decoded = try jpegz.decode(allocator, data);
+			defer decoded.deinit(allocator);
+			var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+			defer oracle.deinit(allocator);
+			try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+		}
+	}
+}
+
+test "sequential SOS fields classify every byte by the declared scan process" {
+	// T.81 B.2.3/Table B.3: sequential DCT uses Ss=0, Se=63, Ah=Al=0.
+	// Two one-bit zero codes encode DC zero and EOB, followed by six pad ones.
+	const pristine = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{1} ** 64) ++
+		[_]u8{ 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0x10, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0, 0x3f, 0xff, 0xd9 };
+	const fields = [_]struct { offset: usize, legal: u8 }{
+		.{ .offset = 7, .legal = 0 },
+		.{ .offset = 8, .legal = 63 },
+		.{ .offset = 9, .legal = 0 },
+	};
+	const allocator = std.testing.allocator;
+	for ([_]u8{ 0xc0, 0xc1 }) |sof| {
+		for (fields) |field| {
+			for (0..256) |raw| {
+				const data = try allocator.dupe(u8, &pristine);
+				defer allocator.free(data);
+				data[findMarker(data, 0xc0).? + 1] = sof;
+				const offset = findMarker(data, 0xda).? + field.offset;
+				data[offset] = @intCast(raw);
+				var report = try jpegz.validate(allocator, data);
+				defer report.deinit(allocator);
+				if (raw == field.legal) {
+					try std.testing.expect(report.isValid());
+					try std.testing.expectEqual(.decoded, report.codec_check);
+					var decoded = try jpegz.decode(allocator, data);
+					defer decoded.deinit(allocator);
+					var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+					defer oracle.deinit(allocator);
+					try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+				} else {
+					const expected: usize = if (field.offset == 9)
+						@as(usize, @intFromBool(raw >> 4 != 0)) + @intFromBool(raw & 15 != 0)
+					else 1;
+					try expectExactTypedFailures(report, .sequential_scan_invalid, offset, expected);
+				}
+			}
+		}
+	}
+	for ([_][]const u8{ fixture_progressive_8x8, fixture_lossless_4x4_gray8, fixture_arith_8x8_gray }) |data| {
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expect(report.isValid());
 	}
 }
 

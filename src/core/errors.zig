@@ -121,6 +121,9 @@ pub const FindingCode = enum(u32) {
     // Offset is the pad byte; the detail gives the bit count. Registry
     // sign-off 2026-10-23.
     entropy_padding_zero_bits = 63,
+	// Registry-approved 2026-10-28: sequential DCT SOS fields must use
+	// Ss=0, Se=63 and Ah=Al=0 (T.81 B.2.3/Table B.3). Exact field location.
+	sequential_scan_invalid = 64,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────
     lossless_predictor_invalid = 100,
