@@ -356,6 +356,13 @@ the production build, all four cross-link gates, closure validation and the
 three no-C consumer controls. All eleven manifest targets were realized.
 Preparation took 226 seconds, including compilation and test execution; the
 complete entry point then took 21 seconds with prepared Nix results. These
-durations do not isolate fresh test execution. Actual CI reuse remains to be
-qualified against the published commit; a cached Nix check does not demonstrate
-a new test execution time.
+durations do not isolate fresh test execution.
+
+Published `dedea6411d465bfbf1de7b09d2716cbfeba9bb44` passed all eleven
+exact-commit CI targets in 17 seconds (2026-10-29 00:18:35Z to 00:18:52Z).
+An independent evaluation of its GitHub archive produced exactly the same ten
+check derivation paths as the local preparation; the eleventh target exposes
+the native check's statistics artifact. The preceding tooling commit took
+1,029 seconds in CI. This establishes reuse of the prepared artifacts across
+the two source locations. It measures cached CI verification, with fresh
+runtime timing still open.

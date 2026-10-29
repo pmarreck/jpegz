@@ -56,8 +56,8 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Build and CLI
 
-- [x] Stabilize Nix source identity across relocation and documentation/CI-record edits, retain required inputs and future-file bytes, and pass 18 source controls plus full ./test with all 11 manifest targets (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 20:17 EDT; delivered by this change).
-- [ ] Measure fresh test execution separately from admission, dependency setup, evaluation and compilation; preserve complete coverage, report the one-second target/five-second budget and qualify actual CI artifact reuse (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
+- [x] Stabilize Nix source identity, retain required inputs and future-file bytes, and pass 18 controls plus full ./test; published dedea64 passes all 11 CI targets in 17 seconds with archive/local derivation identities equal (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 20:19 EDT; commit dedea64).
+- [ ] Measure fresh test execution separately from admission, dependency setup, evaluation and compilation; preserve complete coverage and report the one-second target/five-second budget; cached CI artifact reuse is qualified at dedea64 (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
 - [x] Move no-C consumer compilation into a Nix check with all three paired controls and disposable scratch; full ./test passes and the exact-commit manifest includes the check (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 19:53 EDT; delivered by this change).
 - [ ] Port the requested upstream-first dependency-freshness gate with sibling fallback and set tests for current, stale, missing, offline and ahead-of-sibling cases.
 - [ ] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks; coordinate the unnecessary encoder linkage with libjxlz.
