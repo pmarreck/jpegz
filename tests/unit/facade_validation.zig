@@ -846,6 +846,7 @@ test "JPEG XL entropy findings preserve names and reject inconsistent verdicts" 
     const cases = .{
         .{ @as(i32, 15), @as(u32, 195), "jxl_invalid_hybrid_uint_config" },
         .{ @as(i32, 16), @as(u32, 196), "jxl_invalid_histogram" },
+		.{ @as(i32, 17), @as(u32, 197), "jxl_invalid_icc_symbol" },
     };
     inline for (cases) |case| {
         for (0..4) |raw_verdict| {
@@ -859,6 +860,36 @@ test "JPEG XL entropy findings preserve names and reject inconsistent verdicts" 
             try std.testing.expectEqualStrings(case[2], @tagName(mapped.code.?));
         }
     }
+}
+
+test "JXL finding classifier separates every current pair from unknown and inconsistent pairs" {
+	const raw_codes = [_]i32{ -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 67, 197, std.math.maxInt(i32) };
+	for (raw_codes) |raw_code| {
+		for (0..6) |value| {
+			const raw_verdict: i32 = @as(i32, @intCast(value)) - 1;
+			const known = raw_code >= 1 and raw_code <= 17;
+			const expected_raw: i32 = if (raw_code == 4) 2 else if (raw_code >= 5 and raw_code <= 8) 3 else 1;
+			const expected: jpegz.StrictVerdict = if (raw_code == 0 and raw_verdict == 0)
+				.valid
+			else if (!known or raw_verdict != expected_raw)
+				.indeterminate
+			else if (raw_code == 4)
+				.unsupported
+			else if (raw_code >= 5 and raw_code <= 8)
+				.indeterminate
+			else
+				.corrupt;
+			const mapped = jpegz.facade.mapJxlFinding(raw_verdict, raw_code);
+			try std.testing.expectEqual(expected, mapped.verdict);
+			try std.testing.expectEqual(known, mapped.code != null);
+			if (known) {
+				const wire: u32 = @intCast(raw_code + (if (raw_code <= 8) @as(i32, 179) else 180));
+				try std.testing.expectEqual(wire, @intFromEnum(mapped.code.?));
+			}
+			const severity: jpegz.Severity = if (expected == .valid) .pass else if (expected == .corrupt and raw_code != 9 and raw_code != 13) .fail else .warn;
+			try std.testing.expectEqual(severity, mapped.severity);
+		}
+	}
 }
 
 test "JPEG 2000 mapping preserves every public leaf code and fails closed" {

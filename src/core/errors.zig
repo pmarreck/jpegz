@@ -188,6 +188,9 @@ pub const FindingCode = enum(u32) {
     jxl_invalid_ac_nonzero_count = 194,
     jxl_invalid_hybrid_uint_config = 195,
     jxl_invalid_histogram = 196,
+	// Registry-approved 2026-10-29; raw libjxlz code 17. This does not
+	// change the provider pin or complete its unresolved severity assessment.
+	jxl_invalid_icc_symbol = 197,
 
     // ── Informational (severity = .info) (200..249) ──────────────
     arithmetic_coding_used = 200,

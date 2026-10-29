@@ -175,6 +175,7 @@ fn jxlCode(raw: i32) ?FindingCode {
         14 => .jxl_invalid_ac_nonzero_count,
         15 => .jxl_invalid_hybrid_uint_config,
         16 => .jxl_invalid_histogram,
+		17 => .jxl_invalid_icc_symbol,
         else => null,
     };
 }
@@ -188,7 +189,7 @@ pub fn mapJxlFinding(raw_verdict: i32, raw_code: i32) MappedFinding {
     const code = jxlCode(raw_code) orelse
         return .{ .verdict = .indeterminate, .code = null, .severity = .warn };
     const expected_raw_verdict: i32 = switch (raw_code) {
-        1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16 => 1,
+        1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 17 => 1,
         4 => 2,
         5, 6, 7, 8 => 3,
         else => unreachable,
@@ -197,7 +198,7 @@ pub fn mapJxlFinding(raw_verdict: i32, raw_code: i32) MappedFinding {
         return .{ .verdict = .indeterminate, .code = code, .severity = .warn };
     }
     const expected_verdict: StrictVerdict = switch (raw_code) {
-        1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16 => .corrupt,
+        1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 17 => .corrupt,
         4 => .unsupported,
         5, 6, 7, 8 => .indeterminate,
         else => unreachable,
@@ -285,6 +286,55 @@ pub const JxlOptions = if (with_jxl) libjxlz.validation.Options else struct {
 pub const default_jxl_options: JxlOptions =
     if (with_jxl) libjxlz.validation.default_options else .{};
 
+const JxlReportedFinding = struct {
+	raw_verdict: i32,
+	raw_code: i32,
+	raw_severity: i32,
+	offset: u64,
+	host_offset: u64,
+	exact: bool,
+};
+
+const JxlVerdictState = struct {
+	saw_corrupt: bool = false,
+	saw_indeterminate: bool = false,
+
+	fn observe(self: *@This(), mapped: MappedFinding) void {
+		if (mapped.verdict == .indeterminate) self.saw_indeterminate = true;
+		if (mapped.verdict == .corrupt) self.saw_corrupt = true;
+	}
+
+	fn finish(self: @This(), scalar: MappedFinding) StrictVerdict {
+		if (self.saw_corrupt) return .corrupt;
+		if (self.saw_indeterminate) return .indeterminate;
+		return scalar.verdict;
+	}
+};
+
+fn translateJxlFinding(raw: JxlReportedFinding, input_size: usize, host_base: u64) StrictFinding {
+	const mapped = mapJxlFinding(raw.raw_verdict, raw.raw_code);
+	const offset: ?u64 = if (raw.offset <= input_size) raw.offset else null;
+	const host_offset: ?u64 = host: {
+		if (offset == null) break :host null;
+		const translated = std.math.add(u64, host_base, raw.offset) catch break :host null;
+		break :host if (translated == raw.host_offset) raw.host_offset else null;
+	};
+	return .{
+		.source = .libjxlz,
+		.leaf_code = @bitCast(raw.raw_code),
+		.code = mapped.code,
+		.severity = if (mapped.verdict == .indeterminate) .warn else switch (raw.raw_severity) {
+			1 => .warn,
+			2 => .fail,
+			else => mapped.severity,
+		},
+		.is_assessed = raw.raw_severity == 1 or raw.raw_severity == 2,
+		.offset = offset,
+		.host_offset = host_offset,
+		.offset_is_exact = raw.exact and offset != null and host_offset != null,
+	};
+}
+
 fn validateJxlWithFindings(
     allocator: std.mem.Allocator,
     data: []const u8,
@@ -297,9 +347,10 @@ fn validateJxlWithFindings(
         findings: *std.ArrayList(StrictFinding),
         prior_callback: Callback,
         prior_opaque: ?*anyopaque,
+		input_size: usize,
+		host_base: u64,
         out_of_memory: bool = false,
-        saw_unknown: bool = false,
-        saw_corrupt: bool = false,
+		verdict_state: JxlVerdictState = .{},
 
         fn collect(context: ?*anyopaque, finding: *const api.JxlValidationFinding) callconv(.c) void {
             const self: *@This() = @ptrCast(@alignCast(context.?));
@@ -307,22 +358,15 @@ fn validateJxlWithFindings(
             const raw_code: i32 = @intCast(@intFromEnum(finding.code));
             const raw_severity: i32 = @intCast(@intFromEnum(finding.severity));
             const mapped = mapJxlFinding(raw_verdict, raw_code);
-            if (mapped.code == null) self.saw_unknown = true;
-            if (mapped.verdict == .corrupt) self.saw_corrupt = true;
-            self.findings.append(self.allocator, .{
-                .source = .libjxlz,
-                .leaf_code = @intCast(raw_code),
-                .code = mapped.code,
-                .severity = switch (raw_severity) {
-                    1 => .warn,
-                    2 => .fail,
-                    else => mapped.severity,
-                },
-                .is_assessed = raw_severity == 1 or raw_severity == 2,
+			self.verdict_state.observe(mapped);
+            self.findings.append(self.allocator, translateJxlFinding(.{
+				.raw_verdict = raw_verdict,
+				.raw_code = raw_code,
+				.raw_severity = raw_severity,
                 .offset = finding.byte_offset,
                 .host_offset = finding.host_byte_offset,
-                .offset_is_exact = finding.offset_is_exact != 0,
-            }) catch {
+                .exact = finding.offset_is_exact != 0,
+            }, self.input_size, self.host_base)) catch {
                 self.out_of_memory = true;
             };
             if (self.prior_callback) |callback| callback(self.prior_opaque, finding);
@@ -342,6 +386,8 @@ fn validateJxlWithFindings(
         .findings = &result.findings,
         .prior_callback = options.finding_callback,
         .prior_opaque = options.finding_opaque,
+		.input_size = data.len,
+		.host_base = options.host_byte_offset,
     };
     options.finding_callback = Collector.collect;
     options.finding_opaque = &collector;
@@ -352,12 +398,7 @@ fn validateJxlWithFindings(
     const raw_verdict: i32 = @intCast(@intFromEnum(leaf.verdict));
     const raw_code: i32 = @intCast(@intFromEnum(leaf.code));
     const mapped = mapJxlFinding(raw_verdict, raw_code);
-    result.verdict = if (collector.saw_corrupt)
-        .corrupt
-    else if (collector.saw_unknown)
-        .indeterminate
-    else
-        mapped.verdict;
+    result.verdict = collector.verdict_state.finish(mapped);
     result.frames_validated = leaf.frames_validated;
     result.decode_complete = leaf.decode_complete != 0;
     result.reported_finding_count = leaf.finding_count;
@@ -367,20 +408,14 @@ fn validateJxlWithFindings(
     // Preserve that diagnostic even when no callback ran.
     if (result.findings.items.len == 0 and raw_code != 0) {
         const raw_severity: i32 = @intCast(@intFromEnum(leaf.severity));
-        try result.findings.append(allocator, .{
-            .source = .libjxlz,
-            .leaf_code = @intCast(raw_code),
-            .code = mapped.code,
-            .severity = switch (raw_severity) {
-                1 => .warn,
-                2 => .fail,
-                else => mapped.severity,
-            },
-            .is_assessed = raw_severity == 1 or raw_severity == 2,
+        try result.findings.append(allocator, translateJxlFinding(.{
+			.raw_verdict = raw_verdict,
+			.raw_code = raw_code,
+			.raw_severity = raw_severity,
             .offset = leaf.byte_offset,
             .host_offset = leaf.host_byte_offset,
-            .offset_is_exact = leaf.offset_is_exact != 0,
-        });
+            .exact = leaf.offset_is_exact != 0,
+        }, data.len, original_options.host_byte_offset));
     }
     return result;
 }
@@ -423,16 +458,87 @@ pub fn validateJxl(
     };
     errdefer result.deinit(allocator);
     if (raw_code != 0) {
-        try result.findings.append(allocator, .{
-            .source = .libjxlz,
-            .leaf_code = @intCast(raw_code),
-            .code = mapped.code,
-            .severity = mapped.severity,
-            .is_assessed = false,
+        try result.findings.append(allocator, translateJxlFinding(.{
+			.raw_verdict = raw_verdict,
+			.raw_code = raw_code,
+			.raw_severity = 0,
             .offset = leaf.byte_offset,
             .host_offset = leaf.host_byte_offset,
-            .offset_is_exact = leaf.offset_is_exact != 0,
-        });
+            .exact = leaf.offset_is_exact != 0,
+        }, data.len, options.host_byte_offset));
     }
     return result;
+}
+
+test "JXL reported locations distinguish stream bounds, host bases and approximate anchors" {
+	const Case = struct { offset: u64, host: u64, base: u64 = 1000, exact: bool, want_offset: ?u64, want_host: ?u64, want_exact: bool };
+	const cases = [_]Case{
+		.{ .offset = 14, .host = 1014, .exact = false, .want_offset = 14, .want_host = 1014, .want_exact = false },
+		.{ .offset = 14, .host = 1014, .exact = true, .want_offset = 14, .want_host = 1014, .want_exact = true },
+		.{ .offset = 20, .host = 1020, .exact = true, .want_offset = 20, .want_host = 1020, .want_exact = true },
+		.{ .offset = 21, .host = 1021, .exact = true, .want_offset = null, .want_host = null, .want_exact = false },
+		.{ .offset = 14, .host = 1015, .exact = true, .want_offset = 14, .want_host = null, .want_exact = false },
+		.{ .offset = 14, .host = std.math.maxInt(u64), .base = std.math.maxInt(u64) - 2, .exact = false, .want_offset = 14, .want_host = null, .want_exact = false },
+		.{ .offset = std.math.maxInt(u64), .host = std.math.maxInt(u64), .exact = true, .want_offset = null, .want_host = null, .want_exact = false },
+	};
+	for (cases) |case| {
+		const finding = translateJxlFinding(.{
+			.raw_verdict = 1, .raw_code = 17, .raw_severity = 0,
+			.offset = case.offset, .host_offset = case.host, .exact = case.exact,
+		}, 20, case.base);
+		try std.testing.expectEqual(case.want_offset, finding.offset);
+		try std.testing.expectEqual(case.want_host, finding.host_offset);
+		try std.testing.expectEqual(case.want_exact, finding.offset_is_exact);
+		try std.testing.expect(!finding.is_assessed);
+		try std.testing.expectEqual(@as(u32, 17), finding.leaf_code);
+	}
+	const truncated = translateJxlFinding(.{
+		.raw_verdict = 1, .raw_code = 2, .raw_severity = 0,
+		.offset = 20, .host_offset = 1020, .exact = false,
+	}, 20, 1000);
+	try std.testing.expectEqual(FindingCode.jxl_truncated, truncated.code.?);
+	try std.testing.expectEqual(@as(u32, 2), truncated.leaf_code);
+}
+
+test "ICC facade treatment preserves unresolved provider assessment" {
+	for (0..3) |assessment| {
+		const finding = translateJxlFinding(.{
+			.raw_verdict = 1, .raw_code = 17, .raw_severity = @intCast(assessment),
+			.offset = 14, .host_offset = 1014, .exact = false,
+		}, 20, 1000);
+		try std.testing.expect(finding.code != null);
+		try std.testing.expectEqual(@as(u32, 197), @intFromEnum(finding.code.?));
+		try std.testing.expectEqual(assessment != 0, finding.is_assessed);
+		try std.testing.expectEqual(if (assessment == 1) Severity.warn else .fail, finding.severity);
+		try std.testing.expect(!finding.offset_is_exact);
+		for ([_]i32{ 0, 2, 3 }) |raw_verdict| {
+			const inconsistent = translateJxlFinding(.{
+				.raw_verdict = raw_verdict, .raw_code = 17, .raw_severity = @intCast(assessment),
+				.offset = 14, .host_offset = 1014, .exact = false,
+			}, 20, 1000);
+			try std.testing.expectEqual(Severity.warn, inconsistent.severity);
+			try std.testing.expectEqual(assessment != 0, inconsistent.is_assessed);
+			try std.testing.expectEqual(@as(u32, 17), inconsistent.leaf_code);
+			try std.testing.expectEqual(@as(u32, 197), @intFromEnum(inconsistent.code.?));
+		}
+	}
+}
+
+test "inconsistent JXL callback pairs cannot be erased by a clean scalar result" {
+	for ([_]i32{ 15, 16, 17, 999 }) |raw_code| {
+		for (0..4) |raw_verdict| {
+			var state = JxlVerdictState{};
+			state.observe(mapJxlFinding(@intCast(raw_verdict), raw_code));
+			const expected: StrictVerdict = if (raw_code != 999 and raw_verdict == 1) .corrupt else .indeterminate;
+			try std.testing.expectEqual(expected, state.finish(mapJxlFinding(0, 0)));
+		}
+	}
+	for ([_]bool{ false, true }) |reverse| {
+		const bad = mapJxlFinding(1, 2);
+		const incomplete = mapJxlFinding(0, 15);
+		var state = JxlVerdictState{};
+		state.observe(if (reverse) bad else incomplete);
+		state.observe(if (reverse) incomplete else bad);
+		try std.testing.expectEqual(StrictVerdict.corrupt, state.finish(mapJxlFinding(0, 0)));
+	}
 }

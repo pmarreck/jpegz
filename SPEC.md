@@ -155,6 +155,24 @@ Finding 252 (`entropy_under_read`) remains conditional: a heuristic warning
 alone does not establish corruption, while a leaf-reported failure remains
 corrupt. Other JP2 warning classes still require review.
 
+The JXL adapter recognizes raw ICC-symbol finding 17 as facade code 197
+`jxl_invalid_icc_symbol`. Its expected corrupt verdict uses facade FAIL
+treatment while preserving the provider's unresolved severity assessment.
+Inconsistent pairs remain indeterminate/WARN while retaining whether the
+provider assessed severity, and an incomplete callback finding
+cannot be erased by a clean final scalar result. Proven corruption wins in
+either finding order. Truncation remains its own cause. This adapter contract
+does not qualify a provider update; the pinned older leaf cannot emit 17.
+
+JXL stream locations are bounded by the input, preserving leaf-reported exact
+EOF positions for required missing data as well as approximate anchors.
+Host locations must equal the caller's host base plus the stream position
+without overflow; the host base may refer to a larger enclosing file.
+Out-of-range stream positions have unknown stream and host locations.
+Inconsistent or overflowing host positions become unknown without discarding
+an independently bounded stream position. Provider approximate anchors remain
+nonexact even when bounded.
+
 Strict validation must account for decoded entropy and surface recovery.
 DHT construction rejects oversubscribed code counts and reserved all-ones
 codes before code narrowing or lookup-table writes (T.81 Annex C). Legal

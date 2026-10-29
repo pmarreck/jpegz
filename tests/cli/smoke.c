@@ -131,6 +131,10 @@ int main(void) {
 		       "future JFIF coverage finding appends 67 and preserves 66");
 		ASSERT(strcmp(jpegz_finding_code_name((jpegz_finding_code_t)67), "jfif_version_unchecked") == 0,
 		       "future JFIF coverage finding has its stable C ABI name");
+		ASSERT(strcmp(jpegz_finding_code_name((jpegz_finding_code_t)197), "jxl_invalid_icc_symbol") == 0,
+		       "ICC symbol failure has its approved C ABI name");
+		ASSERT(JPEGZ_FINDING_JXL_INVALID_ICC_SYMBOL == 197 && JPEGZ_FINDING_JXL_INVALID_HISTOGRAM == 196,
+		       "ICC symbol failure appends 197 and preserves histogram 196");
 
         /* Distinct codes must not collapse onto one string — a table that
          * returns the same label for everything would pass a single-value

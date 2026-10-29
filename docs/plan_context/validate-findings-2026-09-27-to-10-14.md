@@ -877,3 +877,150 @@ The current JPEG adapter still consumes the severity-oriented report in the
 inspected Validate revision. Its successful warning policy must not be treated
 as proof that the new strict KNOWN_DEFECT or indeterminate classifications
 have been adopted. The existing provider-chain adoption work remains open.
+
+### Published provider review, October 29
+
+Upstream HEAD and local immutable source agree at jp2z
+`0c2162bbb049cf16c744236384f7379c9bc36ed3` and libjxlz
+`e1c521d3707a961c49e1917e939e380a679c1e8d`. The accepted pins remain
+`a7cc185ca16a0c06a08a2d995295814d6347fb6d` and
+`93b29e86281ea4ba9c681f4879318c87e8a800a4`, respectively. Source review
+does not qualify a dependency update or relax any held research.
+
+The new jp2z commits add the reversible encoder, C ABI encode/decode/verify
+CLI and five-platform packaging. Decoder diffs only expose three existing
+helpers without changing their bodies. Provider CI for `0c2162b` passed its
+three declared targets, including all-platforms, October 24
+00:05:12Z..00:09:01Z (229 seconds). Encoder round trips through its own
+decoder and OpenJPEG do not establish all component-resolution layouts or
+jpegz's replacement of OpenJPEG. Leaf exactness and the warning review stay open.
+
+libjxlz `72923214984fa77250248fde649437c885d5271b`, contained in
+`e1c521d`, repairs released-input custody and rejects compressed ICC decoded
+symbols outside the byte domain. It adds raw finding 17 `invalid_icc_symbol`,
+strict corrupt, with provider severity still UNASSESSED and the existing
+approximate input anchor. Reads beyond input retain truncation precedence.
+Its primitive controls include a legal wide-alphabet round trip and values
+256..511, and its published public grayscale mutation has a persistent CLI
+and reference-decoder regression. These controls were inspected, not rerun here.
+
+The current jpegz adapter recognizes raw JXL findings 1..16; unknown raw 17
+is conservatively indeterminate. Candidate facade 197
+`jxl_invalid_icc_symbol` was requested from the coordinator, including the
+raw-verdict consistency rule and a treatment decision that preserves the
+provider's unresolved severity. The candidate is not allocated or implemented.
+The provider also received a request for a later complete qualification
+receipt: observed exact `e1c521d` CI stopped at the 1800-second execution
+budget October 28 18:29:30Z..18:59:30Z, after build and ReleaseSafe tests
+passed; ReleaseFast stopped and Windows/conformance were skipped. No uncapped
+retry was requested. The arithmetic scaling request remains separate.
+
+At 12:06 EDT the coordinator approved/reserved facade 197
+`jxl_invalid_icc_symbol`: expected raw verdict 1/code 17 maps to corrupt with
+facade FAIL treatment. The provider's UNASSESSED severity remains unresolved;
+this is not evidence that all such ICC defects prevent pixel decoding.
+Inconsistent raw verdict/code pairs remain indeterminate/WARN, preserving
+identities. Existing approximate anchors, bounds and truncation precedence
+must remain intact. Adapter work may proceed with the current pin; raw-pair
+tests do not qualify end-to-end delivery. A qualified provider revision/hash,
+persistent real-input reproduction, complete consumer suite and exact-commit
+consumer CI are still required before adoption. No timeout or decoder-change
+exception follows from the registry allocation.
+
+JP2 API inspection also found that jp2z's Image supports u16 channel counts
+and a multichannel layout, whereas jpegz's Image exposes u8 and three named
+layouts. The existing OpenJPEG wrapper intends to reject counts above four,
+but narrows the source count before that check. This needs a persistent
+high-component reproduction before any change; source inspection alone does
+not establish a reachable panic. Existing oracle skips and component-resolution
+coverage remain separate prerequisites for a pixel cutover.
+
+### Facade 197 adapter controls
+
+The first actual red check (`46mq18ga6ll4j2dlm55ywik1c2hvkg4z`) recorded
+four Zig failures and the generated C name failure, while the existing 134
+CLI assertions passed. It demonstrated missing typed raw-17 identity; its
+draft location test also assumed EOF could never be exact, which was later
+rejected against the accepted JXL missing-data contract. Admission waited several minutes behind older
+work before the job started at 12:13:43 EDT; the wait is separate from
+compilation/execution and its precise duration was not captured.
+
+A second red check (`xryajj24sv91r1gqwj8vvms8gz1bwjzc`) added a callback
+aggregation regression. It recorded 277/282 passing Zig tests, five failures
+and the C name failure: a known but inconsistent callback pair could be erased
+by a clean scalar result, returning valid instead of indeterminate. The repair
+tracks indeterminate evidence independently of whether the code is recognized,
+with corruption precedence in both orders.
+
+One pure translator now serves callback, scalar fallback and legacy JXL
+paths. Controls cover all current raw identities and inconsistent/unknown
+verdict pairs, generated name/numeric stability, retained raw 17, unresolved
+versus assessed severity, approximate/exact/EOF/out-of-bounds locations and
+checked host-base translation, including mismatch and overflow. Host offsets
+can legitimately exceed the embedded stream length; range checking does not
+establish anchor exactness. Truncation retains raw 2 and its existing facade
+identity. These are adapter controls with the old provider pin, not a fresh
+ICC parser or legal-wide-alphabet acceptance qualification.
+
+The separate high-component JP2 fixture preparation did not execute its
+encoder because an evaluated store path had not been realized by `nix build`.
+That operational failure is not a decoder reproduction. The next attempt
+must prepare the exact published public package through Nix before exercising
+it in the qualified disposable sandbox.
+
+The first full verification attempt passed 281/282 Zig tests, all 199 C
+assertions and all 134 CLI assertions, but the accepted warning-then-fatal
+regression requires the provider's exact EOF position for required missing
+data to survive. The new test's blanket nonexact-EOF assumption was corrected;
+the existing regression was retained. Preparation failed after 234 seconds.
+The following complete-entry-point attempt was stopped (143) when it began
+rebuilding that same known-failing native check; no complete pass is claimed.
+A fresh location red check with the corrected EOF contract must demonstrate
+the actual out-of-range defect before restoring the bounds implementation.
+
+The corrected location red check (`k07n7p6l3ss8dha473z02ssncyjr4qfr`)
+then failed with `expected null, found 21` for a 20-byte input. This is the
+accepted bounds witness; the earlier blanket EOF claim is not evidence of a
+defect. The bounds implementation was restored while retaining the provider's
+exact EOF missing-data position. A new full verification uses the corrected
+source and skips the duplicate complete-entry-point attempt if preparation
+already fails; successful preparation still requires the unchanged `./test`.
+
+The corrected tree passed complete verification with 199 C assertions, 134
+CLI assertions and all native checks: preparation 214 seconds, complete
+entry point six seconds using prepared artifacts; native build phase 125
+seconds mixed compilation/execution. Before committing, the final contract
+review added the inconsistent-pair/provider-assessment cross product. Its
+fresh red check (`g5yml3wp8ngb2ihdr21947i6hrcaf8jc`) failed with
+`expected .warn, found .fail`. The shared translator now keeps indeterminate
+findings at facade WARN treatment while retaining the assessment flag.
+This source change requires its own complete verification before shipment.
+
+Public JP2 boundary controls are now prepared independently from published
+`0c2162b`, with encoder binary SHA-256
+`3a8b97f9c1c64d5fdfa939e7718d028fe056c6ef49aeb2b9327809846ba2d1fb`.
+Each generated image is one unsigned 8-bit black pixel with 4, 5, 255, 256
+or 257 components, encoded losslessly as a raw codestream. Generation ran in
+the qualified read-only-host sandbox after Nix package realization, leaving
+only captured evidence and test-owned outputs. These controls have not yet
+reproduced a jpegz decoder fault; the registry adapter and JP2 boundary work
+remain separate units.
+
+An OpenJPEG 2.5.4 CLI oracle then decoded each generated codestream and
+emitted exactly 4, 5, 255, 256 and 257 PGX component planes, respectively.
+This independently establishes decoder acceptance of the boundary controls,
+not a jpegz wrapper result. An earlier oracle-harness attempt could not count
+planes because an inherited search function referenced the private sandbox
+HOME; it was recorded as a failed harness run. The corrected confined run
+uses an explicit directory adapter and checks every component count. No
+unconfined fallback or source-fixture mutation occurred.
+
+Final adapter verification passed with the assessment cross product included:
+all native tests, 199 C ABI assertions, 134 CLI assertions, production and
+four cross-link targets, source/dependency controls, closure and the isolated
+no-C consumer. Preparation took 208 seconds; the unchanged complete `./test`
+then passed in 16 seconds with prepared reuse. The native build phase took
+129 seconds mixed compilation/execution; no fresh runtime-budget pass is
+claimed. This qualifies the facade mapping and location/aggregation adapters
+with the current provider pin. It does not qualify the repaired ICC parser,
+provider release, private-source cold fetch or downstream adoption.
