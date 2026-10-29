@@ -468,7 +468,7 @@ fresh runtime detection-rate measurement.
 | 14..17 | 4 | Densities become 65281 or 254, both nonzero. |
 | 18..19 | 2 | One thumbnail dimension becomes 255, the other stays zero; no thumbnail payload is required. |
 | 25..88 | 64 | Quantizers remain nonzero; changed pixels are permitted. |
-| 100 | 1 | SOF component ID changes without its SOS reference; finding 55 owns this mismatch. |
+| 100 | 1 | SOF sampling factors 1/1 become 14/14; the earlier component-ID label was incorrect, and the 6b038ec replay reports unsupported. |
 | 157..159 | 3 | Invalid sequential SOS fields; approved finding 64 now owns these. |
 
 [T.871 10.1](https://www.itu.int/rec/dologin_pub.asp?id=T-REC-T.871-201105-I%21%21PDF-E&lang=f&type=items#page=12)
@@ -539,6 +539,139 @@ Preparation took 182 seconds and the complete entry point then took 17 seconds
 using those prepared results. Native compilation/test execution remains a
 mixed 118-second phase; no-C consumer compilation/controls took 51 seconds.
 This is correctness and artifact-reuse evidence, not a fresh execution-budget
-measurement. Exact-commit CI and the registry shipment receipt follow
-publication. Historical 1.01 units, future-version semantics and wider JFIF
-constraints remain open.
+measurement. Published `6b038ecc32b8a5301afd7218d711f98a592a771a` passes all
+eleven exact-commit CI targets, October 29 01:28:52Z..01:29:10Z (18 seconds,
+prepared artifact reuse). The fetched archive hash is
+`jpegz-0.1.0-staw4D6jFADBqXPnHiAVYB0oQiNT2O13YQBVGKUKdbNU`.
+The coordinator and consumers received the edition-scoped registry receipt.
+The coordinator acknowledged code-65 delivery at 21:34 EDT and retained
+the historical-edition correction; consumer adoption remains unverified.
+Historical 1.01 units, future-version semantics and wider JFIF constraints
+remain open.
+
+### Public 170-case CLI replay
+
+A complete replay against the production CLI from `6b038ec` ran in a qualified
+read-only sandbox, with one independent XOR-255 per byte. The pristine hash
+matches the public fixture above; the binary SHA-256 is
+`5cf5a12ae8deb816aa2e9b9428d67343540f4ee1dc3905c9316f84fba93254d0`.
+All 170 unique offsets completed in two seconds, with a five-second per-case
+timeout and 2 GiB virtual-memory bound. No crash, timeout, I/O or harness
+outcome occurred. Results are 88 corrupt, 78 valid, three indeterminate and
+one unsupported. These operational counts are not proven-malformed detection
+rates or a controlled comparison with the old Validate binary.
+
+Among the 83 historical survivors, 78 are currently reported valid, three
+corrupt, one indeterminate and one unsupported. The replay corrected the
+static label for offset 100: it is sampling byte 0x11, changed to 0xEE, not
+the component ID. Existing code reports unsupported for those 14/14 factors;
+the normative header range needs its own bounded regression and registry
+review, without reviving held non-luma-dominant sampling research.
+
+The replay also exposed twelve classic strict findings beyond the input at
+mutated segment-length bytes (4, 5, 22, 23, 91, 92, 104, 105, 128, 129, 152,
+153). They retain corruption but present declared segment extents as byte
+and host offsets, for example 65300 for a 170-byte input. Add a persisted
+regression before normalizing these locations; preserve the reported extent
+in detail and do not turn bounds into an exactness claim.
+
+The first harness launch could not see its RAM-resident script inside the
+private sandbox `/tmp` and executed no mutants. Supplying the script through
+stdin fixed that harness issue; only the completed 170-case run is counted.
+
+The persisted classic-location classifier failed in native derivation
+`gxcv8gm90makczq71wccph12a65gxk7j-jpegz-tests-0.0.1.drv`, 271/272 Zig tests
+passing, with C ABI 119/119 and CLI 96/96. It varies either APP0 length byte
+through all 256 values and requires bounded original/host locations, nonexact
+EOF cursors and raw declared extents retained in details. Additional C ABI
+and CLI witnesses are now running before implementation.
+
+The extended red run
+`3ws5myrnmrkxkd11mb3blghv459wjljj-jpegz-tests-0.0.1.drv` reproduced the
+same location fault through C ABI and CLI JSON. A separate new sampling test
+did not execute: calling `validateAny` from the core-only validation target
+introduced unresolved Brotli symbols. Changing that test to the core report
+API preserves its purpose without adding dependencies; it still needs an
+actual semantic red witness. The coordinator has the candidate-66 registry
+request and the explicit held-work boundary. No sampling implementation or
+enum assignment has been made.
+
+Classic strict location normalization is now implemented: positions beyond
+the supplied buffer become null original/host locations, with the raw
+reported extent appended to detail. EOF remains a nonexact cursor, and
+existing exact header locations retain their flags. The corrected native
+run is awaiting resource admission; queue wait is not execution time.
+
+At 21:42 EDT the coordinator approved append-only 66 `sof_sampling_invalid`
+with an initial scope restricted to single-component SOF0/SOF1. It requires
+FAIL/corrupt, exact original/host packed-factor byte, and the component,
+offending nibble, observed value and allowed 1..4 range in detail. The scalar
+validator check is explicitly outside the held non-luma-dominant panic
+research. The approval does not authorize decoder edits, pin changes, other
+processes or additional components. An actual semantic red witness remains
+required before implementation; the corrected run is still queued.
+
+The corrected run was admitted at 21:46:27 EDT after approximately 402
+seconds of resource-queue wait. Native derivation
+`fy6v51hyaahs4i6ifvgjg7k09v32qnbg-jpegz-tests-0.0.1.drv` now supplies the
+actual sampling semantic red witness: the first factor byte 0x00 produces
+a report considered valid instead of a failure. That is independent of the
+earlier link error. The approved single-component range check can now be
+implemented; this witness does not establish results for later classifier
+values until the complete run passes.
+
+That red run completed with 272/273 Zig tests passing, C ABI 124/124 and CLI
+99/99. The new location controls pass; the sole semantic failure is sampling.
+The implementation now checks only the authorized single-component processes.
+Its first expanded native run passed 167 C assertions and 104 CLI checks,
+but a type-inference error prevented the expanded core scope classifier from
+compiling. This is incomplete verification, not a green suite. The typed
+fixture arrays are corrected; full preparation and `./test` are running.
+The expanded tests include all 256 frame counts across eight processes,
+declared-length/physical-truncation boundaries and an explicit nonexact EOF
+cursor control.
+
+Complete preparation and `./test` passed at 21:56 EDT. Final native derivation
+`k8qqbp6p8xdaklhdm3bmh3k11028qixj-jpegz-tests-0.0.1.drv` covers 274 Zig tests,
+168 C ABI assertions and 104 CLI checks. All 256 factor bytes in each initial
+process, all 16 legal pixel pairs per process, 2048 process/component-count
+scope cases, declared and physical header boundaries and the retained EOF
+cursor pass. All four cross links, validation closure, source controls,
+coverage-statistics artifact and no-C consumer controls pass as well.
+
+Preparation took 196 seconds and the complete entry point then took 17 seconds
+using those prepared results. Native compilation/execution is a mixed
+127-second phase. The earlier semantic red run's 402-second admission wait
+remains separately recorded; no execution-budget or fresh-runtime claim is
+made from these mixed or cached timings. The same 170 public mutations are
+being replayed against the prepared production artifact before publication.
+
+The repeated public replay completed all 170 unique offsets in two seconds,
+with no unexpected process or harness outcome. The prepared CLI SHA-256 is
+`85cc79e1bdba9e535a609075412231f316cebc787422de62e22d15481517ca3b`.
+Results are 89 corrupt, 78 valid and three indeterminate. Relative to the
+recorded `6b038ec` cohort, the only verdict change is offset 100, unsupported
+to corrupt with exact finding 66. All twelve former beyond-input locations
+are now null original/host positions, with their raw extents preserved in
+details; no finding in the replay exceeds the supplied buffer. This comparison
+uses identical public inputs and the same mutation operator, but still does
+not turn the operational rejection count into a malformed detection rate.
+
+### Historical JFIF 1.01 implementation evidence
+
+The official [IJG release 6a archive](https://www.ijg.org/files/jpegsrc.v6a.tar.gz)
+has fetched SHA-256
+`0e963fdd29d5049f61f3dc137bdc9437473a0ad505dbcfc8925f0fcad46c5929`;
+its README identifies the release as February 7, 1996. Inspection used archive
+members through stdout, without executing or installing historical code.
+`jpeg-6a/jcmarker.c`'s `emit_jfif_app0` emits version 1.01 and documents the
+three units meanings 0/1/2, matching `jpeg-6a/jpeglib.h`'s public API comments.
+The writer explicitly selects 1.01 because it uses no 1.02 features.
+
+This supports a shared-header compatibility argument; it is historical
+implementation evidence, not the original 1.01 normative text. The writer
+copies the unsigned units byte without range validation. Neither that
+permissiveness nor successful reader recovery proves every value legal.
+The coordinator has the evidence for independent review against the earlier
+allocation condition. No 1.01 rejection has been added, and any accepted
+extension will follow the current location/code-66 unit separately.

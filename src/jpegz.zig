@@ -523,15 +523,25 @@ fn strictFromReport(
 			.unknown_marker => unchecked_marker = true,
             else => {},
         }
-        const detail = if (finding.detail) |value| try allocator.dupe(u8, value) else null;
+		const offset: ?u64 = if (finding.offset) |value|
+			(if (value <= data.len) value else null)
+		else
+			null;
+		const detail = if (finding.offset != null and offset == null)
+			try std.fmt.allocPrint(allocator, "{s}{s}Reported position {d} beyond input length {d}.",
+				.{ finding.detail orelse "", if (finding.detail != null) " " else "", finding.offset.?, data.len })
+		else if (finding.detail) |value|
+			try allocator.dupe(u8, value)
+		else
+			null;
         result.findings.appendAssumeCapacity(.{
             .source = .jpegz,
             .leaf_code = @intFromEnum(finding.code),
             .code = finding.code,
             .severity = finding.severity,
-            .offset = finding.offset,
-			.host_offset = finding.offset,
-            .offset_is_exact = finding.offset_is_exact,
+            .offset = offset,
+			.host_offset = offset,
+            .offset_is_exact = finding.offset_is_exact and offset != null and offset.? < data.len,
             .detail = detail,
         });
     }

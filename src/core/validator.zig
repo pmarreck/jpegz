@@ -112,6 +112,16 @@ fn checkSequentialScanField(report: *ValidationReport, allocator: Allocator, off
 	try addExactFinding(report, allocator, .sequential_scan_invalid, offset, detail);
 }
 
+fn checkSamplingFactor(report: *ValidationReport, allocator: Allocator, offset: usize,
+	component: u8, name: []const u8, observed: u8) Allocator.Error!void
+{
+	if (observed >= 1 and observed <= 4) return;
+	const detail = try std.fmt.allocPrint(allocator,
+		"SOF component ID {d} {s}={d}; allowed 1..4", .{ component, name, observed });
+	defer allocator.free(detail);
+	try addExactFinding(report, allocator, .sof_sampling_invalid, offset, detail);
+}
+
 pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!ValidationReport {
     var report = ValidationReport{
         .overall = .pass,
@@ -348,6 +358,15 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                         while (ci < nf) : (ci += 1) {
                             sof_comp_ids[data[seg_body_start + 6 + 3 * ci]] = true;
                         }
+						// Initial registry scope excludes other processes and layouts.
+						if (nf == 1 and (variant == .baseline_huffman or variant == .extended_huffman)) {
+							const offset = seg_body_start + 7;
+							const component = data[seg_body_start + 6];
+							try checkSamplingFactor(&report, allocator, offset, component,
+								"Hi (high nibble)", data[offset] >> 4);
+							try checkSamplingFactor(&report, allocator, offset, component,
+								"Vi (low nibble)", data[offset] & 15);
+						}
                     }
 
                     const lossless_precision = variant == .lossless_huffman or variant == .lossless_arithmetic;

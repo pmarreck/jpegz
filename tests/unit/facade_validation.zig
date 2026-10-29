@@ -354,6 +354,57 @@ test "SOF3 standalone markers cannot masquerade as unsupported length-prefixed s
 	}
 }
 
+test "classic strict findings retain bounded positions and declared segment extents" {
+	const allocator = std.testing.allocator;
+	const pristine = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	for ([_]usize{ 4, 5 }) |field| {
+		for (0..256) |value| {
+			const data = try allocator.dupe(u8, pristine);
+			defer allocator.free(data);
+			data[field] = @intCast(value);
+			const declared_end = 4 + @as(u64, data[4]) * 256 + data[5];
+			var result = try jpegz.validateAny(allocator, data);
+			defer result.deinit(allocator);
+			var extended = false;
+			for (result.findings.items) |finding| {
+				if (finding.offset) |offset| {
+					try std.testing.expect(offset <= data.len);
+					try std.testing.expectEqual(finding.offset, finding.host_offset);
+					if (offset == data.len) try std.testing.expect(!finding.offset_is_exact);
+				} else {
+					try std.testing.expectEqual(@as(?u64, null), finding.host_offset);
+					try std.testing.expect(!finding.offset_is_exact);
+				}
+				if (declared_end > data.len and finding.code == .truncated_stream) {
+					extended = true;
+					try std.testing.expectEqual(@as(?u64, null), finding.offset);
+					var position: [32]u8 = undefined;
+					const expected = try std.fmt.bufPrint(&position, "{d}", .{declared_end});
+					try std.testing.expect(std.mem.indexOf(u8, finding.detail.?, expected) != null);
+				}
+			}
+			if (declared_end > data.len) {
+				try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
+				try std.testing.expect(extended);
+			}
+		}
+	}
+
+	// A real EOF cursor remains available without becoming an exact byte.
+	const eof = pristine[0 .. pristine.len - 1];
+	var terminal = try jpegz.validateAny(allocator, eof);
+	defer terminal.deinit(allocator);
+	var found_eof = false;
+	for (terminal.findings.items) |finding| {
+		if (finding.code == .truncated_stream and finding.offset == eof.len) {
+			found_eof = true;
+			try std.testing.expectEqual(finding.offset, finding.host_offset);
+			try std.testing.expect(!finding.offset_is_exact);
+		}
+	}
+	try std.testing.expect(found_eof);
+}
+
 test "reserved JPEG marker semantics remain inconclusive after successful pixel decoding" {
 	const allocator = std.testing.allocator;
 	const pristine = @embedFile("fixtures/baseline_2x2_rgb.jpg");

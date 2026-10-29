@@ -127,6 +127,9 @@ pub const FindingCode = enum(u32) {
 	// Registry-approved 2026-10-28, initially complete JFIF 1.02 APP0
 	// headers whose density units are outside 0..2. Exact metadata field.
 	jfif_metadata_invalid = 65,
+	// Registry-approved 2026-10-28, initially single-component SOF0/SOF1:
+	// each Hi/Vi sampling-factor nibble must be in 1..4 (T.81 Table B.2).
+	sof_sampling_invalid = 66,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────
     lossless_predictor_invalid = 100,

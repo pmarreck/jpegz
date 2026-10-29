@@ -302,6 +302,22 @@ for marker in 1f 00; do
 	assert_contains "$out" '"offset":3,"host_offset":3,"offset_is_exact":true' "marker diagnostic retains exact locations"
 done
 
+# The single-component factor is a packed pair of four-bit fields.
+capture bash -c '{ head -c 100 "$2"; printf "\xee"; tail -c +102 "$2"; } | "$1" --json -' _ \
+	"$jpegz_cli" "$fixtures/baseline_4x4_grayscale.jpg"
+[ "$rc" -eq 1 ] && pass "out-of-range single-component sampling exits corrupt" || fail "out-of-range single-component sampling exits corrupt" "rc=$rc"
+assert_contains "$out" '"severity":"FAIL","code":"sof_sampling_invalid"' "sampling violation retains its typed cause"
+assert_contains "$out" '"offset":100,"host_offset":100,"offset_is_exact":true' "sampling violation retains exact factor-byte locations"
+assert_contains "$out" 'Hi (high nibble)=14; allowed 1..4' "sampling high nibble retains its observed value and bounds"
+assert_contains "$out" 'Vi (low nibble)=14; allowed 1..4' "sampling low nibble retains its observed value and bounds"
+
+# A declared segment end is evidence, not an address inside the input.
+capture bash -c '{ head -c 4 "$2"; printf "\xff\xff"; tail -c +7 "$2"; } | "$1" --json -' _ \
+	"$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg"
+[ "$rc" -eq 1 ] && pass "declared segment extent beyond input remains corrupt" || fail "declared segment extent beyond input remains corrupt" "rc=$rc"
+assert_contains "$out" '"offset":null,"host_offset":null,"offset_is_exact":false' "declared extents do not invent input byte locations"
+assert_contains "$out" 'position 65539 beyond input length' "declared segment extent is retained as diagnostic evidence"
+
 # Legal marker fill is an ordinary warning, with the valid/exit-0 outcome.
 ordinary_warning="$TMPDIR/jpegz-cli-fill-$$.jpg"
 {

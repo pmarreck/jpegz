@@ -41,6 +41,10 @@ static const unsigned char baseline_2x2_rgb[] = {
 };
 static const size_t baseline_2x2_rgb_len = sizeof(baseline_2x2_rgb);
 
+static const uint8_t grayscale_4x4[] = {
+#embed "../unit/fixtures/baseline_4x4_grayscale.jpg"
+};
+
 static const uint8_t zero_padding[] = {
 #embed "../unit/fixtures/zero_pad_16x16_420.jpg"
 };
@@ -119,6 +123,10 @@ int main(void) {
 		       "JFIF metadata finding appends its approved wire value");
 		ASSERT(strcmp(jpegz_finding_code_name((jpegz_finding_code_t)65), "jfif_metadata_invalid") == 0,
 		       "JFIF metadata finding has its stable C ABI name");
+		ASSERT(JPEGZ_FINDING_SOF_SAMPLING_INVALID == 66 && JPEGZ_FINDING_JFIF_METADATA_INVALID == 65,
+		       "sampling finding appends 66 and preserves metadata 65");
+		ASSERT(strcmp(jpegz_finding_code_name((jpegz_finding_code_t)66), "sof_sampling_invalid") == 0,
+		       "sampling finding has its stable C ABI name");
 
         /* Distinct codes must not collapse onto one string — a table that
          * returns the same label for everything would pass a single-value
@@ -429,6 +437,73 @@ int main(void) {
 				}
 				jpegz_strict_result_free(&r);
 			}
+			free(copy);
+		}
+
+		{
+			const struct { uint8_t factor; size_t failures; const char *first; const char *second; } cases[] = {
+				{0x11, 0, NULL, NULL},
+				{0x10, 1, "Vi (low nibble)=0", NULL},
+				{0x01, 1, "Hi (high nibble)=0", NULL},
+				{0xee, 2, "Hi (high nibble)=14", "Vi (low nibble)=14"},
+				{0x44, 0, NULL, NULL},
+			};
+			const size_t factor_offset = 100;
+			ASSERT(sizeof grayscale_4x4 > factor_offset && grayscale_4x4[89] == 255 &&
+			       grayscale_4x4[90] == 0xc0 && grayscale_4x4[98] == 1,
+			       "single-component SOF sampling fixture has its declared shape");
+			uint8_t *copy = malloc(sizeof grayscale_4x4);
+			ASSERT(copy != NULL, "sampling fixture buffer allocated");
+			for (uint8_t sof = 0xc0; sof <= 0xc1; sof++) {
+				for (size_t c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+					memcpy(copy, grayscale_4x4, sizeof grayscale_4x4);
+					copy[90] = sof;
+					copy[factor_offset] = cases[c].factor;
+					jpegz_strict_result_t r = {0};
+					ASSERT(jpegz_validate_any(copy, sizeof grayscale_4x4, &r) == JPEGZ_OK,
+					       "sampling validation returns through the ABI");
+					ASSERT(r.verdict == (cases[c].failures == 0 ? JPEGZ_VERDICT_VALID : JPEGZ_VERDICT_CORRUPT),
+					       "sampling factor bounds distinguish validity from corruption");
+					size_t failures = 0;
+					int exact = 1, first = cases[c].first == NULL, second = cases[c].second == NULL;
+					for (size_t i = 0; i < r.findings_len; i++) {
+						const jpegz_strict_finding_t f = r.findings[i];
+						if (f.severity != JPEGZ_SEVERITY_FAIL) continue;
+						failures++;
+						exact &= f.code == JPEGZ_FINDING_SOF_SAMPLING_INVALID && f.offset == 100 &&
+							f.host_offset == 100 && f.offset_is_exact;
+						if (f.detail != NULL && strstr(f.detail, "component ID 1") != NULL &&
+							strstr(f.detail, "allowed 1..4") != NULL) {
+							if (cases[c].first != NULL) first |= strstr(f.detail, cases[c].first) != NULL;
+							if (cases[c].second != NULL) second |= strstr(f.detail, cases[c].second) != NULL;
+						}
+					}
+					ASSERT(exact && failures == cases[c].failures, "sampling findings retain exact original and host factor bytes");
+					ASSERT(first && second, "sampling details retain component, nibble and allowed range");
+					jpegz_strict_result_free(&r);
+				}
+			}
+			free(copy);
+		}
+
+		{
+			uint8_t *copy = malloc(baseline_2x2_rgb_len);
+			ASSERT(copy != NULL, "segment extent control buffer allocated");
+			memcpy(copy, baseline_2x2_rgb, baseline_2x2_rgb_len);
+			copy[4] = 255;
+			copy[5] = 255;
+			jpegz_strict_result_t r = {0};
+			ASSERT(jpegz_validate_any(copy, baseline_2x2_rgb_len, &r) == JPEGZ_OK,
+			       "declared segment extent validates through the ABI");
+			ASSERT(r.verdict == JPEGZ_VERDICT_CORRUPT && r.findings_len == 1,
+			       "a segment beyond the input retains its corrupt verdict and single cause");
+			const jpegz_strict_finding_t f = r.findings[0];
+			ASSERT(f.code == JPEGZ_FINDING_TRUNCATED_STREAM && f.offset == INT64_MIN &&
+			       f.host_offset == INT64_MIN && !f.offset_is_exact,
+			       "a declared segment extent is not exposed as an input byte");
+			ASSERT(f.detail != NULL && strstr(f.detail, "65539") != NULL,
+			       "declared segment extent remains available in diagnostic detail");
+			jpegz_strict_result_free(&r);
 			free(copy);
 		}
 

@@ -106,6 +106,12 @@ required values and the Ah/Al nibble. Zero quantization entries report
 finding 52 at the start of the 8-bit entry or 16-bit word. Legal quantizer
 values remain accepted, including 16-bit words with one zero byte.
 
+Single-component SOF0/SOF1 headers require each Hi/Vi nibble in 1..4.
+Finding 66 identifies an invalid factor at the packed byte and names the
+component, offending nibble and allowed range. The initial check covers no
+other processes or component layouts. A single-component scan is
+noninterleaved; the interleaved sum-of-products limit does not apply to it.
+
 A complete recognized JFIF 1.02 APP0 header with units outside 0..2 reports
 FAIL/corrupt with finding 65 at the exact units byte. This identifies a
 metadata/profile violation. Its initial rejection scope does not establish
@@ -123,6 +129,12 @@ position beyond the buffer has null byte/host offsets, with its reported
 number preserved in the detail. Bounds alone do not establish exactness;
 the pinned leaf does not yet provide exactness metadata. The older JP2
 severity-only report retains its existing location behavior pending review.
+
+Classic strict reports likewise retain only positions within the supplied
+buffer, preserving nonexact EOF cursors. A declared segment extent beyond
+the input has null original/host locations and retains its raw position in
+detail. Existing exact header-field findings keep their flags. The older
+severity report retains its existing cursor behavior.
 
 JP2 finding 261 (`cblk_contribution_ends_ff`) classifies as corrupt even when
 the leaf uses warning treatment. The facade preserves that supplied severity.

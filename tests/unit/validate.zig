@@ -1384,6 +1384,78 @@ test "JFIF units rejection is gated by the complete evidenced version set" {
 	}
 }
 
+test "sequential SOF sampling nibbles classify the complete byte set" {
+	// T.81 Table B.2: Hi and Vi each lie in 1..4. A one-component
+	// scan is noninterleaved, so the interleaved MCU sum limit does not apply.
+	const pristine = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{1} ** 64) ++
+		[_]u8{ 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0x10, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0, 0x3f, 0xff, 0xd9 };
+	const allocator = std.testing.allocator;
+	for ([_]u8{ 0xc0, 0xc1 }) |sof| {
+		for (0..256) |value| {
+			const data = try allocator.dupe(u8, &pristine);
+			defer allocator.free(data);
+			const frame = findMarker(data, 0xc0).?;
+			data[frame + 1] = sof;
+			data[frame + 11] = @intCast(value);
+			const h = value >> 4;
+			const v = value & 15;
+			const legal = h >= 1 and h <= 4 and v >= 1 and v <= 4;
+			var result = try jpegz.validate(allocator, data);
+			defer result.deinit(allocator);
+			try std.testing.expectEqual(legal, result.isValid());
+			if (!legal) {
+				const failures = @as(usize, @intFromBool(h < 1 or h > 4)) + @intFromBool(v < 1 or v > 4);
+				try expectExactTypedFailures(result, .sof_sampling_invalid, frame + 11, failures);
+			}
+			if (legal) {
+				var decoded = try jpegz.decode(allocator, data);
+				defer decoded.deinit(allocator);
+				var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+				defer oracle.deinit(allocator);
+				try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+			}
+		}
+	}
+}
+
+test "sampling finding scope and complete component guards classify every frame count" {
+	const allocator = std.testing.allocator;
+	for ([_]u8{ 0xc0, 0xc1, 0xc2, 0xc3, 0xc9, 0xca, 0xcb, 0xf7 }) |marker| {
+		for (0..256) |count| {
+			const length = 8 + 3 * count;
+			const data = try allocator.alloc(u8, 4 + length + 2);
+			defer allocator.free(data);
+			@memcpy(data[0..4], &[_]u8{ 0xff, 0xd8, 0xff, marker });
+			std.mem.writeInt(u16, data[4..6], @intCast(length), .big);
+			@memcpy(data[6..12], &[_]u8{ 8, 0, 8, 0, 8, @intCast(count) });
+			for (0..count) |component| {
+				@memcpy(data[12 + 3 * component ..][0..3], &[_]u8{ @intCast(component), 0xee, 0 });
+			}
+			@memcpy(data[data.len - 2 ..], &[_]u8{ 0xff, 0xd9 });
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try std.testing.expectEqual(count == 1 and (marker == 0xc0 or marker == 0xc1),
+				reportHasCode(report, .sof_sampling_invalid));
+		}
+	}
+	const complete = [_]u8{ 0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0xee, 0 };
+	for (0..12) |declared| {
+		var header = complete;
+		header[5] = @intCast(declared);
+		var report = try jpegz.validate(allocator, &header);
+		defer report.deinit(allocator);
+		try std.testing.expectEqual(declared == 11, reportHasCode(report, .sof_sampling_invalid));
+	}
+	for (0..complete.len) |length| {
+		var report = try jpegz.validate(allocator, complete[0..length]);
+		defer report.deinit(allocator);
+		try std.testing.expect(!reportHasCode(report, .sof_sampling_invalid));
+	}
+}
+
 test "sequential SOS fields classify every byte by the declared scan process" {
 	// T.81 B.2.3/Table B.3: sequential DCT uses Ss=0, Se=63, Ah=Al=0.
 	// Two one-bit zero codes encode DC zero and EOB, followed by six pad ones.
