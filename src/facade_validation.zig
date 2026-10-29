@@ -298,15 +298,18 @@ const JxlReportedFinding = struct {
 const JxlVerdictState = struct {
 	saw_corrupt: bool = false,
 	saw_indeterminate: bool = false,
+	saw_unsupported: bool = false,
 
 	fn observe(self: *@This(), mapped: MappedFinding) void {
 		if (mapped.verdict == .indeterminate) self.saw_indeterminate = true;
 		if (mapped.verdict == .corrupt) self.saw_corrupt = true;
+		if (mapped.verdict == .unsupported) self.saw_unsupported = true;
 	}
 
 	fn finish(self: @This(), scalar: MappedFinding) StrictVerdict {
-		if (self.saw_corrupt) return .corrupt;
-		if (self.saw_indeterminate) return .indeterminate;
+		if (self.saw_corrupt or scalar.verdict == .corrupt) return .corrupt;
+		if (self.saw_indeterminate or scalar.verdict == .indeterminate) return .indeterminate;
+		if (self.saw_unsupported) return .unsupported;
 		return scalar.verdict;
 	}
 };
@@ -501,15 +504,27 @@ test "JXL reported locations distinguish stream bounds, host bases and approxima
 }
 
 test "ICC facade treatment preserves unresolved provider assessment" {
-	for (0..3) |assessment| {
+	if (!with_jxl) return error.SkipZigTest;
+	const LeafSeverity = @FieldType(libjxlz.ffi.decode.JxlValidationFinding, "severity");
+	const warning = @intFromEnum(LeafSeverity.JXL_VALIDATION_SEVERITY_WARNING);
+	const hard_error = @intFromEnum(LeafSeverity.JXL_VALIDATION_SEVERITY_ERROR);
+	const assessments = [_]i32{
+		@intFromEnum(LeafSeverity.JXL_VALIDATION_SEVERITY_NONE),
+		warning,
+		hard_error,
+		@intFromEnum(LeafSeverity.JXL_VALIDATION_SEVERITY_UNASSESSED),
+		-1, 4, std.math.maxInt(i32),
+	};
+	for (assessments) |assessment| {
+		const assessed = assessment == warning or assessment == hard_error;
 		const finding = translateJxlFinding(.{
 			.raw_verdict = 1, .raw_code = 17, .raw_severity = @intCast(assessment),
 			.offset = 14, .host_offset = 1014, .exact = false,
 		}, 20, 1000);
 		try std.testing.expect(finding.code != null);
 		try std.testing.expectEqual(@as(u32, 197), @intFromEnum(finding.code.?));
-		try std.testing.expectEqual(assessment != 0, finding.is_assessed);
-		try std.testing.expectEqual(if (assessment == 1) Severity.warn else .fail, finding.severity);
+		try std.testing.expectEqual(assessed, finding.is_assessed);
+		try std.testing.expectEqual(if (assessment == warning) Severity.warn else .fail, finding.severity);
 		try std.testing.expect(!finding.offset_is_exact);
 		for ([_]i32{ 0, 2, 3 }) |raw_verdict| {
 			const inconsistent = translateJxlFinding(.{
@@ -517,7 +532,7 @@ test "ICC facade treatment preserves unresolved provider assessment" {
 				.offset = 14, .host_offset = 1014, .exact = false,
 			}, 20, 1000);
 			try std.testing.expectEqual(Severity.warn, inconsistent.severity);
-			try std.testing.expectEqual(assessment != 0, inconsistent.is_assessed);
+			try std.testing.expectEqual(assessed, inconsistent.is_assessed);
 			try std.testing.expectEqual(@as(u32, 17), inconsistent.leaf_code);
 			try std.testing.expectEqual(@as(u32, 197), @intFromEnum(inconsistent.code.?));
 		}
@@ -540,5 +555,57 @@ test "inconsistent JXL callback pairs cannot be erased by a clean scalar result"
 		state.observe(if (reverse) bad else incomplete);
 		state.observe(if (reverse) incomplete else bad);
 		try std.testing.expectEqual(StrictVerdict.corrupt, state.finish(mapJxlFinding(0, 0)));
+	}
+}
+
+test "indeterminate JXL callback cannot downgrade a corrupt scalar" {
+	var state = JxlVerdictState{};
+	state.observe(mapJxlFinding(0, 17));
+	try std.testing.expectEqual(StrictVerdict.corrupt, state.finish(mapJxlFinding(1, 2)));
+}
+
+test "JXL callback and scalar outcomes classify the complete cross product" {
+	const outcomes = [_]MappedFinding{
+		mapJxlFinding(0, 0), // Valid.
+		mapJxlFinding(1, 2), // Proven truncation.
+		mapJxlFinding(2, 4), // Unsupported.
+		mapJxlFinding(3, 5), // Indeterminate resource limit.
+		mapJxlFinding(0, 17), // Inconsistent recognized cause.
+		mapJxlFinding(0, 999), // Unknown cause.
+	};
+	const expected = [_][6]StrictVerdict{
+		.{ .valid, .corrupt, .unsupported, .indeterminate, .indeterminate, .indeterminate },
+		.{ .corrupt, .corrupt, .corrupt, .corrupt, .corrupt, .corrupt },
+		.{ .unsupported, .corrupt, .unsupported, .indeterminate, .indeterminate, .indeterminate },
+		.{ .indeterminate, .corrupt, .indeterminate, .indeterminate, .indeterminate, .indeterminate },
+		.{ .indeterminate, .corrupt, .indeterminate, .indeterminate, .indeterminate, .indeterminate },
+		.{ .indeterminate, .corrupt, .indeterminate, .indeterminate, .indeterminate, .indeterminate },
+	};
+	for (outcomes, 0..) |callback, i| {
+		const empty = JxlVerdictState{};
+		try std.testing.expectEqual(callback.verdict, empty.finish(callback));
+		for (outcomes, 0..) |scalar, j| {
+			var state = JxlVerdictState{};
+			state.observe(callback);
+			try std.testing.expectEqual(expected[i][j], state.finish(scalar));
+			state.observe(callback);
+			try std.testing.expectEqual(expected[i][j], state.finish(scalar));
+
+			var reversed = JxlVerdictState{};
+			reversed.observe(scalar);
+			reversed.observe(callback);
+			try std.testing.expectEqual(expected[i][j], reversed.finish(outcomes[0]));
+			for (outcomes) |last| {
+				var sequential = JxlVerdictState{};
+				sequential.observe(callback);
+				sequential.observe(scalar);
+				var inner = JxlVerdictState{};
+				inner.observe(scalar);
+				const grouped = MappedFinding{ .verdict = inner.finish(last), .code = null, .severity = .warn };
+				var outer = JxlVerdictState{};
+				outer.observe(callback);
+				try std.testing.expectEqual(sequential.finish(last), outer.finish(grouped));
+			}
+		}
 	}
 }

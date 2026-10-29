@@ -1032,3 +1032,67 @@ prepared reuse). Its fetched package hash is
 Immutable adapter-only receipts reached the coordinator and five consumers,
 including the provider; the coordinator received a verified native pointer.
 The repaired provider's complete qualification and pin update remain open.
+
+### Independent callback/scalar review reopens adapter qualification
+
+After independently confirming all eleven `e8ef262` CI targets passed, the
+coordinator identified an uncovered corruption-precedence case: observe
+`mapJxlFinding(0, 17)`, then finish with `mapJxlFinding(1, 2)`. An
+indeterminate callback could downgrade proven scalar truncation because
+`saw_indeterminate` was checked before the scalar verdict. The passing suite
+did not establish this boundary. Adapter qualification is reopened; a targeted
+red regression and the complete callback/scalar cross product are required
+before the correction can ship.
+
+The review also found that `0..3` omitted actual provider UNASSESSED=3.
+The new assessment cases derive NONE, WARNING, ERROR and UNASSESSED from the
+pinned provider enum and include negative, future and maximum unknown numeric
+values. The first attempt failed during linking, not semantic testing, because
+inspecting the provider enum emitted Brotli-dependent C API exports into the
+inline-test binary. Its target now conditionally links the same already
+declared Brotli libraries as the existing facade tests. Production links and
+pins remain unchanged. A fresh red check is running with the corrected setup.
+
+The candidate 6x6 callback/scalar matrix distinguishes valid, corrupt,
+unsupported, resource-indeterminate, recognized-inconsistent and unknown
+outcomes. The coordinator has a focused question about retaining an unsupported
+callback behind a clean scalar; proposed symmetric precedence is corrupt,
+indeterminate, unsupported, then valid. No aggregation implementation has
+changed pending the red witness and that decision.
+
+The separate JP2 red snapshot completed with a native/C ABI integer-narrowing
+panic (`gilypdynz00bvlhlmpz8i54q4bmqs226`). Its exact case/root cause is not
+yet established from the optimized trace. All five generated controls and
+their test edits are preserved in a named Git stash and an explicit binary
+patch; the urgent JXL correction uses the clean published-code baseline.
+No decoder change or pixel cutover is claimed.
+
+The corrected linked red check (`pc2g7g7im1gw766d2ng44gyr2gzibk3b`)
+executed 284 native tests: 282 passed and the two new verdict tests failed.
+The exact requested regression returned indeterminate instead of corrupt;
+the complete matrix also found that an unsupported callback vanished behind
+a clean scalar. All 199 C and 134 CLI assertions passed, as did the actual
+enum-derived assessment cases, including UNASSESSED=3 and unknown numeric
+values. The corrupt-scalar condition was corrected only after that witness.
+The unsupported callback row remains a coordinator decision before completing
+the full verdict join. Pins and provider qualification remain unchanged.
+
+The coordinator then confirmed the unsupported row and symmetric precedence
+for the four current JXL verdicts: corrupt, indeterminate, unsupported, valid.
+The six raw-input categories do not create six public verdicts or admit JXL
+KNOWN_DEFECT. Additional controls cover empty callback lists, ordering,
+duplicates and grouping invariance. Implementation now includes scalar
+corruption/incompleteness and retains unsupported callback evidence. A full
+verification is required before this reopened checkpoint can close.
+
+Independent bounded source review found no remaining contract violation in
+the concrete correction. The coordinator matched the focused patch to the
+current build/adapter diff with SHA-256
+`8f4d24b16f0ae409b1ece1e597093f966ab3533a690751b9d715ffbff44ce9f7`.
+That is source-review clearance, not independent execution. The separate full
+verification then passed: all 284 native tests, 199 C ABI assertions, 134 CLI
+assertions, production, four cross-link targets, closure, source/dependency
+controls and the no-C consumer. Preparation took 203 seconds; complete
+`./test` passed in six seconds with prepared reuse. Native build phase was
+131 seconds mixed compilation/execution; no fresh runtime-budget pass is
+claimed. Shipment and exact-commit CI remain necessary to close the correction.

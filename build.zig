@@ -469,6 +469,8 @@ pub fn build(b: *std.Build) void {
     test_build_step.dependOn(&smoke_tests.step);
 
     // (2) Inline tests in the core module itself.
+	// Inspecting the provider's enums also emits its C API exports.
+	if (with_jxl) linkBrotli(jpegz_test_mod, brotli_lib_dir);
     const jpegz_inline_tests = b.addTest(.{
         .name = "jpegz_inline",
         .root_module = jpegz_test_mod,
