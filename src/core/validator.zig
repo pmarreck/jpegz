@@ -243,10 +243,10 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 				// The approved metadata rule is edition-specific. Generic APP0,
 				// incomplete headers and other versions do not establish it.
 				if (body.len >= jfif_header_bytes and std.mem.eql(u8, body[0..5], "JFIF\x00") and
-					body[5] == 1 and body[6] == 2 and body[7] > 2)
+					body[5] == 1 and (body[6] == 1 or body[6] == 2) and body[7] > 2)
 				{
 					const detail = try std.fmt.allocPrint(allocator,
-						"JFIF 1.02 metadata/profile violation: units={d}; expected 0, 1 or 2", .{body[7]});
+						"JFIF 1.{d:0>2} metadata/profile violation: units={d}; expected 0, 1 or 2", .{ body[6], body[7] });
 					defer allocator.free(detail);
 					try addExactFinding(&report, allocator, .jfif_metadata_invalid, seg_body_start + 7, detail);
 				}

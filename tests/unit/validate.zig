@@ -1312,20 +1312,21 @@ test "JFIF density units classify every byte only for the declared profile" {
 	const body = findMarker(fixture_baseline_2x2_rgb, 0xe0).? + 4;
 	// A generic APP0 payload does not acquire JFIF field constraints.
 	for (0..5) |field| {
-		const data = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
-		defer allocator.free(data);
-		data[body + field] ^= 0xff;
-		data[body + 6] = 2;
-		data[body + 7] = 255;
-		var report = try jpegz.validate(allocator, data);
-		defer report.deinit(allocator);
-		try std.testing.expect(report.isValid());
+		for ([_]u8{ 1, 2 }) |minor| {
+			const data = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
+			defer allocator.free(data);
+			data[body + field] ^= 0xff;
+			data[body + 6] = minor;
+			data[body + 7] = 255;
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try std.testing.expect(report.isValid());
+		}
 	}
-	// The approved rejection scope is complete JFIF 1.02. Valid 1.01
-	// controls remain supported without imposing unverified historical rules.
+	// Historical IJG 6a evidence independently confirms the shared units
+	// contract for its deliberate 1.01 emission; the extension is approved.
 	for ([_]u8{ 2, 1 }) |minor| {
 		for (0..256) |units| {
-			if (minor == 1 and units > 2) continue;
 			const data = try allocator.dupe(u8, fixture_baseline_2x2_rgb);
 			defer allocator.free(data);
 			data[body + 6] = minor;
@@ -1348,20 +1349,26 @@ test "JFIF density units classify every byte only for the declared profile" {
 
 test "JFIF units checking requires a complete declared and available header" {
 	const allocator = std.testing.allocator;
-	const body = [_]u8{ 'J', 'F', 'I', 'F', 0, 1, 2, 255, 0, 1, 0, 1, 0, 0 };
-	for (0..body.len + 1) |length| {
-		const header = [_]u8{ 0xff, 0xd8, 0xff, 0xe0, 0, @intCast(length + 2) };
-		const data = try std.mem.concat(allocator, u8, &.{ &header, body[0..length], fixture_baseline_2x2_rgb[20..] });
-		defer allocator.free(data);
-		var report = try jpegz.validate(allocator, data);
-		defer report.deinit(allocator);
-		try std.testing.expectEqual(length == body.len, reportHasCode(report, .jfif_metadata_invalid));
-	}
-	const complete = [_]u8{ 0xff, 0xd8, 0xff, 0xe0, 0, 16 } ++ body;
-	for (0..complete.len) |length| {
-		var report = try jpegz.validate(allocator, complete[0..length]);
-		defer report.deinit(allocator);
-		try std.testing.expect(!reportHasCode(report, .jfif_metadata_invalid));
+	const template = [_]u8{ 0xff, 0xd8, 0xff, 0xe0, 0, 16,
+		'J', 'F', 'I', 'F', 0, 1, 2, 255, 0, 1, 0, 1, 0, 0 };
+	for ([_]u8{ 1, 2 }) |minor| {
+		const complete = try allocator.dupe(u8, &template);
+		defer allocator.free(complete);
+		complete[12] = minor;
+		const body = complete[6..];
+		for (0..body.len + 1) |length| {
+			const header = [_]u8{ 0xff, 0xd8, 0xff, 0xe0, 0, @intCast(length + 2) };
+			const data = try std.mem.concat(allocator, u8, &.{ &header, body[0..length], fixture_baseline_2x2_rgb[20..] });
+			defer allocator.free(data);
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try std.testing.expectEqual(length == body.len, reportHasCode(report, .jfif_metadata_invalid));
+		}
+		for (0..complete.len) |length| {
+			var report = try jpegz.validate(allocator, complete[0..length]);
+			defer report.deinit(allocator);
+			try std.testing.expect(!reportHasCode(report, .jfif_metadata_invalid));
+		}
 	}
 }
 
@@ -1378,7 +1385,7 @@ test "JFIF units rejection is gated by the complete evidenced version set" {
 			data[body + 7] = 255;
 			var report = try jpegz.validate(allocator, data);
 			defer report.deinit(allocator);
-			const evidenced = data[body + 5] == 1 and data[body + 6] == 2;
+			const evidenced = data[body + 5] == 1 and (data[body + 6] == 1 or data[body + 6] == 2);
 			try std.testing.expectEqual(evidenced, reportHasCode(report, .jfif_metadata_invalid));
 		}
 	}

@@ -7,7 +7,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; client terminal and activation shortcut requested, settings unchanged.
 - [ ] Resolve the corruption-coverage default JPEG-LS fixture mismatch; owner choice requested among three supported defaults, an audited inconclusive JPEG-LS control, or retaining the blocked campaign; preserve classifications and denominators.
-- [x] Reconcile the October 14 pin question: coordinator finds no additional hidden owner decision; the provider pin hold was released October 15, sampling remains held, and private replays, JP2 exactness and the two explicit owner questions retain separate items (done 2026-10-28 20:47 EDT; coordinator decision).
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
 - [ ] Keep the published JP2 pin and its real Nix closure hash; do not restore draft pin 54531e26 or any placeholder hash.
 
@@ -34,7 +33,10 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [x] Deliver the edition-scoped code-65 registry receipt for 6b038ec with its fetched package hash; all eleven exact-commit CI targets pass in 18 seconds using prepared artifacts; historical 1.01 units and future versions remain open (done 2026-10-28 21:30 EDT; commit 6b038ec).
 - [x] Bound classic strict findings after native/C ABI/CLI red witnesses; retain declared extents in detail, preserve exact fields and nonexact EOF, and pass every length byte plus complete ./test (done 2026-10-28 21:56 EDT; delivered by this change).
 - [x] Obtain the actual core red witness and implement approved 66 only in single-component SOF0/SOF1; pass all factor bytes, 16 legal pixel pairs per process, 2048 process/count scope cases, bounds and native/C ABI/CLI paths plus complete ./test; non-luma research remains held (done 2026-10-28 21:56 EDT; delivered by this change).
-- [ ] Publish the code-66 and classic-location fixes after the repeated public XOR replay; verify exact-commit CI and deliver immutable registry/consumer receipts with the unchanged held-work boundary.
+- [x] Publish faf0c92 with code 66 and bounded classic locations after the identical-input public replay; all eleven exact-commit CI targets pass in 19 seconds using prepared artifacts, with immutable receipts delivered and the held non-luma boundary preserved (done 2026-10-28 22:03 EDT; commit faf0c92).
+- [x] Extend finding 65 to complete recognized JFIF 1.01 units using independently reviewed IJG evidence; fresh native/C ABI/CLI red witnesses, all units/version gates, bounds and valid pixels pass complete ./test; the public replay changes only offset 13 (done 2026-10-28 22:22 EDT; delivered by this change).
+- [ ] Publish the verified historical JFIF 1.01 units extension, verify exact-commit CI and deliver its immutable receipt before starting code 67.
+- [ ] Implement approved 67 jfif_version_unchecked in a separate red-first unit after the historical units shipment; classify only complete recognized future-version headers as WARN/indeterminate, preserve older exclusions and test mixed-cause precedence in both finding orders.
 - [x] Reject invalid sequential SOS fields with approved append-only 64, exact original/host bytes and observed/required nibble details; all 256 values per field in SOF0/SOF1, C ABI and complete ./test pass; exact-commit CI follows publication (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 21:07 EDT; delivered by this change).
 - [x] Reject zero DQT entries with exact finding 52; all 64 positions, legal 8/16-bit boundaries, half-zero words and 192 incomplete-table cases pass with complete ./test (done 2026-10-28 21:07 EDT; delivered by this change).
 - [x] Publish d7f627a with SOS/DQT fixes and JP2 finding-membership guard; all eleven exact-commit CI targets pass in 19 seconds using prepared artifacts, and immutable code-64/package-hash receipts reach the coordinator and consumers (done 2026-10-28 21:09 EDT; commit d7f627a).
@@ -54,7 +56,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Build and CLI
 
-- [x] Stabilize Nix source identity, retain required inputs and future-file bytes, and pass 18 controls plus full ./test; published dedea64 passes all 11 CI targets in 17 seconds with archive/local derivation identities equal (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 20:19 EDT; commit dedea64).
 - [ ] Measure fresh test execution separately from admission, dependency setup, evaluation and compilation; preserve complete coverage and report the one-second target/five-second budget; cached CI artifact reuse is qualified at dedea64 (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
 - [ ] Port the requested upstream-first dependency-freshness gate with sibling fallback and set tests for current, stale, missing, offline and ahead-of-sibling cases.
 - [ ] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks; coordinate the unnecessary encoder linkage with libjxlz.

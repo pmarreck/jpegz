@@ -281,12 +281,15 @@ capture "$jpegz_cli" --simple "$known_defect"
 assert_contains "$out" 'known_defect' "text classifies the known defect"
 
 # Mutations are streamed from read-only fixtures; offsets are zero-based.
-capture bash -c '{ head -c 12 "$2"; printf "\x02\x03"; tail -c +15 "$2"; } | "$1" --json -' _ \
-	"$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg"
-[ "$rc" -eq 1 ] && pass "invalid JFIF 1.02 units exit 1" || fail "invalid JFIF 1.02 units exit 1" "rc=$rc"
-assert_contains "$out" '"verdict":"corrupt"' "invalid JFIF units are a profile violation"
-assert_contains "$out" '"severity":"FAIL","code":"jfif_metadata_invalid"' "JFIF units retain their typed cause"
-assert_contains "$out" '"offset":13,"host_offset":13,"offset_is_exact":true' "JFIF units retain exact metadata locations"
+for minor in 01 02; do
+	capture bash -c '{ head -c 12 "$2"; printf "%b" "\\x$3\\x03"; tail -c +15 "$2"; } | "$1" --json -' _ \
+		"$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg" "$minor"
+	[ "$rc" -eq 1 ] && pass "invalid JFIF 1.$minor units exit 1" || fail "invalid JFIF 1.$minor units exit 1" "rc=$rc"
+	assert_contains "$out" '"verdict":"corrupt"' "JFIF 1.$minor units are a profile violation"
+	assert_contains "$out" '"severity":"FAIL","code":"jfif_metadata_invalid"' "JFIF 1.$minor retains its typed cause"
+	assert_contains "$out" '"offset":13,"host_offset":13,"offset_is_exact":true' "JFIF 1.$minor retains exact metadata locations"
+	assert_contains "$out" "JFIF 1.$minor metadata/profile violation" "JFIF 1.$minor detail names its evidenced version"
+done
 
 for marker in 1f 00; do
 	capture bash -c '{ head -c 3 "$2"; printf "%b" "\\x$3"; tail -c +5 "$2"; } | "$1" --json -' _ \

@@ -112,10 +112,12 @@ component, offending nibble and allowed range. The initial check covers no
 other processes or component layouts. A single-component scan is
 noninterleaved; the interleaved sum-of-products limit does not apply to it.
 
-A complete recognized JFIF 1.02 APP0 header with units outside 0..2 reports
-FAIL/corrupt with finding 65 at the exact units byte. This identifies a
-metadata/profile violation. Its initial rejection scope does not establish
-rules for older or future versions, density, thumbnail lengths or precision.
+A complete recognized JFIF 1.01 or 1.02 APP0 header with units outside 0..2
+reports FAIL/corrupt with finding 65 at the exact units byte. This identifies a
+metadata/profile violation. The 1.01 extension uses the independently reviewed
+historical IJG 6a units contract, not an original 1.01 normative document.
+It does not establish rules for other versions, density, thumbnail lengths
+or precision.
 Generic application payloads retain their independent interpretation.
 
 Reserved FF02..FFBF markers report warning 5 with an indeterminate strict

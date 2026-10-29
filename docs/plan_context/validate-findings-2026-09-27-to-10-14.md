@@ -657,6 +657,74 @@ details; no finding in the replay exceeds the supplied buffer. This comparison
 uses identical public inputs and the same mutation operator, but still does
 not turn the operational rejection count into a malformed detection rate.
 
+Published `faf0c92721b2dfdc7647fd3574a3ce850c2cb95b` passes all eleven
+exact-commit CI targets, October 29 02:01:31Z..02:01:50Z (19 seconds with
+prepared artifact reuse). The actual fetched archive hash is
+`jpegz-0.1.0-staw4IvRFACRGqCwMagk-HDwDD-mFaEZsXJ4u3DXaeH2`.
+The coordinator and consumers received the immutable code-66 receipt with
+the initial scope and unchanged research hold explicit. Adoption remains
+unverified; the historical 1.01 question remains separate.
+
+At 22:06 EDT the coordinator reconciled code-66 delivery and independently
+verified the official IJG 6a archive hash and historical source members.
+That satisfies the previously allowed compatibility-evidence route for a
+separate units-only extension of code 65 to complete recognized JFIF 1.01.
+It is still implementation evidence, not the original normative document;
+the unchecked encoder copy does not prove older encoders never emitted other
+values. A fresh persisted 1.01 red witness, exhaustive units, generic/other
+version exclusions, truncation/location checks, full suite and exact CI are
+required before shipment. Future versions and wider metadata constraints are
+outside this extension.
+
+The fresh approved 1.01 red run
+`1vw188yrbnxbxplnz9dcid1f2b9pckkh-jpegz-tests-0.0.1.drv` passes 272/274
+Zig tests, with failures at 1.01 units and the expanded version gate. The
+C ABI fails the first invalid 1.01 verdict; four new CLI assertions fail
+while the previous 104 pass. The implementation now admits only major 1
+with minor 1 or 2 to the units rule and names the actual version in detail.
+Both versions have complete/available header controls and generic-APP0
+exclusions. Full preparation and `./test` are in progress.
+
+The complete suite passed at 22:20 EDT: 274 Zig tests, 182 C ABI assertions,
+110 CLI checks and all eleven declared targets. Preparation took 197 seconds,
+followed by 21 seconds for the entry point using prepared artifacts. Native
+compilation/execution is a mixed 122-second phase. On resumption October 29,
+the working tree still evaluates to the verified native derivation
+`aq0hq31x53ymmd6wb6dp6s6jwxhlrmxz-jpegz-tests-0.0.1.drv`.
+
+The identical 170-case public replay completed in two seconds with no
+unexpected process outcome and no beyond-input locations. Its binary SHA-256
+is `ae01f8180544afd1812621431f007ce044a12a610e4a36ce2581c2070b8b56cf`.
+Relative to `faf0c92`, only offset 13 changes verdict: valid to corrupt with
+exact finding 65 for JFIF 1.01 units=255. Counts are 90 corrupt, 77 valid and
+three indeterminate; these remain operational outcomes, not a malformed
+detection rate. Future-version rows 11 and 12 remain for the separate
+approved code-67 capability notice.
+
+The next version-adjudication unit has a separate coordinator question for
+candidate 67 `jfif_version_unchecked`. The proposed initial scope is complete
+recognized headers with major greater than 1, or major 1/minor greater than 2,
+reported as WARN/indeterminate rather than proven corruption. Older version
+behavior is excluded without claiming complete conformance. No value or
+implementation is assigned yet, and no future-version behavior is included
+in the current historical-units extension.
+
+At 22:21 EDT the coordinator approved and reserved code 67 for this bounded
+future-version capability notice. The implementation must follow the
+historical units shipment as a separate red-first unit. It requires exact
+major/minor byte locations, WARN/indeterminate, both finding orders for mixed
+causes, and corruption precedence while preserving any known-padding cause.
+Major zero and 1.00 remain explicit coverage gaps, outside the initial rule.
+Base-header availability establishes only bounded recognition; it does not
+prove a future format must share that layout. No code-67 behavior is included
+in the current units change.
+
+On October 29 Validate acknowledged the October 28 shipments through
+`faf0c92` and recorded their contracts for adoption through its provider
+chain. The private SOF1 replay is queued and requires recovery of the
+original work-order identities. No private replay or consumer qualification
+has been established; only structural findings will be returned.
+
 ### Historical JFIF 1.01 implementation evidence
 
 The official [IJG release 6a archive](https://www.ijg.org/files/jpegsrc.v6a.tar.gz)

@@ -80,3 +80,8 @@ Completed PLAN.md items retired by plan-retire, oldest retirement first.
 - [x] [Priority: dependency freshness] Expose coverage-stats through a declared Nix output, replace its dev-shell compiler bootstrap, reject unusable artifacts before mutation and pass installed-copy controls plus full ./test (done 2026-10-28 19:53 EDT; delivered by this change).
 - [x] [Existing ordered follow-ups] Verify libjxlz benchmark-history publication: 923d3c4c is an ancestor of published e1c521d, and all 228 fixed-size rows retain SHA-256 3e7b42191359de69231e34e4f235480f655b6a632fbd033599c50a60fbe83195; scaling remains a separate request (done 2026-10-28 20:15 EDT).
 - [x] [Build and CLI] Move no-C consumer compilation into a Nix check with all three paired controls and disposable scratch; full ./test passes and the exact-commit manifest includes the check (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 19:53 EDT; delivered by this change).
+- [x] [Build and CLI] Stabilize Nix source identity, retain required inputs and future-file bytes, and pass 18 controls plus full ./test; published dedea64 passes all 11 CI targets in 17 seconds with archive/local derivation identities equal (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 20:19 EDT; commit dedea64).
+
+## Retired 2026-10-29
+
+- [x] [Priority: dependency freshness] Reconcile the October 14 pin question: coordinator finds no additional hidden owner decision; the provider pin hold was released October 15, sampling remains held, and private replays, JP2 exactness and the two explicit owner questions retain separate items (done 2026-10-28 20:47 EDT; coordinator decision).
