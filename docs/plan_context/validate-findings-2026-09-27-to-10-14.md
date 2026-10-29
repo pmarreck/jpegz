@@ -1024,3 +1024,11 @@ then passed in 16 seconds with prepared reuse. The native build phase took
 claimed. This qualifies the facade mapping and location/aggregation adapters
 with the current provider pin. It does not qualify the repaired ICC parser,
 provider release, private-source cold fetch or downstream adoption.
+
+Published `e8ef262ab98186478721d2f2b2dd96c7714a11b0` passed all eleven
+exact-commit CI targets October 29 16:39:10Z..16:39:28Z (18 seconds with
+prepared reuse). Its fetched package hash is
+`jpegz-0.1.0-staw4HodFQAQg1dbDirMz3gPO43yvp-HYkKwzYgqdp4L`.
+Immutable adapter-only receipts reached the coordinator and five consumers,
+including the provider; the coordinator received a verified native pointer.
+The repaired provider's complete qualification and pin update remain open.
