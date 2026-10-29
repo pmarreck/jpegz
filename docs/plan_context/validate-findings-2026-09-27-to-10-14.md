@@ -321,4 +321,41 @@ seconds in the complete entry point, while a parallel explicit Nix batch
 prepared the other required targets. These are mixed preparation/evaluation/
 waiting spans, not isolated test execution times. The slowest reported final
 cross-build phase was 197 seconds. All ten manifest targets were realized
-locally; exact-commit CI follows publication.
+locally. Published tooling commit `45f339ff39b187829326e9f6be2b62360f102cbb`
+then passed all ten exact-commit CI targets in 1,029 seconds.
+
+## Stable build sources (2026-10-28)
+
+`nix/source.nix` supplies a fixed `source` name to every source-bearing build
+and check, including dependency collection. It excludes root Markdown records,
+`docs/`, `.mechatron-prime/`, `.git` and `.dirtree-state`. Legal notices stay
+included. All other inputs remain included by default, including nested
+Markdown fixtures, optional scratch tools, future components and `flake.nix`.
+The CLI cache-hook test reads that last file, so excluding all Nix metadata
+would remove a required input.
+
+The source-input check evaluates test-owned trees in a private Nix store
+inside the Nix sandbox. Its classifier compares the complete retained file
+set. Metamorphic controls compare source and derivation identities after
+relocation, documentation edits and CI-record edits, and require changed
+identities for future-file additions and eleven code, fixture, build, tool,
+header and legal-notice edits. The future-file control requires the retained
+bytes too, so an empty directory cannot satisfy it. Relative source symlinks
+and a directory ending in `.md` remain usable. All 18 controls pass.
+
+Before filtering, the complete-file-set, two relocation, documentation and
+metadata controls failed; all required-input changes already passed. A second
+regression made unexpected stderr fail the check and exposed read-only private
+store cleanup that the old EXIT trap had silently ignored. Cleanup now restores
+permissions only within the test-owned store, checks deletion and preserves
+the test's failure status. The passing gate produces no unexpected stderr.
+
+The final complete suite passed against the filtered tree, including native
+codec tests, 76 C ABI assertions, 84 CLI checks, installed statistics controls,
+the production build, all four cross-link gates, closure validation and the
+three no-C consumer controls. All eleven manifest targets were realized.
+Preparation took 226 seconds, including compilation and test execution; the
+complete entry point then took 21 seconds with prepared Nix results. These
+durations do not isolate fresh test execution. Actual CI reuse remains to be
+qualified against the published commit; a cached Nix check does not demonstrate
+a new test execution time.

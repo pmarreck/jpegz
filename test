@@ -31,6 +31,9 @@ run_check "dev shell package metadata" \
 run_check "codec source compatibility controls" \
 	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".dependency-compatibility --no-link --print-build-logs
 
+run_check "source input identity controls" \
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".source-inputs --no-link --print-build-logs
+
 run_check "zig unit tests (nix flake check .#test)" \
 	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".test --print-build-logs
 

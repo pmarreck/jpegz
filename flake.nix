@@ -32,6 +32,8 @@
         pkgs = import nixpkgs { inherit system; };
         isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
         isLinux = pkgs.stdenv.hostPlatform.isLinux;
+		sourceFor = import ./nix/source.nix { lib = pkgs.lib; };
+		buildSource = sourceFor ./.;
 
         zigPkg = zig-overlay.packages.${system}."0.16.0";
 
@@ -188,7 +190,7 @@
           (builtins.readFile ./build.zig.zon); pkgs.stdenv.mkDerivation {
           pname = "jpegz-zig-deps";
           version = "0.1.0";
-          src = ./.;
+          src = buildSource;
           nativeBuildInputs = commonNativeBuildInputs;
           dontConfigure = true;
           outputHashMode = "recursive";
@@ -206,10 +208,37 @@
           dontFixup = true;
         };
 
+		sourceInputCheck = pkgs.stdenv.mkDerivation {
+			pname = "jpegz-source-inputs";
+			version = "0.0.1";
+			src = buildSource;
+			nativeBuildInputs = [ (pkgs.lib.getBin pkgs.nix) pkgs.jq ];
+			JPEGZ_TEST_NIXPKGS_LIB = "${nixpkgs}/lib";
+			dontConfigure = true;
+			buildPhase = ''
+				export HOME=$TMPDIR
+				if bash tests/cli/nix_source.bash > source-controls.out 2> source-controls.err; then
+					status=0
+				else
+					status=$?
+				fi
+				cat source-controls.out
+				if [ "$status" -ne 0 ] || [ -s source-controls.err ]; then
+					echo "source input controls failed or wrote unexpected stderr" >&2
+					head -n 20 source-controls.err >&2
+					exit 1
+				fi
+			'';
+			installPhase = ''
+				mkdir -p $out
+				echo "source input controls passed" > $out/result
+			'';
+		};
+
 		noCConsumerCheck = pkgs.stdenv.mkDerivation {
 			pname = "jpegz-no-c-consumer";
 			version = "0.0.1";
-			src = ./.;
+			src = buildSource;
 			nativeBuildInputs = [ zigPkg ];
 			dontConfigure = true;
 			buildPhase = ''
@@ -226,7 +255,7 @@
           pkgs.stdenv.mkDerivation {
             pname = "jpegz";
             version = "0.0.1";
-            src = ./.;
+            src = buildSource;
             nativeBuildInputs = commonNativeBuildInputs;
             buildInputs = commonBuildInputs
               ++ pkgs.lib.optionals isDarwin [ pkgs.apple-sdk ];
@@ -256,7 +285,7 @@
         jpegzTestCheck = pkgs.stdenv.mkDerivation {
           pname = "jpegz-tests";
           version = "0.0.1";
-          src = ./.;
+          src = buildSource;
           nativeBuildInputs = commonNativeBuildInputs;
           buildInputs = commonBuildInputs
             ++ pkgs.lib.optionals isDarwin [ pkgs.apple-sdk ];
@@ -307,7 +336,7 @@
         mkCrossLinkCheck = crossTarget: pkgs.stdenv.mkDerivation {
           pname = "jpegz-cross-${crossTarget}";
           version = "0.0.1";
-          src = ./.;
+          src = buildSource;
           nativeBuildInputs = commonNativeBuildInputs;
           dontConfigure = true;
           buildPhase = ''
@@ -328,7 +357,7 @@
         validatorPackage = pkgs.stdenv.mkDerivation {
           pname = "jpegz-validator-proof";
           version = "0.1.0";
-          src = ./.;
+          src = buildSource;
           nativeBuildInputs = commonNativeBuildInputs;
           buildInputs = [ brotliPkg ];
           dontConfigure = true;
@@ -380,6 +409,7 @@
 
         checks = {
           dependency-compatibility = dependencyCompatibilityCheck;
+		  source-inputs = sourceInputCheck;
 		  no-c-consumer = noCConsumerCheck;
           build = self.packages.${system}.default;
           test = jpegzTestCheck;

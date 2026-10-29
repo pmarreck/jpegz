@@ -8,8 +8,8 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; client terminal and activation shortcut requested, settings unchanged.
 - [x] Re-lock tools/coverage to corruption_reader 1ec8cbe, reaching performance_profiling 01ae85b and printable_binary cdefa95; refresh both nixpkgs locks to 58deea6, pass full ./test and a 60-case three-format real-tool smoke; JPEG-LS pristine gate remains open (done 2026-10-28 19:53 EDT; delivered by this change).
 - [x] Expose coverage-stats through a declared Nix output, replace its dev-shell compiler bootstrap, reject unusable artifacts before mutation and pass installed-copy controls plus full ./test (done 2026-10-28 19:53 EDT; delivered by this change).
-- [ ] Resolve the corruption-coverage default JPEG-LS fixture mismatch: strict validation intentionally returns indeterminate, so the pristine gate refuses it; preserve unsupported classifications and the reported denominator.
-- [ ] Reconcile the October 14 inbox with published f1a255a and later yolo c8937a7. The provider hold is released for pin adoption and the sampling packet stays held. Advance one unblocked milestone and send the coordinator a receipt with any genuine owner decisions.
+- [ ] Resolve the corruption-coverage default JPEG-LS fixture mismatch; owner choice requested among three supported defaults, an audited inconclusive JPEG-LS control, or retaining the blocked campaign; preserve classifications and denominators.
+- [ ] Reconcile the October 14 inbox with published f1a255a and later yolo c8937a7; bounded fixes and fresh tooling shipped, remaining owner decisions requested from the coordinator; provider pin hold is released and sampling stays held.
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
 - [ ] Keep the published JP2 pin and its real Nix closure hash; do not restore draft pin 54531e26 or any placeholder hash.
 - [x] Mirror approved JP2 finding 261 through Zig/C wire identity and classify its proven violation as corrupt regardless of severity; preserve conditional 252 treatment, keep unknown codes inconclusive, and pass full ./test (done 2026-10-28 19:06 EDT; delivered by this change).
@@ -17,8 +17,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Priority: Validate false FAILs and labels (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md)
 
 - [x] Reject additional sequential Huffman SOS after complete component coverage with exact FAIL 55; skip opaque metadata, stop at first EOI and preserve missing-EOI decode outcomes; full ./test passes (done 2026-10-28 17:21 EDT; delivered by this change).
-- [x] Apply FAIL 62 to mixed padding in progressive and lossless Huffman scans at exact absolute pad-byte offsets, including strict decode and lenient restart recovery, without generic 51 duplication; arithmetic stays excluded (done 2026-10-28 15:52 EDT; delivered by this change).
-- [x] Give repeated T.81 SOS selectors and invalid sequential Ns exact finding 55, and bad sequential Ls exact finding 4, before entropy decoding; reserve the scan tail when Ns is excessive; full ./test and valid four-component controls pass (done 2026-10-28 16:51 EDT; delivered by this change).
 
 ## Priority: Validate September 30 work order
 
@@ -39,7 +37,8 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Existing ordered follow-ups
 
-- [ ] Finish libjxlz benchmark-history publication coordination and the separate arithmetic scaling sweep; September 28 inspection finds local baseline 923d3c4c committed but the September 20 release-of-hold note still pending and the sibling PLAN still waiting for that baseline (context: docs/plan_context/pre-canon-2026-09-24.md).
+- [ ] Complete the separate libjxlz arithmetic scaling sweep; published e1c521d contains baseline 923d3c4c unchanged (228 fixed-size rows, hash verified), and the provider has a request for published scaling evidence or a bounded sweep (context: docs/plan_context/pre-canon-2026-09-24.md).
+- [x] Verify libjxlz benchmark-history publication: 923d3c4c is an ancestor of published e1c521d, and all 228 fixed-size rows retain SHA-256 3e7b42191359de69231e34e4f235480f655b6a632fbd033599c50a60fbe83195; scaling remains a separate request (done 2026-10-28 20:15 EDT).
 - [ ] Adjudicate validate's 170-byte XOR sweep and proposed marker/JFIF/DQT/SOS checks against normative clauses and valid controls (context: docs/plan_context/pre-canon-2026-09-24.md).
 - [ ] Evaluate validate's coverage-range API without exempting whole constrained segments or changing denominators to improve scores.
 - [ ] Review newly published jp2z/libjxlz work before future pin changes; verify private-source access and preserve strict corruption precedence.
@@ -57,7 +56,8 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Build and CLI
 
-- [ ] Investigate gate feedback latency, whole-tree Nix source inputs and artifact reuse; measure compilation, queue/setup and test execution separately while preserving complete coverage (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
+- [x] Stabilize Nix source identity across relocation and documentation/CI-record edits, retain required inputs and future-file bytes, and pass 18 source controls plus full ./test with all 11 manifest targets (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 20:17 EDT; delivered by this change).
+- [ ] Measure fresh test execution separately from admission, dependency setup, evaluation and compilation; preserve complete coverage, report the one-second target/five-second budget and qualify actual CI artifact reuse (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
 - [x] Move no-C consumer compilation into a Nix check with all three paired controls and disposable scratch; full ./test passes and the exact-commit manifest includes the check (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 19:53 EDT; delivered by this change).
 - [ ] Port the requested upstream-first dependency-freshness gate with sibling fallback and set tests for current, stale, missing, offline and ahead-of-sibling cases.
 - [ ] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks; coordinate the unnecessary encoder linkage with libjxlz.

@@ -1,6 +1,7 @@
 # Mechatron Prime CI builds these Nix checks on pushes to yolo.
 # Each target also runs through ./test.
 checks.x86_64-linux.dependency-compatibility
+checks.x86_64-linux.source-inputs
 checks.x86_64-linux.no-c-consumer
 checks.x86_64-linux.test
 checks.x86_64-linux.build
