@@ -701,6 +701,13 @@ three indeterminate; these remain operational outcomes, not a malformed
 detection rate. Future-version rows 11 and 12 remain for the separate
 approved code-67 capability notice.
 
+Published `0fb594726e877f290887b37efe1dcabe7ccddcde` passed all eleven
+exact-commit CI targets October 29 15:31:32Z..15:31:52Z (20 seconds, prepared
+artifact reuse). Its fetched archive hash is
+`jpegz-0.1.0-staw4HzTFAACqTczZTg6aBgqut1SQnmGNRnlzJjv0_yW`.
+The coordinator and consumers received the immutable historical-units receipt
+before the separate code-67 unit started. Adoption remains unverified.
+
 The next version-adjudication unit has a separate coordinator question for
 candidate 67 `jfif_version_unchecked`. The proposed initial scope is complete
 recognized headers with major greater than 1, or major 1/minor greater than 2,
@@ -740,6 +747,49 @@ This supports a shared-header compatibility argument; it is historical
 implementation evidence, not the original 1.01 normative text. The writer
 copies the unsigned units byte without range validation. Neither that
 permissiveness nor successful reader recovery proves every value legal.
-The coordinator has the evidence for independent review against the earlier
-allocation condition. No 1.01 rejection has been added, and any accepted
-extension will follow the current location/code-66 unit separately.
+The coordinator independently confirmed the archive and shared-header units
+contract, then approved the separate 1.01 extension published in `0fb5947`.
+This evidence does not retroactively validate the earlier unevidenced test.
+
+### Future JFIF version capability notice, October 29
+
+The separate approved code-67 unit follows published `0fb5947`. A fresh
+red check (`dikxcvp5jjxc2xl8pnlrq4bjf96x07hf-jpegz-tests`) reproduced two
+native failures, the C ABI verdict failure and twelve CLI failures: future
+versions incorrectly remained valid with exit zero. The implementation adds
+`jfif_version_unchecked` only for an available complete recognized APP0 base
+header, when major exceeds one or major is one and minor exceeds two.
+It reports WARN/indeterminate, with the exact major byte for a future major,
+otherwise the minor byte, and the full observed version in detail.
+
+The first passing native check covers both version-byte sets, threshold pairs,
+invalid-looking units without importing historical constraints, generic APP0
+identifiers, declared and physical header bounds, stable C ABI identity and
+134 CLI assertions. A pure classification test checks mixed causes in both
+orders. Actual reordered APP0 segments preserve both independent corruption
+and capability findings; known padding remains present when incomplete
+metadata checks require indeterminate. Corruption retains precedence. Older
+major zero and 1.00 exclusions remain explicit gaps. No decoder or dependency
+pin changes are included. Complete build/test verification and the identical
+170-case replay follow before publication.
+
+The unchanged-input replay then completed all 170 cases in two seconds, with
+90 corrupt, 75 valid and five indeterminate results, no unexpected outcome
+and no out-of-buffer locations. Only offsets 11 and 12 changed from valid to
+indeterminate compared with `0fb5947`; each retained WARN 67, its exact
+version byte, full version and CLI exit 3. The demonstrated-corruption count
+did not change. The production binary SHA-256 is
+`91d9d932ccbb3eb76852a39377326341e3d67e3c5e0a850a01461e3b5c0e48d5`.
+The read-only source SHA-256 remains
+`4d2181d706292465831abd1e3460e22a5518ac91a4bc2ae96d1e54f17f8068f2`.
+
+Complete verification passed with 197 C ABI assertions, 134 CLI assertions,
+all native tests, production artifacts, four cross-link targets, source and
+dependency controls, validation closure and the isolated no-C consumer.
+The first native build phase took 118 seconds, combining compilation and
+execution; later preparation reused that artifact and took 213 seconds.
+The unchanged complete `./test` entry point then passed in 15 seconds with
+prepared artifact reuse. These are correctness receipts, not fresh runtime
+budget passes. Fresh execution remains unseparated and the queued timing
+investigation remains open. The tested derivation is
+`cahniyn04xyb0hwdj07azb0cl3npf58v-jpegz-tests-0.0.1`.

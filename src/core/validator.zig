@@ -250,6 +250,16 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 					defer allocator.free(detail);
 					try addExactFinding(&report, allocator, .jfif_metadata_invalid, seg_body_start + 7, detail);
 				}
+				if (body.len >= jfif_header_bytes and std.mem.eql(u8, body[0..5], "JFIF\x00") and
+					(body[5] > 1 or (body[5] == 1 and body[6] > 2)))
+				{
+					const detail = try std.fmt.allocPrint(allocator,
+						"JFIF version {d}.{d:0>2}: metadata semantics are unchecked", .{ body[5], body[6] });
+					defer allocator.free(detail);
+					try addFinding(&report, allocator, .warn, .jfif_version_unchecked,
+						seg_body_start + (if (body[5] > 1) @as(usize, 5) else 6), detail);
+					report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
+				}
                 if (body.len >= 14 and std.mem.eql(u8, body[0..5], "JFIF\x00")) {
                     if (body[12] != 0 and body[13] != 0)
                         try addFinding(&report, allocator, .info, .embedded_thumbnail_present,

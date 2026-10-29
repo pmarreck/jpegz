@@ -85,3 +85,5 @@ Completed PLAN.md items retired by plan-retire, oldest retirement first.
 ## Retired 2026-10-29
 
 - [x] [Priority: dependency freshness] Reconcile the October 14 pin question: coordinator finds no additional hidden owner decision; the provider pin hold was released October 15, sampling remains held, and private replays, JP2 exactness and the two explicit owner questions retain separate items (done 2026-10-28 20:47 EDT; coordinator decision).
+- [x] [Existing ordered follow-ups] Reject invalid sequential SOS fields with approved append-only 64, exact original/host bytes and observed/required nibble details; all 256 values per field in SOF0/SOF1, C ABI and complete ./test pass; exact-commit CI follows publication (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-28 21:07 EDT; delivered by this change).
+- [x] [Existing ordered follow-ups] Reject zero DQT entries with exact finding 52; all 64 positions, legal 8/16-bit boundaries, half-zero words and 192 incomplete-table cases pass with complete ./test (done 2026-10-28 21:07 EDT; delivered by this change).

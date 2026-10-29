@@ -291,6 +291,35 @@ for minor in 01 02; do
 	assert_contains "$out" "JFIF 1.$minor metadata/profile violation" "JFIF 1.$minor detail names its evidenced version"
 done
 
+for version in '01 03' '02 00' 'fe 01'; do
+	read -r major minor <<< "$version"
+	capture bash -c '{ head -c 11 "$2"; printf "%b" "\\x$3\\x$4"; tail -c +14 "$2"; } | "$1" --json -' _ \
+		"$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg" "$major" "$minor"
+	[ "$rc" -eq 3 ] && pass "future JFIF $version exits inconclusive" || fail "future JFIF $version exits inconclusive" "rc=$rc"
+	assert_contains "$out" '"verdict":"indeterminate"' "future JFIF $version is incomplete checking"
+	assert_contains "$out" '"severity":"WARN","code":"jfif_version_unchecked"' "future JFIF $version has its typed capability cause"
+	if [ "$major" = 01 ]; then location=12; else location=11; fi
+	assert_contains "$out" "\"offset\":$location,\"host_offset\":$location,\"offset_is_exact\":true" "future JFIF $version retains the version-byte location"
+	printf -v observed 'JFIF version %d.%02d' "$((16#$major))" "$((16#$minor))"
+	assert_contains "$out" "$observed: metadata semantics are unchecked" "future JFIF $version detail names the unchecked version"
+done
+
+capture bash -c '{ head -c 11 "$2"; printf "\002"; tail -c +13 "$2"; } | "$1" --json -' _ "$jpegz_cli" "$known_defect"
+[ "$rc" -eq 3 ] && pass "future metadata outranks known padding" || fail "future metadata outranks known padding" "rc=$rc"
+assert_contains "$out" '"code":"entropy_padding_zero_bits"' "inconclusive metadata retains the known-defect cause"
+assert_contains "$out" '"code":"jfif_version_unchecked"' "known padding retains the incomplete-check cause"
+
+for reverse in 0 1; do
+	capture bash -c '
+		future() { head -c 11 "$2"; printf "\002"; dd if="$2" bs=1 skip=12 count=8 status=none; }
+		invalid() { printf "\377\340\000\020JFIF\000\001\002\377\000\001\000\001\000\000"; }
+		{ head -c 2 "$2"; if [ "$3" -eq 0 ]; then future "$@" | tail -c +3; invalid; else invalid; future "$@" | tail -c +3; fi; tail -c +21 "$2"; } | "$1" --json -
+	' _ "$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg" "$reverse"
+	[ "$rc" -eq 1 ] && pass "corruption beats future metadata order $reverse" || fail "corruption beats future metadata order $reverse" "rc=$rc"
+	assert_contains "$out" '"severity":"FAIL","code":"jfif_metadata_invalid"' "mixed metadata order $reverse retains corruption"
+	assert_contains "$out" '"severity":"WARN","code":"jfif_version_unchecked"' "mixed metadata order $reverse retains incomplete checking"
+done
+
 for marker in 1f 00; do
 	capture bash -c '{ head -c 3 "$2"; printf "%b" "\\x$3"; tail -c +5 "$2"; } | "$1" --json -' _ \
 		"$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg" "$marker"

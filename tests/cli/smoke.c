@@ -127,6 +127,10 @@ int main(void) {
 		       "sampling finding appends 66 and preserves metadata 65");
 		ASSERT(strcmp(jpegz_finding_code_name((jpegz_finding_code_t)66), "sof_sampling_invalid") == 0,
 		       "sampling finding has its stable C ABI name");
+		ASSERT(JPEGZ_FINDING_JFIF_VERSION_UNCHECKED == 67 && JPEGZ_FINDING_SOF_SAMPLING_INVALID == 66,
+		       "future JFIF coverage finding appends 67 and preserves 66");
+		ASSERT(strcmp(jpegz_finding_code_name((jpegz_finding_code_t)67), "jfif_version_unchecked") == 0,
+		       "future JFIF coverage finding has its stable C ABI name");
 
         /* Distinct codes must not collapse onto one string — a table that
          * returns the same label for everything would pass a single-value
@@ -437,7 +441,7 @@ int main(void) {
 						ASSERT(detail, "JFIF metadata detail gives observed and allowed unit values");
 					}
 					jpegz_strict_result_free(&r);
-			}
+				}
 			}
 			free(copy);
 		}
@@ -506,6 +510,42 @@ int main(void) {
 			ASSERT(f.detail != NULL && strstr(f.detail, "65539") != NULL,
 			       "declared segment extent remains available in diagnostic detail");
 			jpegz_strict_result_free(&r);
+			free(copy);
+		}
+
+		{
+			const struct { uint8_t major, minor; size_t offset; } cases[] = {
+				{1, 3, 12}, {1, 255, 12}, {2, 0, 11}, {254, 1, 11},
+			};
+			uint8_t *copy = malloc(baseline_2x2_rgb_len);
+			ASSERT(copy != NULL, "future JFIF control buffer allocated");
+			for (size_t c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+				memcpy(copy, baseline_2x2_rgb, baseline_2x2_rgb_len);
+				copy[11] = cases[c].major;
+				copy[12] = cases[c].minor;
+				copy[13] = 255;
+				jpegz_strict_result_t r = {0};
+				ASSERT(jpegz_validate_any(copy, baseline_2x2_rgb_len, &r) == JPEGZ_OK,
+				       "future JFIF validation returns through the ABI");
+				ASSERT(r.verdict == JPEGZ_VERDICT_INDETERMINATE,
+				       "future metadata semantics are inconclusive without claiming corruption");
+				size_t notices = 0;
+				int correct = 1;
+				char observed[32];
+				snprintf(observed, sizeof observed, "JFIF version %u.%02u", cases[c].major, cases[c].minor);
+				for (size_t i = 0; i < r.findings_len; i++) {
+					const jpegz_strict_finding_t f = r.findings[i];
+					correct &= f.severity != JPEGZ_SEVERITY_FAIL;
+					if (f.code != JPEGZ_FINDING_JFIF_VERSION_UNCHECKED) continue;
+					notices++;
+					correct &= f.severity == JPEGZ_SEVERITY_WARN && f.offset == (int64_t)cases[c].offset &&
+						f.host_offset == f.offset && f.offset_is_exact;
+					correct &= f.detail != NULL && strstr(f.detail, observed) != NULL &&
+						strstr(f.detail, "metadata semantics are unchecked") != NULL;
+				}
+				ASSERT(correct && notices == 1, "future JFIF notice retains its severity and exact version byte");
+				jpegz_strict_result_free(&r);
+			}
 			free(copy);
 		}
 

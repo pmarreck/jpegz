@@ -354,6 +354,132 @@ test "SOF3 standalone markers cannot masquerade as unsupported length-prefixed s
 	}
 }
 
+test "future JFIF version bytes classify coverage without asserting corruption" {
+	const allocator = std.testing.allocator;
+	const pristine = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	for ([_]usize{ 11, 12 }) |field| {
+		for (0..256) |value| {
+			const data = try allocator.dupe(u8, pristine);
+			defer allocator.free(data);
+			data[field] = @intCast(value);
+			const future = if (field == 11) value > 1 else value > 2;
+			var result = try jpegz.validateAny(allocator, data);
+			defer result.deinit(allocator);
+			var notices: usize = 0;
+			for (result.findings.items) |finding| {
+				if (finding.code != .jfif_version_unchecked) continue;
+				notices += 1;
+				try std.testing.expectEqual(jpegz.Severity.warn, finding.severity);
+				try std.testing.expectEqual(@as(?u64, field), finding.offset);
+				try std.testing.expectEqual(finding.offset, finding.host_offset);
+				try std.testing.expect(finding.offset_is_exact);
+			}
+			if (future) {
+				try std.testing.expectEqual(jpegz.StrictVerdict.indeterminate, result.verdict);
+				try std.testing.expectEqual(@as(usize, 1), notices);
+			} else {
+				try std.testing.expectEqual(@as(usize, 0), notices);
+				// The older exclusions do not establish conformance.
+				if (data[11] == 1 and (data[12] == 1 or data[12] == 2))
+					try std.testing.expectEqual(jpegz.StrictVerdict.valid, result.verdict);
+			}
+		}
+	}
+	const pairs = [_][2]u8{ .{ 1, 2 }, .{ 1, 3 }, .{ 1, 255 }, .{ 2, 0 }, .{ 255, 255 } };
+	for (pairs, 0..) |version, index| {
+		const data = try allocator.dupe(u8, pristine);
+		defer allocator.free(data);
+		data[11] = version[0];
+		data[12] = version[1];
+		if (index != 0) data[13] = 255; // Future units semantics are not established.
+		var result = try jpegz.validateAny(allocator, data);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(if (index == 0) jpegz.StrictVerdict.valid else .indeterminate, result.verdict);
+		for (result.findings.items) |finding|
+			try std.testing.expect(finding.code != .jfif_metadata_invalid);
+	}
+}
+
+test "future JFIF notices require the recognized complete header" {
+	const allocator = std.testing.allocator;
+	const pristine = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	for (0..5) |field| {
+		const data = try allocator.dupe(u8, pristine);
+		defer allocator.free(data);
+		data[6 + field] ^= 0xff;
+		data[11] = 2;
+		var result = try jpegz.validateAny(allocator, data);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(jpegz.StrictVerdict.valid, result.verdict);
+		for (result.findings.items) |finding|
+			try std.testing.expect(finding.code != .jfif_version_unchecked);
+	}
+	const body = [_]u8{ 'J', 'F', 'I', 'F', 0, 2, 0, 255, 0, 1, 0, 1, 0, 0 };
+	for (0..body.len + 1) |length| {
+		const header = [_]u8{ 0xff, 0xd8, 0xff, 0xe0, 0, @intCast(length + 2) };
+		const data = try std.mem.concat(allocator, u8, &.{ &header, body[0..length], pristine[20..] });
+		defer allocator.free(data);
+		var result = try jpegz.validateAny(allocator, data);
+		defer result.deinit(allocator);
+		var notices: usize = 0;
+		for (result.findings.items) |finding| {
+			if (finding.code == .jfif_version_unchecked) notices += 1;
+		}
+		try std.testing.expectEqual(@as(usize, @intFromBool(length == body.len)), notices);
+	}
+	const complete = [_]u8{ 0xff, 0xd8, 0xff, 0xe0, 0, 16 } ++ body;
+	for (0..complete.len) |length| {
+		var result = try jpegz.validateAny(allocator, complete[0..length]);
+		defer result.deinit(allocator);
+		for (result.findings.items) |finding|
+			try std.testing.expect(finding.code != .jfif_version_unchecked);
+	}
+}
+
+test "future JFIF preserves known padding and independently corrupt metadata in either order" {
+	const allocator = std.testing.allocator;
+	const padded = @embedFile("fixtures/zero_pad_16x16_420.jpg");
+	var future_padding = padded.*;
+	future_padding[11] = 2;
+	var padding = try jpegz.validateAny(allocator, &future_padding);
+	defer padding.deinit(allocator);
+	try std.testing.expectEqual(jpegz.StrictVerdict.indeterminate, padding.verdict);
+	var causes: u8 = 0;
+	for (padding.findings.items) |finding| {
+		if (finding.code == .jfif_version_unchecked) causes |= 1;
+		if (finding.code == .entropy_padding_zero_bits) causes |= 2;
+		try std.testing.expect(finding.severity != .fail);
+	}
+	try std.testing.expectEqual(@as(u8, 3), causes);
+
+	const pristine = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	// A second, known-version APP0 has a separately proven invalid units byte.
+	// Swapping the two APP0 segments reverses the actual finding order.
+	const invalid_units = [_]u8{ 0xff, 0xe0, 0, 16, 'J', 'F', 'I', 'F', 0, 1, 2, 255, 0, 1, 0, 1, 0, 0 };
+	var future_header = pristine[2..20].*;
+	future_header[9] = 2;
+	for ([_]bool{ false, true }) |reverse| {
+		const first: []const u8 = if (reverse) &invalid_units else &future_header;
+		const second: []const u8 = if (reverse) &future_header else &invalid_units;
+		const data = try std.mem.concat(allocator, u8, &.{ pristine[0..2], first, second, pristine[20..] });
+		defer allocator.free(data);
+		var result = try jpegz.validateAny(allocator, data);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
+		var ordered: [2]jpegz.FindingCode = undefined;
+		var count: usize = 0;
+		for (result.findings.items) |finding| {
+			if (finding.code != .jfif_version_unchecked and finding.code != .jfif_metadata_invalid) continue;
+			try std.testing.expect(count < ordered.len);
+			ordered[count] = finding.code.?;
+			count += 1;
+		}
+		try std.testing.expectEqual(@as(usize, 2), count);
+		try std.testing.expectEqual(if (reverse) jpegz.FindingCode.jfif_metadata_invalid else .jfif_version_unchecked, ordered[0]);
+		try std.testing.expectEqual(if (reverse) jpegz.FindingCode.jfif_version_unchecked else .jfif_metadata_invalid, ordered[1]);
+	}
+}
+
 test "classic strict findings retain bounded positions and declared segment extents" {
 	const allocator = std.testing.allocator;
 	const pristine = @embedFile("fixtures/baseline_2x2_rgb.jpg");

@@ -120,6 +120,17 @@ It does not establish rules for other versions, density, thumbnail lengths
 or precision.
 Generic application payloads retain their independent interpretation.
 
+A complete recognized JFIF APP0 header declaring major greater than 1, or
+major 1/minor greater than 2, reports WARN 67 `jfif_version_unchecked`.
+Its strict verdict is indeterminate (CLI exit 3) unless independent corruption
+is established. The exact location names the major byte for a future major,
+otherwise the minor byte; detail retains the full observed version and the
+unchecked metadata semantics. Historical units rules do not apply to these
+future versions. An incomplete header or generic application payload does not
+establish this notice. Major zero and 1.00 remain outside its initial scope,
+without a claim of complete conformance. A known-padding cause is retained,
+while incomplete metadata checks take precedence over a known-defect verdict.
+
 Reserved FF02..FFBF markers report warning 5 with an indeterminate strict
 verdict because their semantics are unchecked. A zero marker byte outside
 entropy is forbidden and reports FAIL 5. Both retain their original and

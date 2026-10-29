@@ -35,7 +35,7 @@ annotate=[
 	include/jpegz_core.h = Hand-curated public C ABI header (jpegz_decode/validate/free/version)
 	nix/source.nix = Stable Nix source identity with scoped documentation exclusions and retained legal notices
 	src/cli/jpegz.c = C ABI validation CLI with typed findings, JSON and distinct exits for known defects and inconclusive input
-	src/core/errors.zig = Append-only findings with approved SOS 64, JFIF 65 and single-component sampling 66
+	src/core/errors.zig = Stable append-only validation findings, including future JFIF coverage notice 67
 	src/core/last_error.zig = Thread-local last-error message buffer backing the C ABI
 	src/core/types.zig = Core public types: Image, ImageMetadata, ColorSpace, PixelLayout
 	src/core/validator.zig = Bounded JPEG headers, evidenced JFIF 1.01/1.02 units and scalar sampling findings
@@ -78,7 +78,7 @@ annotate=[
 	tests/cli/smoke.c = C ABI finding identities, exact fields, unknown positions, decoding and streaming controls
 	tests/cli/validate_cli.bash = Real C CLI verdicts, return codes, JSON locations, options and locale controls
 	tests/nix/source.nix = Source file-set and derivation identity controls over disposable fixtures
-	tests/unit/facade_validation.zig = Strict verdict classifiers, bounded positions and retained extent evidence
+	tests/unit/facade_validation.zig = Strict verdict, bounded location and mixed-cause precedence regressions
 	tests/unit/fixtures/JXL_VALIDATION_PROVENANCE.md = Exact libjxlz source paths, SHA-256 values, and expected four-way fixture outcomes.
 	tests/unit/fixtures/baseline_16x16_rgb_marked.jpg = RGB-marked baseline JPEG (Adobe APP14 transform=0) — gap-D cleanroom RGB-passthrough test fixture
 	tests/unit/fixtures/seq_16x16_3scan.jpg = Validate's three-scan non-interleaved sequential JPEG (cjpeg -scans 0;1;2), former false FAIL

@@ -493,6 +493,26 @@ pub const sniff = facade.sniff;
 /// classified result, so a caller reading `validateAny` never has to know which
 /// leg answered. Recovered entropy truncation and restart faults are corrupt;
 /// legal fill and metadata warnings do not invalidate an otherwise sound file.
+fn classifyClassicFindings(initial: StrictVerdict, findings: []const Finding) StrictVerdict {
+	var verdict = initial;
+	var known_defect = false;
+	var unchecked_marker = false;
+	var unchecked_version = false;
+	for (findings) |finding| {
+		switch (finding.code) {
+			.missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => verdict = .corrupt,
+			.entropy_padding_zero_bits => known_defect = true,
+			.unknown_marker => unchecked_marker = true,
+			.jfif_version_unchecked => unchecked_version = true,
+			else => {},
+		}
+	}
+	if (verdict == .corrupt) return .corrupt;
+	if (unchecked_version or (unchecked_marker and verdict == .valid)) return .indeterminate;
+	if (known_defect and verdict == .valid) return .known_defect;
+	return verdict;
+}
+
 fn strictFromReport(
     allocator: Allocator,
     data: []const u8,
@@ -514,15 +534,8 @@ fn strictFromReport(
     };
     errdefer result.deinit(allocator);
     try result.findings.ensureTotalCapacity(allocator, report.findings.items.len);
-    var known_defect = false;
-	var unchecked_marker = false;
+    result.verdict = classifyClassicFindings(result.verdict, report.findings.items);
     for (report.findings.items) |finding| {
-        switch (finding.code) {
-            .missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => result.verdict = .corrupt,
-            .entropy_padding_zero_bits => known_defect = true,
-			.unknown_marker => unchecked_marker = true,
-            else => {},
-        }
 		const offset: ?u64 = if (finding.offset) |value|
 			(if (value <= data.len) value else null)
 		else
@@ -545,11 +558,6 @@ fn strictFromReport(
             .detail = detail,
         });
     }
-	if (unchecked_marker and result.verdict == .valid) result.verdict = .indeterminate;
-    // Recognition belongs to the codec. Neither a warning alone nor a
-    // successful decode admits a known defect; incomplete checks and damage
-    // retain precedence even when this recognized pattern is also present.
-    if (known_defect and result.verdict == .valid) result.verdict = .known_defect;
     return result;
 }
 
@@ -961,6 +969,24 @@ pub const internal = struct {
 
 test "version is non-empty" {
     try std.testing.expect(version.len > 0);
+}
+
+test "classic finding precedence is independent of finding order" {
+	const Case = struct { initial: StrictVerdict, other: FindingCode, severity: Severity, expected: StrictVerdict };
+	const cases = [_]Case{
+		.{ .initial = .valid, .other = .entropy_padding_zero_bits, .severity = .warn, .expected = .indeterminate },
+		.{ .initial = .unsupported, .other = .entropy_padding_zero_bits, .severity = .warn, .expected = .indeterminate },
+		.{ .initial = .valid, .other = .insufficient_data, .severity = .warn, .expected = .corrupt },
+		.{ .initial = .corrupt, .other = .quantization_table_corrupt, .severity = .fail, .expected = .corrupt },
+	};
+	for (cases) |case| {
+		const notice = Finding{ .severity = .warn, .code = .jfif_version_unchecked };
+		const other = Finding{ .severity = case.severity, .code = case.other };
+		try std.testing.expectEqual(case.expected, classifyClassicFindings(case.initial, &.{ notice, other }));
+		try std.testing.expectEqual(case.expected, classifyClassicFindings(case.initial, &.{ other, notice }));
+	}
+	try std.testing.expectEqual(StrictVerdict.unsupported,
+		classifyClassicFindings(.unsupported, &.{.{ .severity = .info, .code = .unknown_marker }}));
 }
 
 test "Image.rowStride for 8-bit RGB" {
