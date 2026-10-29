@@ -793,3 +793,87 @@ prepared artifact reuse. These are correctness receipts, not fresh runtime
 budget passes. Fresh execution remains unseparated and the queued timing
 investigation remains open. The tested derivation is
 `cahniyn04xyb0hwdj07azb0cl3npf58v-jpegz-tests-0.0.1`.
+
+Published `a7ddd65702a686775ad4b996099930df9ab177c9` passed all eleven
+exact-commit CI targets October 29 15:56:10Z..15:56:28Z (18 seconds,
+prepared reuse). The fetched package hash is
+`jpegz-0.1.0-staw4LsCFQAiigXYSrc7KCGlDJsc91l5SXdPkqV_YMoz`.
+Immutable registry and package receipts reached the coordinator, Validate,
+tiffz, rawz and jp2z; the coordinator also received a verified native-thread
+pointer. Delivery does not establish adoption or private replay qualification.
+
+### Original survivor-set adjudication
+
+The original 83-survivor set now has these bounded labels. Each row describes
+the actual XOR-255 change, not all possible values of the field.
+
+| Offsets | Cases | Label and reason |
+| --- | ---: | --- |
+| 3 | 1 | Indeterminate: reserved FF1F semantics are unchecked, finding 5. |
+| 6..10 | 5 | Valid generic APP0 payloads after changing the JFIF identifier. |
+| 11..12 | 2 | Indeterminate: future JFIF metadata semantics, finding 67. |
+| 13 | 1 | Corrupt: units 255 violate the evidenced 1.01 units contract, finding 65. |
+| 14..17 | 4 | Valid: changed density remains nonzero; it can describe a different valid aspect ratio or density. |
+| 18..19 | 2 | Valid: the other thumbnail dimension remains zero, so the thumbnail product remains zero. |
+| 25..88 | 64 | Valid: quantizers remain nonzero; changed decoded samples do not prove corruption. |
+| 100 | 1 | Corrupt: sampling 0xEE has both factors outside 1..4, finding 66. |
+| 157..159 | 3 | Corrupt: sequential Ss, Se or Ah/Al violates the required scan parameters, finding 64. |
+
+Thus the original subset has 75 valid, five corrupt and three indeterminate
+cases. The full 170-case cohort has 90 corrupt, 75 valid and five
+indeterminate; the additional inconclusive cases destroy the recognizable
+signature. The original sweep is adjudicated to these evidence boundaries.
+These operational counts are not a malformed-detection rate, and the three
+unchecked original survivors have not been relabeled corrupt. Unchecked
+future metadata, older excluded versions and broader format coverage remain
+limitations; this does not establish every JFIF density, thumbnail-length or
+precision constraint for every edition.
+
+### Coverage-range API evaluation, October 29
+
+The inspected Validate files match commit
+`ac4270cf3d0e43a1464787007eb52e3276ed62e1` without local changes:
+`src/core/validation_result.zig`, `src/core/test_coverage.zig` and
+`src/core/jpeg_validator.zig`. This is source inspection, not a fresh Validate
+test run or consumer adoption receipt.
+
+`ValidationResult.noteUnexaminable(start, len, reason)` records pristine-input
+ranges described as carrying no integrity signal under format semantics.
+`CoverageConfig.unexaminable` feeds `eventIsExaminable`: a mutation is excluded
+from secondary must-detect statistics only when every touched byte belongs
+to the union of declared ranges. Sparse shotgun classification uses actual
+pellet bytes, rather than its whole window. Overall total/detected counts
+remain separate. The list has capacity eight and retains overflow counts and
+byte totals, while omitted positions cannot participate in the range union.
+
+That contract cannot safely describe constrained JPEG fields merely because
+the observed mutation produced a valid alternative. Existing independently
+grounded controls provide concrete counterexamples to blanket declarations:
+
+- Every DQT entry must be nonzero. The original XOR changes stay nonzero, but
+  a zero mutation at each of the same 64 positions produces typed failure 52.
+- JFIF identifier, version and units fields change how a payload is interpreted.
+  APP0 bounds and version-scoped constraints still apply; a complete segment
+  cannot be exempted because some identifier or density changes are valid.
+- Density and thumbnail fields have joint and edition-specific semantics.
+  A legal observed value does not establish that every replacement is legal.
+- Entropy bytes interleave coded symbols, padding, stuffing and markers.
+  A different decodable image does not make the whole entropy span unconstrained.
+- Reserved markers, future versions and unsupported processes identify
+  incomplete checking. They are not evidence that the format has no rule.
+
+Recommendation: export no blanket jpegz ranges for these fields or segments.
+Keep the unchanged 170-case total and evidence-backed per-mutant labels beside
+the operational verdicts. A future genuinely unconstrained-payload API needs
+an explicit typed reason distinct from unsupported/unimplemented validation,
+original-buffer half-open bounds (`start <= input.len`,
+`length <= input.len - start`), defined overlap/overflow handling and separate
+host translation. Its acceptance controls must include mutations across every
+range boundary, mixed constrained/unconstrained events, sparse pellets and
+counterexamples inside any proposed range. New source or target signatures,
+allocations and range declarations are not introduced by this evaluation.
+
+The current JPEG adapter still consumes the severity-oriented report in the
+inspected Validate revision. Its successful warning policy must not be treated
+as proof that the new strict KNOWN_DEFECT or indeterminate classifications
+have been adopted. The existing provider-chain adoption work remains open.
