@@ -64,7 +64,7 @@ annotate=[
 	src/ffi/c_common.zig = Shared C-ABI marshaling helpers (allocator, last-error, status/finding conversion) for both ABI archives
 	src/ffi/charls_wrapper.zig = charls (BSD) wrapper for JPEG-LS decode
 	src/ffi/libjpeg_wrapper.zig = libjpeg-turbo wrapper: fallback decode + byte-perfect oracle; setjmp/longjmp error bridge
-	src/ffi/openjpeg_wrapper.zig = openjpeg wrapper for jpeg2000.decode (JP2 box vs raw J2K)
+	src/ffi/openjpeg_wrapper.zig = OpenJPEG pixel adapter with component bounds checked before narrowing
 	src/i18n/locale.zig = Locale enum (canonical 50), longest-match tag parser with zh region folding, and --lang/env precedence resolution
 	src/jpegz.zig = JPEG API with bounded strict positions and corruption, incomplete-check and known-defect precedence
 	src/lib_root.zig = Static-library-only root; force-links the C ABI so the importable module root stays free of C deps
@@ -78,9 +78,18 @@ annotate=[
 	tests/cli/smoke.c = C ABI finding identities, exact fields, unknown positions, decoding and streaming controls
 	tests/cli/validate_cli.bash = Real C CLI verdicts, return codes, JSON locations, options and locale controls
 	tests/nix/source.nix = Source file-set and derivation identity controls over disposable fixtures
+	tests/unit/decode_jp2.zig = JPEG 2000 pixel oracles and typed refusal of component counts before narrowing
 	tests/unit/facade_validation.zig = Strict verdict, bounded location and mixed-cause precedence regressions
 	tests/unit/fixtures/JXL_VALIDATION_PROVENANCE.md = Exact libjxlz source paths, SHA-256 values, and expected four-way fixture outcomes.
 	tests/unit/fixtures/baseline_16x16_rgb_marked.jpg = RGB-marked baseline JPEG (Adobe APP14 transform=0) — gap-D cleanroom RGB-passthrough test fixture
+	tests/unit/fixtures/jp2_1x1_1_components.j2k = Generated one-pixel 1-component J2K layout control, independently decoded by OpenJPEG
+	tests/unit/fixtures/jp2_1x1_255_components.j2k = Generated one-pixel 255-component J2K boundary control, independently accepted by OpenJPEG
+	tests/unit/fixtures/jp2_1x1_256_components.j2k = Generated one-pixel 256-component J2K boundary control, independently accepted by OpenJPEG
+	tests/unit/fixtures/jp2_1x1_257_components.j2k = Generated one-pixel 257-component J2K boundary control, independently accepted by OpenJPEG
+	tests/unit/fixtures/jp2_1x1_2_components.j2k = Generated one-pixel 2-component J2K layout control, independently decoded by OpenJPEG
+	tests/unit/fixtures/jp2_1x1_3_components.j2k = Generated one-pixel 3-component J2K layout control, independently decoded by OpenJPEG
+	tests/unit/fixtures/jp2_1x1_4_components.j2k = Generated one-pixel 4-component J2K boundary control, independently accepted by OpenJPEG
+	tests/unit/fixtures/jp2_1x1_5_components.j2k = Generated one-pixel 5-component J2K boundary control, independently accepted by OpenJPEG
 	tests/unit/fixtures/seq_16x16_3scan.jpg = Validate's three-scan non-interleaved sequential JPEG (cjpeg -scans 0;1;2), former false FAIL
 	tests/unit/fixtures/seq_17x13_420_y_cbcr_rst.jpg = Sequential 4:2:0 Y scan then interleaved Cb+Cr scan, DRI=1, non-MCU-aligned
 	tests/unit/fixtures/seq_23x19_422_rev_rst.jpg = Sequential 4:2:2 three scans in reversed component order, DRI=3

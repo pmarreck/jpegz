@@ -133,9 +133,14 @@ pub fn decode(allocator: Allocator, data: []const u8) errors.DecodeError!types.I
     if (c.opj_decode(codec, stream, image) == 0) return error.BackendError;
     if (c.opj_end_decompress(codec, stream) == 0) return error.BackendError;
 
-    // Sanity-check the components.
+	// Select a representable layout before narrowing the component count.
+	const layout: types.PixelLayout = switch (image.numcomps) {
+		1 => .grayscale,
+		3 => .rgb,
+		4 => .cmyk,
+		else => return error.BackendError,
+	};
     const num_comps: u8 = @intCast(image.numcomps);
-    if (num_comps == 0 or num_comps > 4) return error.BackendError;
 
     // Image dimensions are emitted at the highest-resolution component's
     // natural resolution (matches what opj_decompress writes). Each JP2
@@ -179,15 +184,9 @@ pub fn decode(allocator: Allocator, data: []const u8) errors.DecodeError!types.I
         if (image.comps[i].prec != prec) return error.BackendError;
     }
 
-    // Map output layout. JP2's enumerated colorspace lives in `image.color_space`:
+    // JP2's enumerated colorspace lives in `image.color_space`:
     //   OPJ_CLRSPC_GRAY (1), OPJ_CLRSPC_SRGB (2), OPJ_CLRSPC_SYCC (3),
     //   OPJ_CLRSPC_EYCC, OPJ_CLRSPC_CMYK
-    const layout: types.PixelLayout = switch (num_comps) {
-        1 => .grayscale,
-        3 => .rgb,
-        4 => .cmyk,
-        else => unreachable,
-    };
     const source_cs: types.ColorSpace = switch (image.color_space) {
         c.OPJ_CLRSPC_GRAY => .greyscale_jp2,
         c.OPJ_CLRSPC_SRGB => .srgb,

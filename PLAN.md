@@ -6,7 +6,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Priority: dependency freshness
 
 - [x] Correct the reviewed JXL callback/scalar gap after actual red witnesses; complete verdict/assessment sets, empty/order/duplicate/grouping controls and independent source review pass with complete ./test, preserving all holds (done 2026-10-29 13:04 EDT; delivered by this change).
-- [ ] Publish the independently reviewed JXL scalar-precedence correction, verify all eleven exact-commit CI targets and deliver the correction receipt before resuming the preserved JP2 unit.
+- [x] Publish ff94daa after independent patch review; all eleven exact-commit CI targets pass in 18 seconds with prepared reuse, and correction receipts supersede incomplete e8 aggregation qualification before JP2 work resumes (done 2026-10-29 13:08 EDT; commit ff94daa).
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; client terminal and activation shortcut requested, settings unchanged.
 - [ ] Resolve the corruption-coverage default JPEG-LS fixture mismatch; owner choice requested among three supported defaults, an audited inconclusive JPEG-LS control, or retaining the blocked campaign; preserve classifications and denominators.
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
@@ -30,8 +30,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 - [ ] Complete the separate libjxlz arithmetic scaling sweep; published e1c521d contains baseline 923d3c4c unchanged (228 fixed-size rows, hash verified), and the provider has a request for published scaling evidence or a bounded sweep (context: docs/plan_context/pre-canon-2026-09-24.md).
 - [x] Finish the original 170-byte XOR sweep adjudication: the original 83 survivors comprise 75 valid changes, five corrupt cases and three unchecked cases; all 170 replay as 90 corrupt, 75 valid and five indeterminate without treating every mutation as malformed (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-10-29 11:58 EDT; commit a7ddd65).
-- [x] Publish faf0c92 with code 66 and bounded classic locations after the identical-input public replay; all eleven exact-commit CI targets pass in 19 seconds using prepared artifacts, with immutable receipts delivered and the held non-luma boundary preserved (done 2026-10-28 22:03 EDT; commit faf0c92).
-- [x] Extend finding 65 to complete recognized JFIF 1.01 units using independently reviewed IJG evidence; fresh native/C ABI/CLI red witnesses, all units/version gates, bounds and valid pixels pass complete ./test; the public replay changes only offset 13 (done 2026-10-28 22:22 EDT; delivered by this change).
 - [x] Publish 0fb5947 with the evidenced historical JFIF 1.01 units extension; all eleven exact-commit CI targets pass in 20 seconds using prepared artifacts, and immutable receipts are delivered before code 67 starts (done 2026-10-29 11:39 EDT; commit 0fb5947).
 - [x] Implement approved 67 jfif_version_unchecked after native/C ABI/CLI red witnesses; all version bytes, bounds and mixed-cause orders pass complete ./test and the public replay changes only offsets 11/12 to indeterminate, preserving 90 corrupt cases (done 2026-10-29 11:55 EDT; delivered by this change).
 - [x] Publish a7ddd65 with approved future JFIF notice 67; all eleven exact-commit CI targets pass in 18 seconds with prepared reuse, and immutable registry/package-hash receipts are delivered to coordinator and consumers (done 2026-10-29 11:58 EDT; commit a7ddd65).
@@ -40,7 +38,8 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [x] Develop approved facade 197 against the inspected raw-17 contract after actual red witnesses; classifier/assessment sets, C ABI, bounded host translation, truncation and callback precedence pass complete ./test, retaining exact JXL EOF evidence and the old pin (done 2026-10-29 12:38 EDT; adapter-only qualification, delivered by this change).
 - [x] Publish e8ef262 with facade 197 and checked JXL evidence; all eleven exact-commit CI targets pass in 18 seconds with prepared reuse, and immutable receipts reach coordinator and consumers without claiming provider adoption (done 2026-10-29 12:41 EDT; commit e8ef262).
 - [ ] Verify jp2z pixel APIs and component-resolution oracles before replacing OpenJPEG; retain the T.800 edition limit and unresolved warning-class review.
-- [ ] Reproduce the OpenJPEG wrapper's component-count narrowing boundary with a disposable generated high-component control before any fix; retain four-channel API limits and the separate pixel-cutover qualification.
+- [x] Reproduce both OpenJPEG component-count narrowing and two-component layout crashes; literal supported/unsupported sets, independent component-plane controls and complete ./test pass without changing the pixel API or provider pins (done 2026-10-29 13:25 EDT; delivered by this change).
+- [ ] Publish the JP2 component-layout correction; verify all eleven exact-commit CI targets and deliver immutable receipts before continuing the mutation-operator audit.
 
 ## JPEG entropy and comparison coverage
 

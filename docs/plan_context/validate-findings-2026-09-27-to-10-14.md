@@ -1096,3 +1096,67 @@ controls and the no-C consumer. Preparation took 203 seconds; complete
 `./test` passed in six seconds with prepared reuse. Native build phase was
 131 seconds mixed compilation/execution; no fresh runtime-budget pass is
 claimed. Shipment and exact-commit CI remain necessary to close the correction.
+
+Published correction `ff94daa35cb959e6057e4c4d0fa034ea8f5b1c7d` passed
+all eleven exact-commit CI targets October 29 17:04:57Z..17:05:15Z
+(18 seconds, prepared reuse). The fetched package hash is
+`jpegz-0.1.0-staw4MopFQDP7DO6qXefRXVwU2aJ30x1moUWE6cFwCmq`.
+Immutable correction receipts reached the coordinator and five consumers,
+explicitly superseding the incomplete `e8ef262` aggregation qualification.
+The coordinator also received a verified native pointer. Provider/end-to-end
+qualification, exact EOF/approximate-anchor semantics and existing holds remain
+unchanged. The independently reviewed correction is delivered; the preserved
+JP2 unit can now resume.
+
+### JPEG 2000 pixel-layout refusal before narrowing
+
+The restored native/C regressions use generated one-pixel unsigned 8-bit
+black codestreams with 4, 5, 255, 256 and 257 components. Each was independently
+decoded by OpenJPEG 2.5.4 to exactly that many PGX component planes. The initial
+red snapshot (`gilypdynz00bvlhlmpz8i54q4bmqs226`) crashed through both public
+decode APIs with an integer-narrowing panic. The wrapper blob was identical
+before and after the unrelated JXL correction, so that witness remained valid
+when the saved tests resumed. Checking the wide source count before conversion
+removed that panic; the five-case controls and complete `./test` passed after
+223 seconds of preparation and a five-second cached entry point.
+
+Review of the actual layout enum then identified a hole in a maximum-only
+guard: the adapter represents one, three and four components, while two is
+also a legal codestream component count. Additional independently accepted
+1/2/3-component controls were generated with the same pinned encoder. The
+expectations are now a literal classifier table, rather than a copy of the
+implementation's count predicate. The new two-component red snapshot
+(`qjy1bdp2c78vi4w2rf5cdz5mbmm21l31`) reached unreachable code in both native
+and C decode paths. All other 284 native tests and the 134 CLI assertions
+passed; the decoder regression crashed before completing its case set.
+
+The correction selects an existing output layout directly from the wide count
+before narrowing it: grayscale for one, RGB for three, CMYK for four, otherwise
+the established typed BackendError (C status -6). No channel-layout or ABI
+expansion is included. The complete set is 1/2/3/4/5/255/256/257; every input
+must still pass strict codestream validation. Representable cases must decode
+with exact shape and every expected black sample; unsupported cases must
+return the typed error and leave no C output allocation. These refusals do not
+classify valid files as corrupt. Full verification of the expanded set passed:
+285 native tests, 223 C ABI assertions, 134 CLI assertions, production, all four
+cross-link targets, closure, source/dependency controls and the no-C consumer.
+Preparation took 211 seconds, including a 151-second mixed native build phase;
+the complete cached entry point took 34 seconds. This does not establish a
+fresh runtime-budget pass. OpenJPEG remains the pixel backend and provider
+pins are unchanged. Publication and exact-commit CI are the next checkpoint.
+
+Fixture generation uses public jp2z `0c2162b`, one 1x1 P7 image with DEPTH
+equal to the component count, MAXVAL 255 and all-zero sample bytes, encoded
+with `jp2z encode --j2k`. The prepared encoder SHA-256 and sandbox/oracle
+receipts are recorded above. The frozen fixture hashes are:
+
+| Components | SHA-256 |
+| ---: | --- |
+| 1 | `861d987b4135f604ed9eaa13dd1e34cbdbf85a44a96b95a7bc19bf1be88dff37` |
+| 2 | `158fcbbd758d8e8c54a08ec8a83371b11bbafc476bfa9ac92e8391cf43114a34` |
+| 3 | `1442909ca7323f9f8cacf547c359fcd8601987b5ee61e0565c4a12a2f39f1b33` |
+| 4 | `0beeec665ec348c4c5ad6597a60d91c73e461061801989ba7c91ffd1168a873a` |
+| 5 | `d37bca3ce0f692b61d10033ef44754f77bc6ffa3d2d055e7a57478260bd6fc93` |
+| 255 | `0b6dae7187a8b3df5902258c3a49d72acc7e885d9c5665e3ec26fb9ed2a39cdf` |
+| 256 | `c153cded5f89377318f153b092f6d277e134f24c7360118c8fb9cb73da227c2f` |
+| 257 | `060997238f55634f1f62a70f64191ddb6477aea88452098343fd717f50bf0ddb` |

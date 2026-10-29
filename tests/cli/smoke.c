@@ -49,6 +49,31 @@ static const uint8_t zero_padding[] = {
 #embed "../unit/fixtures/zero_pad_16x16_420.jpg"
 };
 
+static const uint8_t jp2_components_1[] = {
+#embed "../unit/fixtures/jp2_1x1_1_components.j2k"
+};
+static const uint8_t jp2_components_2[] = {
+#embed "../unit/fixtures/jp2_1x1_2_components.j2k"
+};
+static const uint8_t jp2_components_3[] = {
+#embed "../unit/fixtures/jp2_1x1_3_components.j2k"
+};
+static const uint8_t jp2_components_4[] = {
+#embed "../unit/fixtures/jp2_1x1_4_components.j2k"
+};
+static const uint8_t jp2_components_5[] = {
+#embed "../unit/fixtures/jp2_1x1_5_components.j2k"
+};
+static const uint8_t jp2_components_255[] = {
+#embed "../unit/fixtures/jp2_1x1_255_components.j2k"
+};
+static const uint8_t jp2_components_256[] = {
+#embed "../unit/fixtures/jp2_1x1_256_components.j2k"
+};
+static const uint8_t jp2_components_257[] = {
+#embed "../unit/fixtures/jp2_1x1_257_components.j2k"
+};
+
 /* Counted by the macro rather than hand-tallied in the PASS line: the
  * literal "30 assertions" had already drifted once. A number a human has
  * to remember to bump is a number that lies. */
@@ -167,6 +192,35 @@ int main(void) {
     ASSERT(px11[1] >= 240, "pixel(1,1).G >= 240");
     ASSERT(px11[2] >= 240, "pixel(1,1).B >= 240");
     jpegz_image_free(&img);
+
+	{
+		const struct { const uint8_t *data; size_t len; int status; uint8_t channels; } cases[] = {
+			{jp2_components_1, sizeof jp2_components_1, JPEGZ_OK, 1},
+			{jp2_components_2, sizeof jp2_components_2, JPEGZ_ERR_BACKEND_ERROR, 0},
+			{jp2_components_3, sizeof jp2_components_3, JPEGZ_OK, 3},
+			{jp2_components_4, sizeof jp2_components_4, JPEGZ_OK, 4},
+			{jp2_components_5, sizeof jp2_components_5, JPEGZ_ERR_BACKEND_ERROR, 0},
+			{jp2_components_255, sizeof jp2_components_255, JPEGZ_ERR_BACKEND_ERROR, 0},
+			{jp2_components_256, sizeof jp2_components_256, JPEGZ_ERR_BACKEND_ERROR, 0},
+			{jp2_components_257, sizeof jp2_components_257, JPEGZ_ERR_BACKEND_ERROR, 0},
+		};
+		for (size_t c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+			jpegz_image_t decoded = {0};
+			int status = jpegz_jp2_decode(cases[c].data, cases[c].len, &decoded);
+			ASSERT(status == cases[c].status,
+			       "JP2 component boundary returns a typed status through the C ABI");
+			if (status == JPEGZ_OK) {
+				ASSERT(decoded.width == 1 && decoded.height == 1 && decoded.channels == cases[c].channels && decoded.pixels_len == cases[c].channels,
+				       "representable component control preserves its image shape");
+				for (size_t channel = 0; channel < cases[c].channels; channel++)
+					ASSERT(decoded.pixels[channel] == 0, "representable component control preserves every sample");
+				jpegz_image_free(&decoded);
+			} else {
+				ASSERT(decoded.pixels == NULL && decoded.pixels_len == 0,
+				       "unsupported component layout leaves no output allocation");
+			}
+		}
+	}
 
     /* Decode rejects empty input with TRUNCATED_STREAM. */
     jpegz_image_t empty_out = {0};

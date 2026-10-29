@@ -56,6 +56,12 @@ explicitly requests automatic selection; larger values are budgets. Actual
 parallelism depends on the decoder. JP2's current wrapper ignores this option.
 `lenient` defaults to false. Opt-in recovery can return partial pixels;
 attach a `FindingsSink` to retain the recovery diagnostics.
+
+JP2 pixel output represents one, three or four components. Other counts return
+`BackendError` (`JPEGZ_ERR_BACKEND_ERROR` in C) before narrowing the component
+count. A valid codestream with an unsupported pixel layout can still validate
+as valid; this decode limitation does not establish corruption.
+
 The public dispatcher forwards recovery and findings options to sequential
 Huffman, progressive, and lossless decoders. Rejected format probes discard
 their own findings; caller findings and genuine decode-error diagnostics stay.
