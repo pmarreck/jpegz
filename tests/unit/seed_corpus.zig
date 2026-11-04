@@ -25,3 +25,5 @@ pub const lossless_gray12 = @embedFile("fixtures/lossless_4x4_gray12.jpg");
 pub const arith_baseline_gray = @embedFile("fixtures/arith_baseline_8x8_gray.jpg");
 pub const arith_baseline_rgb = @embedFile("fixtures/arith_baseline_16x16_rgb_420.jpg");
 pub const arith_progressive_gray = @embedFile("fixtures/arith_progressive_8x8_gray.jpg");
+/// Bounded-campaign crasher (seed 0x6a706567): AC refinement with Al=15.
+pub const fuzz_progressive_ac_refine_al15 = @embedFile("fixtures/fuzz_progressive_ac_refine_al15.jpg");

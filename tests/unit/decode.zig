@@ -2246,3 +2246,138 @@ test "multi-scan sequential DCT decodes byte-identically to libjpeg-turbo" {
 		};
 	}
 }
+
+// ── Progressive coefficient-range regressions ────────────────────
+//
+// The bounded fuzz campaign (seed 0x6a706567) found a panic: an AC
+// refinement scan with Ah=1, Al=15 made `1 << Al` overflow i16. T.81
+// §G.1.1.1.1 bounds Al to 0..13, and the validator already reports such
+// headers as FAIL progressive_scan_invalid. The decoder must return a
+// typed error instead of panicking, both for that header and for corrupt
+// coefficient values whose arithmetic leaves i16 under a legal Al. The
+// synthetic streams below are one-component 8-row images with
+// single-symbol Huffman tables (code `0`), so each entropy byte spells
+// out the bits exercised. Their controls use the same construction at an
+// in-range value and must decode.
+
+const fixture_fuzz_progressive_ac_refine_al15 = @embedFile("fixtures/fuzz_progressive_ac_refine_al15.jpg");
+
+const ProgScan = struct {
+	ss: u8,
+	se: u8,
+	ah: u4,
+	al: u4,
+	/// Sole Huffman symbol, assigned the one-bit code `0`; null for a DC
+	/// refinement scan, which reads raw bits.
+	symbol: ?u8,
+	entropy: []const u8,
+};
+
+fn appendSegment(list: *std.ArrayList(u8), allocator: std.mem.Allocator, marker: u8, body: []const u8) !void {
+	const len: u16 = @intCast(body.len + 2);
+	try list.appendSlice(allocator, &.{ 0xFF, marker, @intCast(len >> 8), @truncate(len) });
+	try list.appendSlice(allocator, body);
+}
+
+fn buildProgressiveGray(allocator: std.mem.Allocator, precision: u8, width: u16, scans: []const ProgScan) ![]u8 {
+	var list: std.ArrayList(u8) = .empty;
+	errdefer list.deinit(allocator);
+	try list.appendSlice(allocator, &.{ 0xFF, 0xD8 });
+	var dqt: [65]u8 = @splat(1);
+	dqt[0] = 0;
+	try appendSegment(&list, allocator, 0xDB, &dqt);
+	try appendSegment(&list, allocator, 0xC2, &.{ precision, 0, 8, @intCast(width >> 8), @truncate(width), 1, 1, 0x11, 0 });
+	for (scans) |scan| {
+		if (scan.symbol) |symbol| {
+			var dht: [18]u8 = @splat(0);
+			dht[0] = if (scan.ss == 0) 0x00 else 0x10;
+			dht[1] = 1;
+			dht[17] = symbol;
+			try appendSegment(&list, allocator, 0xC4, &dht);
+		}
+		try appendSegment(&list, allocator, 0xDA, &.{ 1, 1, 0x00, scan.ss, scan.se, (@as(u8, scan.ah) << 4) | scan.al });
+		try list.appendSlice(allocator, scan.entropy);
+	}
+	try list.appendSlice(allocator, &.{ 0xFF, 0xD9 });
+	return list.toOwnedSlice(allocator);
+}
+
+const dc_zero = ProgScan{ .ss = 0, .se = 0, .ah = 0, .al = 0, .symbol = 0x00, .entropy = &.{0x7F} };
+
+const ProgCase = struct {
+	name: []const u8,
+	precision: u8 = 8,
+	width: u16 = 8,
+	scans: []const ProgScan,
+	/// null: the control must decode successfully.
+	expected: ?anyerror,
+};
+
+const progressive_range_cases = [_]ProgCase{
+	// DC first, Al=13: diff 15 (size 4) << 13 leaves i16; diff 3 fits.
+	.{ .name = "dc first shift overflow", .expected = error.BackendError, .scans = &.{
+		.{ .ss = 0, .se = 0, .ah = 0, .al = 13, .symbol = 0x04, .entropy = &.{0x7F} } } },
+	.{ .name = "dc first shift control", .expected = null, .scans = &.{
+		.{ .ss = 0, .se = 0, .ah = 0, .al = 13, .symbol = 0x02, .entropy = &.{0x7F} } } },
+	// 12-bit, two blocks, each DC diff +32767 (size 15): the predictor sum
+	// leaves i16; a single block fits.
+	.{ .name = "dc predictor accumulation overflow", .precision = 12, .width = 16, .expected = error.BackendError, .scans = &.{
+		.{ .ss = 0, .se = 0, .ah = 0, .al = 0, .symbol = 0x0F, .entropy = &.{ 0x7F, 0xFF, 0x00, 0x7F, 0xFF, 0x00 } } } },
+	.{ .name = "dc predictor accumulation control", .precision = 12, .width = 8, .expected = null, .scans = &.{
+		.{ .ss = 0, .se = 0, .ah = 0, .al = 0, .symbol = 0x0F, .entropy = &.{ 0x7F, 0xFF, 0x00 } } } },
+	// AC first, Al=13: coefficient 15 << 13 leaves i16; 3 << 13 fits.
+	.{ .name = "ac first shift overflow", .expected = error.BackendError, .scans = &.{
+		dc_zero, .{ .ss = 1, .se = 1, .ah = 0, .al = 13, .symbol = 0x04, .entropy = &.{0x7F} } } },
+	.{ .name = "ac first shift control", .expected = null, .scans = &.{
+		dc_zero, .{ .ss = 1, .se = 1, .ah = 0, .al = 13, .symbol = 0x02, .entropy = &.{0x7F} } } },
+	// AC refinement adds 1 << 13 to 3 << 13, leaving i16; from 1 << 13 it fits.
+	.{ .name = "ac refinement add overflow", .expected = error.BackendError, .scans = &.{
+		dc_zero,
+		.{ .ss = 1, .se = 1, .ah = 0, .al = 13, .symbol = 0x02, .entropy = &.{0x7F} },
+		.{ .ss = 1, .se = 1, .ah = 1, .al = 13, .symbol = 0x00, .entropy = &.{0x7F} } } },
+	.{ .name = "ac refinement add control", .expected = null, .scans = &.{
+		dc_zero,
+		.{ .ss = 1, .se = 1, .ah = 0, .al = 13, .symbol = 0x01, .entropy = &.{0x7F} },
+		.{ .ss = 1, .se = 1, .ah = 1, .al = 13, .symbol = 0x00, .entropy = &.{0x7F} } } },
+	// Al outside T.81's 0..13 in refinement headers.
+	.{ .name = "ac refinement al 15", .expected = error.InvalidMarker, .scans = &.{
+		dc_zero, .{ .ss = 1, .se = 1, .ah = 1, .al = 15, .symbol = 0x00, .entropy = &.{0x7F} } } },
+	.{ .name = "dc refinement al 15", .expected = error.InvalidMarker, .scans = &.{
+		dc_zero, .{ .ss = 0, .se = 0, .ah = 1, .al = 15, .symbol = null, .entropy = &.{ 0xFF, 0x00 } } } },
+	.{ .name = "dc refinement al 13 control", .expected = null, .scans = &.{
+		dc_zero, .{ .ss = 0, .se = 0, .ah = 1, .al = 13, .symbol = null, .entropy = &.{ 0xFF, 0x00 } } } },
+};
+
+test "progressive coefficient arithmetic outside i16 returns typed errors" {
+	const allocator = std.testing.allocator;
+	for (progressive_range_cases) |case| {
+		const data = try buildProgressiveGray(allocator, case.precision, case.width, case.scans);
+		defer allocator.free(data);
+		if (jpegz.decode(allocator, data)) |image_const| {
+			var image = image_const;
+			defer image.deinit(allocator);
+			if (case.expected) |expected| {
+				std.debug.print("{s}: decoded, expected {s}\n", .{ case.name, @errorName(expected) });
+				return error.TestUnexpectedResult;
+			}
+			try std.testing.expectEqual(@as(u32, case.width), image.width);
+		} else |err| {
+			const actual: anyerror = err;
+			const expected = case.expected orelse {
+				std.debug.print("{s}: control rejected with {s}\n", .{ case.name, @errorName(actual) });
+				return error.TestUnexpectedResult;
+			};
+			if (expected != actual) {
+				std.debug.print("{s}: got {s}, expected {s}\n", .{ case.name, @errorName(actual), @errorName(expected) });
+				return error.TestUnexpectedResult;
+			}
+		}
+	}
+}
+
+test "fuzz-found progressive refinement with Al=15 returns a typed error" {
+	try std.testing.expectError(error.InvalidMarker, jpegz.decode(std.testing.allocator, fixture_fuzz_progressive_ac_refine_al15));
+	var report = try jpegz.validate(std.testing.allocator, fixture_fuzz_progressive_ac_refine_al15);
+	defer report.deinit(std.testing.allocator);
+	try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
+}

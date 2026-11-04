@@ -51,6 +51,7 @@ const seed_lossless_12 = withLenPrefix(seed.lossless_gray12);
 const seed_arith_baseline = withLenPrefix(seed.arith_baseline_gray);
 const seed_arith_rgb = withLenPrefix(seed.arith_baseline_rgb);
 const seed_arith_progressive = withLenPrefix(seed.arith_progressive_gray);
+const seed_fuzz_progressive_al15 = withLenPrefix(seed.fuzz_progressive_ac_refine_al15);
 
 const corpus: []const []const u8 = &.{
     &seed_baseline_rgb,
@@ -69,6 +70,7 @@ const corpus: []const []const u8 = &.{
     &seed_arith_baseline,
     &seed_arith_rgb,
     &seed_arith_progressive,
+    &seed_fuzz_progressive_al15,
 };
 
 /// Per-test scratch buffer cap. Real JPEGs in the wild can be huge,

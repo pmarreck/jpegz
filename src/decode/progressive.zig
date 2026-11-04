@@ -438,6 +438,10 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo 
     const ah_al = data[tail_off + 2];
     info.ah = @intCast(ah_al >> 4);
     info.al = @intCast(ah_al & 0x0F);
+    // T.81 §G.1.1.1.1 bounds Al to 0..13; the validator reports larger
+    // values as progressive_scan_invalid. Rejecting them here also keeps
+    // the refinement bit `1 << Al` within i16.
+    if (info.al > 13) return error.InvalidMarker;
     return info;
 }
 
@@ -747,8 +751,10 @@ fn decodeProgressiveDcFirst(
         };
         dc_diff = huffman.extendSign(bits, @intCast(dc_size));
     }
-    prev_dc[comp_idx] += dc_diff;
-    block[0] = @as(i16, @intCast(@as(i32, prev_dc[comp_idx]) << @intCast(scan.al)));
+    // Corrupt differences can drive the predictor or its point-transformed
+    // coefficient outside i16; report that as corrupt entropy data.
+    prev_dc[comp_idx] = std.math.cast(i16, @as(i32, prev_dc[comp_idx]) + dc_diff) orelse return error.BackendError;
+    block[0] = std.math.cast(i16, @as(i32, prev_dc[comp_idx]) << @intCast(scan.al)) orelse return error.BackendError;
 }
 
 /// T.81 §G.1.2.3 — DC refinement pass (Ah>0). Read 1 bit, shift-OR into
@@ -767,7 +773,7 @@ fn decodeProgressiveDcRefine(
         return error.TruncatedStream;
     };
     if (bit == 1) {
-        block[0] = @as(i16, @intCast(@as(i32, block[0]) | (@as(i32, 1) << @intCast(scan.al))));
+        block[0] = std.math.cast(i16, @as(i32, block[0]) | (@as(i32, 1) << @intCast(scan.al))) orelse return error.BackendError;
     }
 }
 
@@ -841,7 +847,7 @@ fn decodeProgressiveAcFirst(
             return error.TruncatedStream;
         };
         const val = huffman.extendSign(bits, @intCast(size));
-        block[k] = @as(i16, @intCast(@as(i32, val) << @intCast(scan.al)));
+        block[k] = std.math.cast(i16, @as(i32, val) << @intCast(scan.al)) orelse return error.BackendError;
         k += 1;
     }
 }
@@ -993,11 +999,8 @@ inline fn refineExistingNonzero(
     };
     if (bit == 0) return;
     // Refinement: add ±positive in the direction of the existing sign.
-    if (block[k] > 0) {
-        block[k] = @as(i16, @intCast(@as(i32, block[k]) + @as(i32, positive)));
-    } else {
-        block[k] = @as(i16, @intCast(@as(i32, block[k]) + @as(i32, negative)));
-    }
+    const step: i32 = if (block[k] > 0) positive else negative;
+    block[k] = std.math.cast(i16, @as(i32, block[k]) + step) orelse return error.BackendError;
 }
 
 /// Thin wrapper preserving the 8-bit entry-point API. Calls into the
