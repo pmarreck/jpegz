@@ -489,22 +489,69 @@ pub fn validate(
 /// Re-exported from the facade; see `facade_validation.sniff`.
 pub const sniff = facade.sniff;
 
+/// Classify one finding from the legacy `validate` report the way
+/// `validateAny` classifies the classic T.81 / T.87 leg. Any FAIL is corrupt.
+/// Recovered entropy truncation and restart faults are corrupt at every
+/// severity; all-zero entropy padding is a recognized encoder defect; an
+/// unrecognized marker, an unchecked future JFIF version and the facade
+/// meta-findings leave the file inconclusive. Everything else is valid.
+///
+/// Consumers that emit per-finding verdicts should call this instead of
+/// copying the table. The switch is exhaustive, so appending a
+/// `FindingCode` does not compile until it is classified here. A report's
+/// overall verdict is not the worst of these labels: see
+/// `classifyClassicFindings` for the precedence `validateAny` applies.
+pub fn classicFindingVerdict(code: FindingCode, severity: Severity) StrictVerdict {
+	if (severity == .fail) return .corrupt;
+	return switch (code) {
+		.missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => .corrupt,
+		.entropy_padding_zero_bits => .known_defect,
+		.unknown_marker, .jfif_version_unchecked, .unrecognized_container, .jxl_validator_unavailable => .indeterminate,
+		.missing_soi, .truncated_stream, .bad_marker_length, .duplicate_sof, .extraneous_bytes_before_marker,
+		.entropy_fill_bytes, .invalid_sof_precision, .huffman_table_corrupt, .quantization_table_corrupt,
+		.arithmetic_table_corrupt, .sof_component_count_invalid, .sos_component_mismatch,
+		.dct_coefficient_overflow, .progressive_scan_invalid, .adobe_app14_conflicts_jfif, .invalid_dimensions,
+		.entropy_padding_not_ones, .sequential_scan_invalid, .jfif_metadata_invalid, .sof_sampling_invalid,
+		.lossless_predictor_invalid, .lossless_pointtransform_invalid, .jpegls_invalid_run_mode,
+		.jpegls_context_table_invalid, .jp2_invalid_signature, .jp2_invalid_codestream,
+		.jp2_bad_progression_order, .jp2_tile_decode_failed, .jp2_codeblock_decode_failed,
+		.jp2_unsupported_marker_ignored, .jp2_invalid_siz, .jxl_invalid_signature, .jxl_truncated,
+		.jxl_malformed, .jxl_unsupported_feature, .jxl_resource_limit, .jxl_out_of_memory,
+		.jxl_invalid_argument, .jxl_unclassified_decoder_error, .jxl_nonzero_padding,
+		.jxl_invalid_context_map, .jxl_invalid_ma_tree, .jxl_invalid_ans_state, .jxl_truncated_box_header,
+		.jxl_invalid_ac_nonzero_count, .jxl_invalid_hybrid_uint_config, .jxl_invalid_histogram,
+		.jxl_invalid_icc_symbol, .arithmetic_coding_used, .twelve_bit_precision, .sixteen_bit_lossless,
+		.progressive_scan_count, .embedded_thumbnail_present, .exif_metadata_present, .icc_profile_present,
+		.jp2_uses_9x7_wavelet, .jp2_uses_5x3_wavelet, .jfif_metadata_present, .xmp_metadata_present,
+		.photoshop_irb_present, .trailing_data_after_eoi, .jp2_packets_under_read, .entropy_over_read,
+		.entropy_under_read, .coding_pass_overflow, .jp2_packets_walked_to_end, .zero_bitplane_overflow,
+		.packed_headers_mismatch, .jp2_trailing_bytes, .segmentation_symbol_mismatch, .profile_violation,
+		.reversible_exponent_mismatch, .cblk_contribution_ends_ff,
+		=> .valid,
+	};
+}
+
 /// Translate the severity-rated T.81 / T.87 report into the family-wide
 /// classified result, so a caller reading `validateAny` never has to know which
-/// leg answered. Recovered entropy truncation and restart faults are corrupt;
-/// legal fill and metadata warnings do not invalidate an otherwise sound file.
+/// leg answered. Each finding is classified by `classicFindingVerdict`. Corrupt
+/// wins; an unchecked JFIF version makes even an unsupported result
+/// inconclusive; other inconclusive findings and known defects only replace
+/// an otherwise valid result.
 fn classifyClassicFindings(initial: StrictVerdict, findings: []const Finding) StrictVerdict {
 	var verdict = initial;
 	var known_defect = false;
 	var unchecked_marker = false;
 	var unchecked_version = false;
 	for (findings) |finding| {
-		switch (finding.code) {
-			.missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => verdict = .corrupt,
-			.entropy_padding_zero_bits => known_defect = true,
-			.unknown_marker => unchecked_marker = true,
-			.jfif_version_unchecked => unchecked_version = true,
-			else => {},
+		switch (classicFindingVerdict(finding.code, finding.severity)) {
+			.corrupt => verdict = .corrupt,
+			.known_defect => known_defect = true,
+			.indeterminate => if (finding.code == .jfif_version_unchecked) {
+				unchecked_version = true;
+			} else {
+				unchecked_marker = true;
+			},
+			.valid, .unsupported => {},
 		}
 	}
 	if (verdict == .corrupt) return .corrupt;
@@ -969,6 +1016,37 @@ pub const internal = struct {
 
 test "version is non-empty" {
     try std.testing.expect(version.len > 0);
+}
+
+test "classic per-finding verdict covers every code and severity" {
+	// Independent literal expectation: the only non-valid codes below FAIL.
+	const corrupt_codes = [_]FindingCode{ .missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected };
+	const indeterminate_codes = [_]FindingCode{ .unknown_marker, .jfif_version_unchecked, .unrecognized_container, .jxl_validator_unavailable };
+	const severities = [_]Severity{ .pass, .info, .warn, .fail };
+	inline for (@typeInfo(FindingCode).@"enum".fields) |field| {
+		const code: FindingCode = @enumFromInt(field.value);
+		const listed_corrupt = std.mem.indexOfScalar(FindingCode, &corrupt_codes, code) != null;
+		const listed_indeterminate = std.mem.indexOfScalar(FindingCode, &indeterminate_codes, code) != null;
+		for (severities) |severity| {
+			const expected: StrictVerdict = if (severity == .fail or listed_corrupt)
+				.corrupt
+			else if (code == .entropy_padding_zero_bits)
+				.known_defect
+			else if (listed_indeterminate)
+				.indeterminate
+			else
+				.valid;
+			const actual = classicFindingVerdict(code, severity);
+			if (expected != actual) {
+				std.debug.print("{s}/{s}: expected {s}, got {s}\n", .{ field.name, @tagName(severity), @tagName(expected), @tagName(actual) });
+				return error.TestUnexpectedResult;
+			}
+			// A report holding only this finding folds to the same verdict,
+			// with the initial verdict strictFromReport derives from it.
+			const initial: StrictVerdict = if (severity == .fail) .corrupt else .valid;
+			try std.testing.expectEqual(expected, classifyClassicFindings(initial, &.{.{ .severity = severity, .code = code }}));
+		}
+	}
 }
 
 test "classic finding precedence is independent of finding order" {

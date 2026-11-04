@@ -88,6 +88,10 @@ that returns `NotImplemented` maps to unsupported; a skipped check maps to
 indeterminate. Known corruption takes precedence. The Zig legacy report's
 `codec_check` records whether decoding ran; its `isValid()` stays severity-based.
 This does not establish complete codec coverage for every decoded variant.
+Consumers of the legacy report that label individual findings should call
+`classicFindingVerdict(code, severity)` rather than copying this table. It
+covers every finding code, and the report-level verdict applies the precedence
+above rather than taking the worst label.
 
 jpegz owns recognition of known JPEG encoder defects. All-zero Huffman padding
 is `known_defect` (appended verdict value 4), with typed finding 63 and WARN
