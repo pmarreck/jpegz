@@ -17,7 +17,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Priority: Validate September 30 work order
 
 - [ ] Reproduce and fix the non-luma-dominant sampling panic with synthetic inputs and valid sampling controls; return typed failure or support the layout without out-of-bounds access.
-- [x] Receive Validate's exact September 30 item-4 SOF1 replay on published d88957b; all three streams report only known-defect padding 63 with CLI 4 and strict djpeg acceptance, closing replay without a decoder change or consumer-adoption claim (done 2026-10-29 16:13 EDT; provider receipt).
 - [ ] Finish JP2 leaf exactness metadata and audit legacy severity-report locations; the provider cursor/anchor/extent contract is pending, so bounds alone must not imply exactness (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
 
 ## Priority: DHT memory safety
@@ -52,7 +51,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [x] Port the upstream-first dependency-freshness gate into ./build with sibling origin/HEAD fallback, ancestry-aware ahead pins and fail-closed missing references; assumption: deliberate holds live in committed .dependency-holds naming exact pins (jp2z, libjxlz now) instead of a blanket override; 14 local-Git cases plus three caught mutations (done 2026-11-03 22:34 EST; delivered by this change).
 - [ ] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks; coordinate the unnecessary encoder linkage with libjxlz.
 - [ ] Add U5b progress controls and pure timestamp-injected rendering; verify rendered output with Peter and test terminal/width degradation.
-- [ ] Confirm consumer dependency deduplication and send remaining append-only finding-registry notices (context: docs/plan_context/pre-canon-2026-09-24.md).
+- [x] Confirm consumer dependency deduplication and send remaining registry notices: validate has no direct openjpeg/libjxlz/jpegz dependency, routes through tiffz.jpegz and seeds libjxlz only at 93b29e86 under an FOD assertion; the mirrored jp2z codes 145, 146 and 250-254 FYI went to the coordinator (context: docs/plan_context/pre-canon-2026-09-24.md; done 2026-11-03 22:40 EST; registry note).
 
 ## Deferred
 
