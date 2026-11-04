@@ -15,7 +15,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Resolve the corruption-coverage default JPEG-LS fixture mismatch; owner choice requested among three supported defaults, an audited inconclusive JPEG-LS control, or retaining the blocked campaign; preserve classifications and denominators.
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
 - [ ] Keep the published JP2 pin and its real Nix closure hash; do not restore draft pin 54531e26 or any placeholder hash.
-- [ ] Await coordinator or owner approval of the proposed generated, test-enforced docs/FINDING_CODES.md provenance table (code, name, owning project, approval reference) before building it; no second registry until then.
+- [ ] HOLD (coordinator, 2026-11-04 09:02 EST: surfaced to the owner, do not implement until approved): await owner approval of the proposed generated, test-enforced docs/FINDING_CODES.md provenance table (code, name, owning project, approval reference) before building it; no second registry until then.
 
 ## Priority: Validate September 30 work order
 
