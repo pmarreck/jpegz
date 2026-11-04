@@ -5,14 +5,16 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Priority: dependency freshness
 
-- [x] Acknowledge the recovery notice, consume superseded UPS notices and verify the preserved checkout and pinned toolchain before resuming the fuzz gate (done 2026-11-02 20:09 EST; recovery acknowledged).
 - [x] Verify the crash-aware fuzz gate against the real bounded campaign and complete suite; the seed-0x6a706567 campaign now fails on the recorded progressive crash instead of passing, and all thirteen ./test checks pass (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-11-03 20:42 EST; commit 08e622a).
 - [x] Recover and fix the progressive AC-refinement fuzz crash: an Ah=1/Al=15 refinement overflowed i16 at 1 << Al; parseSos now rejects Al > 13 and every progressive i16 coefficient conversion returns BackendError, with the fuzz input, six synthetic red witnesses and in-range controls; the same campaign then passes 11298 decode runs (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-11-03 20:44 EST; commit a3e5cac).
 - [x] Ship 08e622a, a3e5cac and 0ba8802: combined ./test 13/13, push verified, Mechatron Prime PASS 13/13 at 37231b9 (18 s, prepared reuse), package hash jpegz-0.1.0-staw4JSgFQDuobcXQtQFVjbBqMBzzSzQMAx7v2Ak-s0G; receipts sent to tiffz, validate and coordinator (done 2026-11-03 21:12 EST; commit 37231b9).
+- [x] Randomize the ./fuzz --fuzz campaign seed per run and log it for reproduction: fresh 32-bit seed announced before the run, repeated with a ./fuzz --fuzz --seed 0xHEX command on failure by the wrapper and the gate, which also prints the saved crash input in base64 up to 64 KiB; ./test replay and packages.fuzz-campaign keep 0x6a706567. Red-first wrapper (9 failures) and gate (91/184) tests; random seed 0x7f6b2e4d passed 11289 decode/10305 validate runs; the unfixed decoder under --seed 0x6a706567 failed at 9492 runs and its printed base64 decoded to the original 286-byte crash (BLAKE3 101f796d); ./test passed, Mechatron Prime PASS 23 s (done 2026-11-04 02:33 EST; commit b287cc9).
+- [x] Where is the canonical FindingCode registry? (question from coordinator Einstein) Answer: no standalone shared file exists; numbers live in jpegz src/core/errors.zig (the only complete superset, generating the C header and names), jp2z keeps its leaf subset and contract table, and approvals live in the coordinator's PLAN/context records; mirrored jp2z codes are 140-146, 207-208 and 250-261, all name/number-identical to jp2z 0c2162b, with 147-154 unassigned. A generated, test-enforced docs/FINDING_CODES.md provenance table was proposed for coordinator/owner approval; nothing created (done 2026-11-04 01:35 EST; reply note sent).
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; client terminal and activation shortcut requested, settings unchanged.
 - [ ] Resolve the corruption-coverage default JPEG-LS fixture mismatch; owner choice requested among three supported defaults, an audited inconclusive JPEG-LS control, or retaining the blocked campaign; preserve classifications and denominators.
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
 - [ ] Keep the published JP2 pin and its real Nix closure hash; do not restore draft pin 54531e26 or any placeholder hash.
+- [ ] Await coordinator or owner approval of the proposed generated, test-enforced docs/FINDING_CODES.md provenance table (code, name, owning project, approval reference) before building it; no second registry until then.
 
 ## Priority: Validate September 30 work order
 
@@ -32,7 +34,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Complete the separate libjxlz arithmetic scaling sweep; published e1c521d contains baseline 923d3c4c unchanged (228 fixed-size rows, hash verified), and the provider has a request for published scaling evidence or a bounded sweep (context: docs/plan_context/pre-canon-2026-09-24.md).
 - [ ] Finish provider qualification after source review of jp2z 0c2162b and libjxlz e1c521d; facade 197 is shipped and libjxlz CI is complete for five targets at 1a53d9d9 and d6cfb688 (prepared-artifact reuse); real-input integration and cold private-source access remain required before any pin change; the November 3 provider note (more raw-8 histogram cases now raw-16 corrupt, open container prefixes now NEED_MORE_INPUT, local five-target evidence only) joins the same review (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
 - [ ] Verify jp2z pixel APIs and component-resolution oracles before replacing OpenJPEG; retain the T.800 edition limit and unresolved warning-class review.
-- [x] Export classicFindingVerdict(code, severity) for tiffz with an exhaustive FindingCode switch; classifyClassicFindings folds over it with unchanged precedence, checked across all 85 codes and four severities against a literal table and the fold; acknowledgment sent, revision follows shipment (done 2026-11-03 20:38 EST; commit 0ba8802).
 
 ## JPEG entropy and comparison coverage
 

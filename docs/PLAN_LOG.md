@@ -112,3 +112,8 @@ Completed PLAN.md items retired by plan-retire, oldest retirement first.
 - [x] [JPEG entropy and comparison coverage] Select the requested variable sparse-shotgun geometry after a red profile-set witness; literal facade controls, 436 independent reader cases and complete ./test pass, preserving operator identities and historical measurements (done 2026-10-29 13:46 EDT; delivered by this change).
 - [x] [JPEG entropy and comparison coverage] Publish d88957b with the mutation-profile correction; all eleven exact-commit CI targets pass in 16 seconds with prepared reuse, and scoped receipts preserve profile identities and pending pristine-control decisions (done 2026-10-29 13:49 EDT; commit d88957b).
 - [x] [Priority: Validate September 30 work order] Receive Validate's exact September 30 item-4 SOF1 replay on published d88957b; all three streams report only known-defect padding 63 with CLI 4 and strict djpeg acceptance, closing replay without a decoder change or consumer-adoption claim (done 2026-10-29 16:13 EDT; provider receipt).
+
+## Retired 2026-11-04
+
+- [x] [Priority: dependency freshness] Acknowledge the recovery notice, consume superseded UPS notices and verify the preserved checkout and pinned toolchain before resuming the fuzz gate (done 2026-11-02 20:09 EST; recovery acknowledged).
+- [x] [Existing ordered follow-ups] Export classicFindingVerdict(code, severity) for tiffz with an exhaustive FindingCode switch; classifyClassicFindings folds over it with unchanged precedence, checked across all 85 codes and four severities against a literal table and the fold; acknowledgment sent, revision follows shipment (done 2026-11-03 20:38 EST; commit 0ba8802).
