@@ -461,8 +461,11 @@
         packages.validator = validatorPackage;
 		packages.coverage-stats = jpegzTestCheck;
 		packages.fuzz-campaign = mkFuzzCheck { campaign = true; };
-		# ./fuzz --fuzz builds this with a per-run random seed via --expr.
-		legacyPackages.fuzzCampaign = seed: mkFuzzCheck { campaign = true; inherit seed; };
+		# ./fuzz --fuzz builds this with a per-run seed in JPEGZ_FUZZ_SEED under
+		# --impure; the flake source stays git-tracked like every other target.
+		legacyPackages.fuzz-campaign-seeded = let seed = builtins.getEnv "JPEGZ_FUZZ_SEED"; in
+			if seed == "" then throw "fuzz-campaign-seeded needs JPEGZ_FUZZ_SEED and --impure; run ./fuzz --fuzz"
+			else mkFuzzCheck { campaign = true; inherit seed; };
 
         checks = {
           dependency-compatibility = dependencyCompatibilityCheck;

@@ -53,13 +53,11 @@ if [[ -z $seed ]]; then
 	[[ $random =~ ^[0-9a-f]{8}$ ]] || { printf 'fuzz: unable to read a random seed\n' >&2; exit 1; }
 	seed=0x$random
 fi
-# Quote the checkout path as a Nix string literal.
-flake_ref=${root//\\/\\\\}
-flake_ref=${flake_ref//\"/\\\"}
-flake_ref=${flake_ref//\$/\\\$}
-expression="(builtins.getFlake \"$flake_ref\").legacyPackages.$system.fuzzCampaign \"$seed\""
 printf 'fuzz: campaign seed %s (reproduce with: ./fuzz --fuzz --seed %s)\n' "$seed" "$seed" >&2
-nix build --impure --expr "$expression" --no-link --print-build-logs "${rebuild[@]}"
+# The seed travels in the environment (read under --impure) so the flake
+# source is resolved like every other target: git-tracked files only.
+JPEGZ_FUZZ_SEED=$seed nix build "$root#legacyPackages.$system.fuzz-campaign-seeded" --impure \
+	--no-link --print-build-logs "${rebuild[@]}"
 status=$?
 if [[ $status -ne 0 ]]; then
 	printf 'fuzz: campaign failed with seed %s; reproduce with: ./fuzz --fuzz --seed %s\n' "$seed" "$seed" >&2

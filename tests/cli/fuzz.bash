@@ -14,7 +14,7 @@ printf 'CALL\n' >> "$FAKE_NIX_LOG"
 printf '%s\n' "$@" >> "$FAKE_NIX_LOG"
 case ${1:-} in
 	eval) printf 'x86_64-linux'; exit 0 ;;
-	build) exit "${FAKE_NIX_STATUS:-0}" ;;
+	build) printf 'SEED=%s\n' "${JPEGZ_FUZZ_SEED-<unset>}" >> "$FAKE_NIX_LOG"; exit "${FAKE_NIX_STATUS:-0}" ;;
 	*) exit 79 ;;
 esac
 EOF
@@ -26,13 +26,16 @@ fail() { printf '    FAIL %s\n' "$1" >&2; failures=$((failures+1)); }
 run_fuzz() { # NAME ARGS...; leaves $status, $work/NAME.{log,out,err}
 	local name=$1; shift
 	: > "$work/$name.log"
-	PATH="$work/bin:$PATH" FAKE_NIX_LOG=$work/$name.log FUZZ_OPT=${FUZZ_OPT_UNDER_TEST:-ReleaseSafe} \
+	env -u JPEGZ_FUZZ_SEED PATH="$work/bin:$PATH" FAKE_NIX_LOG=$work/$name.log FUZZ_OPT=${FUZZ_OPT_UNDER_TEST:-ReleaseSafe} \
 		bash "$work/project/fuzz" "$@" > "$work/$name.out" 2> "$work/$name.err"
 	status=$?
 }
 eval_call=$'CALL\neval\n--impure\n--raw\n--expr\nbuiltins.currentSystem\n'
-campaign_expr() {
-	printf '(builtins.getFlake "%s").legacyPackages.x86_64-linux.fuzzCampaign "%s"' "$work/project" "$1"
+# The seed must reach Nix through the environment of a git-tracked installable.
+campaign_call() { # SEED [--rebuild]
+	printf '%sCALL\nbuild\n%s\n--impure\n--no-link\n--print-build-logs\n' "$eval_call" "$work/project#legacyPackages.x86_64-linux.fuzz-campaign-seeded"
+	[[ ${2-} == --rebuild ]] && printf -- '--rebuild\n'
+	printf 'SEED=%s' "$1"
 }
 
 for selection in seeds rebuild-seeds; do
@@ -41,6 +44,7 @@ for selection in seeds rebuild-seeds; do
 	run_fuzz "$selection" "${args[@]}"
 	expected=$eval_call$'CALL\nbuild\n'"$work/project#checks.x86_64-linux.fuzz-seeds"$'\n--no-link\n--print-build-logs'
 	[[ $selection == rebuild-seeds ]] && expected+=$'\n--rebuild'
+	expected+=$'\nSEED=<unset>'
 	if [[ $status -eq 0 && $(cat "$work/$selection.log") == "$expected" ]]; then
 		pass "fuzz replays the fixed seed corpus ($selection)"
 	else
@@ -56,8 +60,7 @@ for form in '--seed 0xABCD' '--seed=0x0000abcd' '--seed 0XaBcD'; do
 		args=(--fuzz "${seed_args[@]}")
 		[[ $rebuild == yes ]] && args+=(--rebuild)
 		run_fuzz explicit "${args[@]}"
-		expected=$eval_call$'CALL\nbuild\n--impure\n--expr\n'"$(campaign_expr 0x0000abcd)"$'\n--no-link\n--print-build-logs'
-		[[ $rebuild == yes ]] && expected+=$'\n--rebuild'
+		if [[ $rebuild == yes ]]; then expected=$(campaign_call 0x0000abcd --rebuild); else expected=$(campaign_call 0x0000abcd); fi
 		if [[ $status -eq 0 && $(cat "$work/explicit.log") == "$expected" ]] &&
 			grep -qF 'campaign seed 0x0000abcd (reproduce with: ./fuzz --fuzz --seed 0x0000abcd)' "$work/explicit.err"; then
 			pass "fuzz campaign uses and announces an explicit seed ($form, rebuild=$rebuild)"
@@ -75,7 +78,7 @@ for attempt in 1 2 3; do
 	run_fuzz random --fuzz
 	announced=$(sed -n 's/^fuzz: campaign seed \(0x[0-9a-f]\{8\}\) (reproduce with: \.\/fuzz --fuzz --seed \1)$/\1/p' "$work/random.err")
 	if [[ $status -ne 0 || ! $announced =~ ^0x[0-9a-f]{8}$ ]]; then random_ok=0; break; fi
-	expected=$eval_call$'CALL\nbuild\n--impure\n--expr\n'"$(campaign_expr "$announced")"$'\n--no-link\n--print-build-logs'
+	expected=$(campaign_call "$announced")
 	[[ $(cat "$work/random.log") == "$expected" ]] || { random_ok=0; break; }
 	seeds+=("$announced")
 done
