@@ -1,0 +1,6 @@
+# Deliberately held sibling pins for tools/check-dependency-freshness.
+# Format: DEPENDENCY PINNED_COMMIT REASON. A hold applies only while
+# build.zig.zon pins exactly that commit; changing the pin makes the hold an
+# error until it is updated or removed.
+jp2z a7cc185ca16a0c06a08a2d995295814d6347fb6d published JP2 pin kept until jp2z pixel APIs and component-resolution oracles qualify (PLAN)
+libjxlz 93b29e86281ea4ba9c681f4879318c87e8a800a4 re-pin waits for real-input integration and cold private-source access (PLAN)

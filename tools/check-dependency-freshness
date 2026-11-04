@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# Fail when a pmarreck sibling dependency pinned in build.zig.zon trails its
+# upstream default branch. Ported from tiffz's gate with two changes: a
+# committed holds file can keep a deliberately held pin (named by its exact
+# commit) from failing the build, and the offline sibling fallback reads the
+# sibling's last-fetched origin/HEAD and accepts a pin that is ahead of it.
+set -u
+
+usage() {
+	cat <<'EOF'
+Usage: check-dependency-freshness --manifest PATH --repo-root PATH [--holds PATH]
+
+Reference order: upstream default branch (git ls-remote HEAD), then the
+sibling checkout ../REPO (origin/HEAD, else HEAD) when upstream is unreachable.
+A pin equal to the reference, or provably ahead of a sibling reference, passes.
+A stale pin fails unless the holds file names that exact pinned commit:
+  DEPENDENCY COMMIT REASON...
+A hold naming any other commit, or an unknown dependency, is an error.
+Missing references fail closed. ALLOW_STALE=1 permits the build loudly.
+JPEGZ_FRESHNESS_REMOTE_BASE overrides git@github.com:pmarreck/ for tests.
+EOF
+}
+
+truthy() {
+	case "$(printf '%s' "${1-}" | tr '[:upper:]' '[:lower:]')" in
+		1|yes|true|on|y) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+full_commit() { [[ ${1-} =~ ^[0-9a-f]{40}$ ]]; }
+
+manifest=''
+repo_root=''
+holds=''
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--manifest|--repo-root|--holds)
+			[ "$#" -ge 2 ] || { usage >&2; exit 2; }
+			case "$1" in
+				--manifest) manifest=$2 ;;
+				--repo-root) repo_root=$2 ;;
+				--holds) holds=$2 ;;
+			esac
+			shift 2 ;;
+		-h|--help) usage; exit 0 ;;
+		*) printf 'dependency freshness: unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+	esac
+done
+[ -n "$manifest" ] && [ -n "$repo_root" ] || { usage >&2; exit 2; }
+[ -r "$manifest" ] || { printf 'dependency freshness: manifest is not readable: %s\n' "$manifest" >&2; exit 2; }
+[ -z "$holds" ] || [ -r "$holds" ] || { printf 'dependency freshness: holds file is not readable: %s\n' "$holds" >&2; exit 2; }
+
+remote_base=${JPEGZ_FRESHNESS_REMOTE_BASE:-git@github.com:pmarreck/}
+sibling_parent=$(dirname "$(cd "$repo_root" && pwd)")
+
+# NAME<TAB>REPO<TAB>PIN for each github.com/pmarreck archive or git URL.
+records=$(awk '
+	/^[[:space:]]*\.[A-Za-z0-9_-]+[[:space:]]*=[[:space:]]*\.\{/ {
+		name = $0; sub(/^[[:space:]]*\./, "", name); sub(/[[:space:]]*=.*$/, "", name)
+	}
+	/\.url[[:space:]]*=[[:space:]]*"[^"]+"/ {
+		url = $0; sub(/^.*\.url[[:space:]]*=[[:space:]]*"/, "", url); sub(/".*$/, "", url)
+		if (url !~ /github\.com\/pmarreck\//) next
+		pin = ""; repo = url
+		if (index(url, "/archive/") > 0) {
+			pin = url; sub(/^.*\/archive\//, "", pin); sub(/\.(tar\.gz|zip)$/, "", pin)
+			sub(/\/archive\/.*$/, "", repo)
+		} else if (index(url, "#") > 0) {
+			pin = url; sub(/^.*#/, "", pin); sub(/#.*$/, "", repo)
+		}
+		sub(/\.git$/, "", repo); sub(/^.*\//, "", repo)
+		printf "%s\t%s\t%s\n", name, repo, pin
+	}
+' "$manifest")
+
+declare -A hold_commit=()
+if [ -n "$holds" ]; then
+	line_number=0
+	while IFS= read -r line || [ -n "$line" ]; do
+		line_number=$((line_number + 1))
+		line=${line%%#*}
+		read -r hold_name commit reason <<< "$line"
+		[ -n "${hold_name:-}" ] || continue
+		if ! full_commit "${commit:-}" || [ -z "${reason:-}" ]; then
+			printf 'dependency freshness: holds line %d needs DEPENDENCY COMMIT REASON\n' "$line_number" >&2
+			exit 2
+		fi
+		if [ -n "${hold_commit[$hold_name]:-}" ]; then
+			printf 'dependency freshness: duplicate hold for %s\n' "$hold_name" >&2
+			exit 2
+		fi
+		hold_commit[$hold_name]=$commit
+	done < "$holds"
+fi
+
+remote_ref() {
+	local output status limiter=()
+	if command -v timeout >/dev/null 2>&1; then limiter=(timeout 15)
+	elif command -v gtimeout >/dev/null 2>&1; then limiter=(gtimeout 15); fi
+	output=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=5' \
+		"${limiter[@]}" git ls-remote --exit-code "$1" HEAD 2>/dev/null)
+	status=$?
+	[ "$status" -eq 0 ] || return 1
+	reference=${output%%[[:space:]]*}
+	full_commit "$reference"
+}
+
+sibling_ref() {
+	local sibling=$1
+	[ -e "$sibling/.git" ] || return 1
+	reference=$(git -C "$sibling" rev-parse --verify --quiet 'refs/remotes/origin/HEAD^{commit}' 2>/dev/null) ||
+		reference=$(git -C "$sibling" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null) || return 1
+	full_commit "$reference"
+}
+
+issues=0
+held=0
+declare -A seen=()
+while IFS=$'\t' read -r name repo pin; do
+	[ -n "$name" ] || continue
+	seen[$name]=1
+	if ! full_commit "$pin"; then
+		printf 'dependency freshness: %s pin must be a full lowercase 40-character commit, found %s\n' "$name" "${pin:-<missing>}" >&2
+		issues=$((issues + 1)); continue
+	fi
+	if [ -n "${hold_commit[$name]:-}" ] && [ "${hold_commit[$name]}" != "$pin" ]; then
+		printf 'dependency freshness: %s hold names %s but the pin is %s; update or remove the hold\n' "$name" "${hold_commit[$name]}" "$pin" >&2
+		issues=$((issues + 1)); continue
+	fi
+	reference=''
+	sibling=$sibling_parent/$repo
+	remote=$remote_base$repo.git
+	if remote_ref "$remote"; then
+		source="upstream $remote"
+		ahead=0
+	elif sibling_ref "$sibling"; then
+		source="sibling $sibling"
+		if ! git -C "$sibling" cat-file -e "$pin^{commit}" 2>/dev/null; then
+			printf 'dependency freshness: unable to verify %s; upstream unreachable and sibling %s lacks pinned %s\n' "$name" "$sibling" "$pin" >&2
+			issues=$((issues + 1)); continue
+		fi
+		ahead=0
+		git -C "$sibling" merge-base --is-ancestor "$reference" "$pin" 2>/dev/null && ahead=1
+	else
+		printf 'dependency freshness: unable to verify %s at %s; upstream unreachable and no readable sibling at %s\n' "$name" "$pin" "$sibling" >&2
+		issues=$((issues + 1)); continue
+	fi
+	if [ "$pin" = "$reference" ]; then
+		printf 'dependency freshness: %s current at %s (%s)\n' "$name" "$pin" "$source" >&2
+	elif [ "$ahead" -eq 1 ]; then
+		printf 'dependency freshness: %s pin %s is ahead of %s %s\n' "$name" "$pin" "$source" "$reference" >&2
+	elif [ -n "${hold_commit[$name]:-}" ]; then
+		printf 'warning: dependency freshness: %s held at %s; %s is at %s\n' "$name" "$pin" "$source" "$reference" >&2
+		held=$((held + 1))
+	else
+		printf 'dependency freshness: %s is stale; pinned %s, %s at %s\n' "$name" "$pin" "$source" "$reference" >&2
+		issues=$((issues + 1))
+	fi
+done <<< "$records"
+
+for hold_name in "${!hold_commit[@]}"; do
+	if [ -z "${seen[$hold_name]:-}" ]; then
+		printf 'dependency freshness: hold names %s, which is not a pinned sibling dependency\n' "$hold_name" >&2
+		issues=$((issues + 1))
+	fi
+done
+
+[ "$issues" -eq 0 ] && exit 0
+if truthy "${ALLOW_STALE-}"; then
+	printf 'warning: ALLOW_STALE permits this build with %d dependency freshness issue(s)\n' "$issues" >&2
+	exit 0
+fi
+printf 'error: %d dependency freshness issue(s); hold the exact pin in .dependency-holds or set ALLOW_STALE=1\n' "$issues" >&2
+exit 1

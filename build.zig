@@ -856,6 +856,9 @@ pub fn build(b: *std.Build) void {
 	// ./test must not publish Nix result links into the checkout.
 	const test_entry_cli = b.addSystemCommand(&.{ "bash", "tests/cli/test-entry.bash" });
 	test_step.dependOn(&test_entry_cli.step);
+	// Pre-build sibling-pin freshness gate, against local Git fixtures.
+	const freshness_cli = b.addSystemCommand(&.{ "bash", "tests/cli/dependency-freshness.bash" });
+	test_step.dependOn(&freshness_cli.step);
     // ============================================================
     // `zig build cleanroom-diff` — non-committed analysis tool that
     // walks a directory of JPEGs and diffs cleanroom vs. wrapper

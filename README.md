@@ -104,6 +104,10 @@ JP2 pixel decoding uses OpenJPEG, supplied by Nix or compiled from source;
 JP2 validation uses jp2z independently of that decoder.
 
 Run `./build` for the production build and `./test` for the full suite.
+`./build` first checks that the jp2z and libjxlz pins in `build.zig.zon` match
+their upstream default branches, falling back to sibling checkouts when offline.
+A deliberately held pin is listed with its reason in `.dependency-holds`;
+`ALLOW_STALE=1` overrides the gate for one build.
 libjxlz is private. Builds require GitHub SSH access to
 `git@github.com:pmarreck/libjxlz`; Nix fetches its locked source before entering
 the build sandbox and seeds Zig's package cache. Direct Zig consumers must

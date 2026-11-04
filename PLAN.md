@@ -41,7 +41,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Complete scan consumption, MCU counts, sampling edges, noninterleaved scans, restart cadence and predictor-reset coverage across supported modes.
 - [ ] Complete progressive scan-history and coefficient-range constraints with independent normative review and valid boundary controls.
 - [ ] Classify the known-good corpus as a set and expand reproducible corruption-probe sweeps across JPEG-LS, JPEG 2000 and JPEG XL.
-- [x] Publish d88957b with the mutation-profile correction; all eleven exact-commit CI targets pass in 16 seconds with prepared reuse, and scoped receipts preserve profile identities and pending pristine-control decisions (done 2026-10-29 13:49 EDT; commit d88957b).
 - [x] Move ./fuzz compilation into Nix derivations with fixed seed replay in ./test and a bounded 10000-iteration-request campaign; duration flags and custom compiler arguments are refused (done 2026-11-03 20:42 EST; commit 08e622a).
 - [ ] Compare proven malformed fixtures and false rejects against prior art; report demonstrated detection, hypothetical detectability and valid changes separately.
 - [ ] Confirm consumer promotion through tiffz.jpegz and rerun the private full-PDF experiment without publishing originals or mutants (context: docs/plan_context/pre-canon-2026-09-24.md).
@@ -50,7 +49,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 - [x] Prevent ./test from publishing the checkout result link: a disposable-project stub-nix regression found seven builds without --no-link and a replaced sentinel; all thirteen builds now pass --no-link and the check runs in the unit-test step (done 2026-11-03 21:33 EST; delivered by this change).
 - [ ] Measure fresh test execution separately from admission, dependency setup, evaluation and compilation; preserve complete coverage and report the one-second target/five-second budget; cached CI artifact reuse is qualified at dedea64 (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
-- [ ] Port the requested upstream-first dependency-freshness gate with sibling fallback and set tests for current, stale, missing, offline and ahead-of-sibling cases.
+- [x] Port the upstream-first dependency-freshness gate into ./build with sibling origin/HEAD fallback, ancestry-aware ahead pins and fail-closed missing references; assumption: deliberate holds live in committed .dependency-holds naming exact pins (jp2z, libjxlz now) instead of a blanket override; 14 local-Git cases plus three caught mutations (done 2026-11-03 22:34 EST; delivered by this change).
 - [ ] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks; coordinate the unnecessary encoder linkage with libjxlz.
 - [ ] Add U5b progress controls and pure timestamp-injected rendering; verify rendered output with Peter and test terminal/width degradation.
 - [ ] Confirm consumer dependency deduplication and send remaining append-only finding-registry notices (context: docs/plan_context/pre-canon-2026-09-24.md).
