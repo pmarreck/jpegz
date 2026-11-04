@@ -850,6 +850,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&seed_cache.step);
 	const fuzz_cli = b.addSystemCommand(&.{ "bash", "tests/cli/fuzz.bash" });
 	test_step.dependOn(&fuzz_cli.step);
+	// ./test must not publish Nix result links into the checkout.
+	const test_entry_cli = b.addSystemCommand(&.{ "bash", "tests/cli/test-entry.bash" });
+	test_step.dependOn(&test_entry_cli.step);
     // ============================================================
     // `zig build cleanroom-diff` — non-committed analysis tool that
     // walks a directory of JPEGs and diffs cleanroom vs. wrapper

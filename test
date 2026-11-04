@@ -35,7 +35,7 @@ run_check "source input identity controls" \
 	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".source-inputs --no-link --print-build-logs
 
 run_check "zig unit tests (nix flake check .#test)" \
-	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".test --print-build-logs
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".test --no-link --print-build-logs
 
 coverage_stats_artifact() {
 	local artifact
@@ -51,18 +51,18 @@ run_check "fuzz result contract" \
 	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".fuzz-result --no-link --print-build-logs
 
 run_check "package builds (nix flake check .#build)" \
-	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".build --print-build-logs
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".build --no-link --print-build-logs
 
 run_check "Windows cross-link check" \
-	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".cross-windows --print-build-logs
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".cross-windows --no-link --print-build-logs
 
 for platform in aarch64-linux aarch64-macos aarch64-windows; do
 	run_check "$platform cross-link check" \
-		nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')"."cross-$platform" --print-build-logs
+		nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')"."cross-$platform" --no-link --print-build-logs
 done
 
 run_check "validator dependency closure" \
-	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".validator-closure --print-build-logs
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".validator-closure --no-link --print-build-logs
 
 # Consumer-facing invariant that jpegz's own build CANNOT catch: every jpegz
 # test links the C libs, so a regression that re-forces libjpeg/openjpeg/charls

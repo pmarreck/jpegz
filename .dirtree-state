@@ -74,6 +74,7 @@ annotate=[
 	tests/cli/corruption_coverage.bash = Isolated campaign profile-set, denominator and Nix artifact controls
 	tests/cli/fuzz-result.bash = Process-status and failure-evidence classifier controls for the Nix fuzz gate
 	tests/cli/fuzz.bash = Disposable Nix adapter effects and argument/profile classifiers for the fuzz entry point
+	tests/cli/test-entry.bash = Disposable-project check that ./test passes --no-link to every Nix build and leaves result links alone
 	tests/cli/lib/capture.bash = Vendored capture() helper (Peter, MIT) — stdout/stderr/rc capture; vendored so CLI tests are hermetic in the Nix sandbox
 	tests/cli/nix_source.bash = Isolated fixture and private Nix store setup with checked cleanup for source controls
 	tests/cli/no_c_consumer.bash = Gate: pure-Zig consumer must import jpegz + call validate() with zero C deps (has negative control)

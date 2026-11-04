@@ -8,7 +8,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [x] Acknowledge the recovery notice, consume superseded UPS notices and verify the preserved checkout and pinned toolchain before resuming the fuzz gate (done 2026-11-02 20:09 EST; recovery acknowledged).
 - [x] Verify the crash-aware fuzz gate against the real bounded campaign and complete suite; the seed-0x6a706567 campaign now fails on the recorded progressive crash instead of passing, and all thirteen ./test checks pass (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-11-03 20:42 EST; commit 08e622a).
 - [x] Recover and fix the progressive AC-refinement fuzz crash: an Ah=1/Al=15 refinement overflowed i16 at 1 << Al; parseSos now rejects Al > 13 and every progressive i16 coefficient conversion returns BackendError, with the fuzz input, six synthetic red witnesses and in-range controls; the same campaign then passes 11298 decode runs (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md; done 2026-11-03 20:44 EST; commit a3e5cac).
-- [ ] Ship 08e622a, a3e5cac and 0ba8802 after the combined ./test passes; confirm thirteen-target exact-commit CI, then send tiffz the classifier revision and consumers the decode-fix receipt.
+- [x] Ship 08e622a, a3e5cac and 0ba8802: combined ./test 13/13, push verified, Mechatron Prime PASS 13/13 at 37231b9 (18 s, prepared reuse), package hash jpegz-0.1.0-staw4JSgFQDuobcXQtQFVjbBqMBzzSzQMAx7v2Ak-s0G; receipts sent to tiffz, validate and coordinator (done 2026-11-03 21:12 EST; commit 37231b9).
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; client terminal and activation shortcut requested, settings unchanged.
 - [ ] Resolve the corruption-coverage default JPEG-LS fixture mismatch; owner choice requested among three supported defaults, an audited inconclusive JPEG-LS control, or retaining the blocked campaign; preserve classifications and denominators.
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
@@ -34,8 +34,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Finish provider qualification after source review of jp2z 0c2162b and libjxlz e1c521d; facade 197 is shipped and libjxlz CI is complete for five targets at 1a53d9d9 and d6cfb688 (prepared-artifact reuse); real-input integration and cold private-source access remain required before any pin change; the November 3 provider note (more raw-8 histogram cases now raw-16 corrupt, open container prefixes now NEED_MORE_INPUT, local five-target evidence only) joins the same review (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
 - [ ] Verify jp2z pixel APIs and component-resolution oracles before replacing OpenJPEG; retain the T.800 edition limit and unresolved warning-class review.
 - [x] Export classicFindingVerdict(code, severity) for tiffz with an exhaustive FindingCode switch; classifyClassicFindings folds over it with unchanged precedence, checked across all 85 codes and four severities against a literal table and the fold; acknowledgment sent, revision follows shipment (done 2026-11-03 20:38 EST; commit 0ba8802).
-- [x] Reproduce both OpenJPEG component-count narrowing and two-component layout crashes; literal supported/unsupported sets, independent component-plane controls and complete ./test pass without changing the pixel API or provider pins (done 2026-10-29 13:25 EDT; delivered by this change).
-- [x] Publish abb3eb3 with the JP2 component-layout correction; all eleven exact-commit CI targets pass in 16 seconds with prepared reuse, and immutable receipts reach the coordinator and consumers before the mutation-operator audit (done 2026-10-29 13:30 EDT; commit abb3eb3).
 
 ## JPEG entropy and comparison coverage
 
@@ -51,7 +49,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Build and CLI
 
-- [ ] Prevent ./test from publishing the working checkout's result symlink; reproduce in a disposable project and require --no-link for every Nix build check.
+- [x] Prevent ./test from publishing the checkout result link: a disposable-project stub-nix regression found seven builds without --no-link and a replaced sentinel; all thirteen builds now pass --no-link and the check runs in the unit-test step (done 2026-11-03 21:33 EST; delivered by this change).
 - [ ] Measure fresh test execution separately from admission, dependency setup, evaluation and compilation; preserve complete coverage and report the one-second target/five-second budget; cached CI artifact reuse is qualified at dedea64 (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
 - [ ] Port the requested upstream-first dependency-freshness gate with sibling fallback and set tests for current, stale, missing, offline and ahead-of-sibling cases.
 - [ ] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks; coordinate the unnecessary encoder linkage with libjxlz.
