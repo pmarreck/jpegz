@@ -36,6 +36,7 @@ annotate=[
 	include/jpegz_core.h = Hand-curated public C ABI header (jpegz_decode/validate/free/version)
 	nix/source.nix = Stable Nix source identity with scoped documentation exclusions and retained legal notices
 	src/cli/jpegz.c = C ABI validation CLI with typed findings, JSON and distinct exits for known defects and inconclusive input
+	src/core/frame_header.zig = Allocation-free first-SOFn lookup and T.81 SOFn classification without entropy decoding
 	src/core/errors.zig = Append-only finding registry, including JFIF coverage 67 and approved JXL ICC symbol 197
 	src/core/last_error.zig = Thread-local last-error message buffer backing the C ABI
 	src/core/types.zig = Core public types: Image, ImageMetadata, ColorSpace, PixelLayout

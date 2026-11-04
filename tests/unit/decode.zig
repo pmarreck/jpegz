@@ -2381,3 +2381,70 @@ test "fuzz-found progressive refinement with Al=15 returns a typed error" {
 	defer report.deinit(std.testing.allocator);
 	try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
 }
+
+// ── Public frame-header lookup against real fixtures ─────────────
+//
+// Expected values were read independently with libjpeg-turbo
+// `djpeg -verbose -verbose`, not from this parser; dimensions are also cross-checked against
+// a full decode where the decoder supports the frame.
+const FrameFixture = struct {
+	name: []const u8,
+	data: []const u8,
+	sof_type: u4,
+	width: u16,
+	height: u16,
+	/// Luma (first component) sampling; later components are 1x1.
+	h0: u4,
+	v0: u4,
+	count: u8,
+};
+
+fn frameFixture(comptime name: []const u8, sof_type: u4, width: u16, height: u16, h0: u4, v0: u4, count: u8) FrameFixture {
+	return .{ .name = name, .data = @embedFile("fixtures/" ++ name), .sof_type = sof_type, .width = width, .height = height, .h0 = h0, .v0 = v0, .count = count };
+}
+
+const frame_fixtures = [_]FrameFixture{
+	frameFixture("baseline_16x16_rgb_420.jpg", 0, 16, 16, 2, 2, 3),
+	frameFixture("baseline_8x8_yuv422.jpg", 0, 8, 8, 2, 1, 3),
+	frameFixture("baseline_4x4_rgb_444.jpg", 0, 4, 4, 1, 1, 3),
+	frameFixture("baseline_4x4_grayscale.jpg", 0, 4, 4, 1, 1, 1),
+	frameFixture("baseline_4x4_with_exif.jpg", 0, 4, 4, 2, 2, 3),
+	frameFixture("baseline_16x16_rgb12_440.jpg", 1, 16, 16, 1, 2, 3),
+	frameFixture("extended_2x2_rgb_sof1.jpg", 1, 2, 2, 2, 2, 3),
+	frameFixture("progressive_16x16_rgb12_422.jpg", 2, 16, 16, 2, 1, 3),
+	frameFixture("progressive_8x8_gray.jpg", 2, 8, 8, 1, 1, 1),
+	frameFixture("lossless_4x4_gray8.jpg", 3, 4, 4, 1, 1, 1),
+	frameFixture("lossless_4x4_rgb_pred1.jpg", 3, 4, 4, 1, 1, 3),
+	frameFixture("arith_baseline_16x16_rgb_420.jpg", 9, 16, 16, 2, 2, 3),
+	frameFixture("arith_progressive_16x16_rgb_440.jpg", 10, 16, 16, 1, 2, 3),
+};
+
+test "frameHeader reports fixture geometry and sampling factors" {
+	const allocator = std.testing.allocator;
+	for (frame_fixtures) |fixture| {
+		errdefer std.debug.print("fixture: {s}\n", .{fixture.name});
+		const header = try jpegz.frameHeader(fixture.data);
+		try std.testing.expectEqual(@as(u8, 0xFF), fixture.data[header.sof_offset]);
+		try std.testing.expectEqual(@as(u8, 0xC0) + fixture.sof_type, fixture.data[header.sof_offset + 1]);
+		try std.testing.expectEqual(fixture.sof_type, header.sof_type);
+		try std.testing.expectEqual(jpegz.frameKind(fixture.sof_type).?, header.kind);
+		try std.testing.expectEqual(fixture.width, header.width);
+		try std.testing.expectEqual(fixture.height, header.height);
+		try std.testing.expectEqual(fixture.count, header.component_count);
+		for (header.components(), 0..) |component, index| {
+			const h: u4 = if (index == 0) fixture.h0 else 1;
+			const v: u4 = if (index == 0) fixture.v0 else 1;
+			try std.testing.expectEqual(h, component.h);
+			try std.testing.expectEqual(v, component.v);
+		}
+		var image = try jpegz.decode(allocator, fixture.data);
+		defer image.deinit(allocator);
+		try std.testing.expectEqual(@as(u32, header.width), image.width);
+		try std.testing.expectEqual(@as(u32, header.height), image.height);
+	}
+}
+
+test "frameHeader rejects non-frame family inputs without decoding" {
+	try std.testing.expectError(error.UnsupportedFrameType, jpegz.frameHeader(@embedFile("fixtures/jpegls_4x4_gray8.jls")));
+	try std.testing.expectError(error.MissingSoi, jpegz.frameHeader(@embedFile("fixtures/jp2_8x8_rgb.jp2")));
+}

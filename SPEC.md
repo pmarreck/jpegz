@@ -93,6 +93,17 @@ Consumers of the legacy report that label individual findings should call
 covers every finding code, and the report-level verdict applies the precedence
 above rather than taking the worst label.
 
+`frameHeader(data)` (Zig only) walks markers from SOI to the first T.81 SOFn
+without entropy decoding and returns the marker offset, SOFn number, precision,
+dimensions and each component's Ci, Hi, Vi and Tqi as stored, for up to 255
+components and with no allocation. It does not judge sampling factors, zero
+height or selectors; `validate` reports those. Its errors separate a stream with
+no frame (`NoFrameHeader`, SOS or EOI first, as in TIFF JPEGTables) from
+missing SOI, truncation, a malformed marker sequence, an Lf/Nf mismatch and a
+JPEG-LS SOF55. `frameKind(n)` classifies every SOFn as sequential, progressive
+or lossless, Huffman or arithmetic, differential or not, and baseline (SOF0
+only); 4, 8 and 12 are not frames.
+
 jpegz owns recognition of known JPEG encoder defects. All-zero Huffman padding
 is `known_defect` (appended verdict value 4), with typed finding 63 and WARN
 treatment. Ordinary warnings remain distinct. Corruption and incomplete checks

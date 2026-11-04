@@ -489,6 +489,23 @@ pub fn validate(
 /// Re-exported from the facade; see `facade_validation.sniff`.
 pub const sniff = facade.sniff;
 
+/// Codec-owned T.81 frame-header lookup without entropy decoding: the
+/// first SOFn's offset, type, precision, dimensions and per-component
+/// sampling factors, reported as stored. See `core/frame_header.zig`.
+pub const frame_header = @import("core/frame_header.zig");
+pub const FrameHeader = frame_header.FrameHeader;
+pub const FrameHeaderError = frame_header.FrameHeaderError;
+pub const FrameComponent = frame_header.FrameComponent;
+pub const FrameKind = frame_header.FrameKind;
+pub const FrameProcess = frame_header.FrameProcess;
+pub const FrameCoding = frame_header.FrameCoding;
+pub const frameHeader = frame_header.frameHeader;
+pub const frameKind = frame_header.frameKind;
+
+test {
+	_ = frame_header;
+}
+
 /// Classify one finding from the legacy `validate` report the way
 /// `validateAny` classifies the classic T.81 / T.87 leg. Any FAIL is corrupt.
 /// Recovered entropy truncation and restart faults are corrupt at every

@@ -1,6 +1,8 @@
 //! Fuzz target: `jpegz.decode` must never panic, hang, or leak on
 //! arbitrary byte input — it can only return a valid `Image` or a
-//! `DecodeError`. Caught by mutation: the SOF9 Q-coder infinite-loop
+//! `DecodeError`. The same inputs exercise `jpegz.frameHeader`, whose
+//! result must describe a SOFn inside the input and agree with any
+//! decoded dimensions. Caught by mutation: the SOF9 Q-coder infinite-loop
 //! bug that shipped past B1 checkpoint 1 would have been caught here.
 //!
 //! Two modes:
@@ -89,11 +91,29 @@ fn fuzzDecode(ctx: Ctx, smith: *std.testing.Smith) !void {
     const len = smith.slice(ctx.buf);
     const input: []const u8 = ctx.buf[0..len];
 
+    // frameHeader must never panic, and a header it returns must point at
+    // the SOFn marker it describes, wholly inside the input.
+    const header: ?jpegz.FrameHeader = jpegz.frameHeader(input) catch null;
+    if (header) |h| {
+        try std.testing.expect(h.sof_offset + 4 <= input.len);
+        try std.testing.expectEqual(@as(u8, 0xFF), input[h.sof_offset]);
+        try std.testing.expectEqual(@as(u8, 0xC0) + @as(u8, h.sof_type), input[h.sof_offset + 1]);
+        const frame_length = (@as(usize, input[h.sof_offset + 2]) << 8) | input[h.sof_offset + 3];
+        try std.testing.expectEqual(8 + 3 * @as(usize, h.component_count), frame_length);
+        try std.testing.expect(h.sof_offset + 2 + frame_length <= input.len);
+    }
+
     // The contract: decode must either succeed (return a valid Image
     // the caller must deinit) or return a DecodeError. Any panic or
     // leak is a fuzz failure surfaced by the test runner.
     var img = jpegz.decode(std.testing.allocator, input) catch return;
     defer img.deinit(std.testing.allocator);
+
+    // Both read the first frame header; a decoded image must agree with it.
+    if (header) |h| {
+        try std.testing.expectEqual(@as(u32, h.width), img.width);
+        try std.testing.expectEqual(@as(u32, h.height), img.height);
+    }
 
     // If decode succeeded, basic invariants the public API promises:
     //   pixels.len == width * height * channels  (or *2 for ≥9-bit)
