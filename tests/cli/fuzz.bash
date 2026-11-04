@@ -21,80 +21,113 @@ EOF
 } > "$work/bin/nix"
 chmod +x "$work/bin/nix" || exit 1
 failures=0
-for selection in seeds campaign rebuild-seeds rebuild-campaign; do
-	args=()
-	target=checks.x86_64-linux.fuzz-seeds
-	case $selection in
-		campaign) args=(--fuzz); target=packages.x86_64-linux.fuzz-campaign ;;
-		rebuild-seeds) args=(--rebuild) ;;
-		rebuild-campaign) args=(--fuzz --rebuild); target=packages.x86_64-linux.fuzz-campaign ;;
-	esac
-	log=$work/$selection.log
-	PATH="$work/bin:$PATH" FAKE_NIX_LOG=$log FUZZ_OPT=ReleaseSafe \
-		bash "$work/project/fuzz" "${args[@]}" > "$work/$selection.out" 2> "$work/$selection.err"
+pass() { printf '    ok %s\n' "$1"; }
+fail() { printf '    FAIL %s\n' "$1" >&2; failures=$((failures+1)); }
+run_fuzz() { # NAME ARGS...; leaves $status, $work/NAME.{log,out,err}
+	local name=$1; shift
+	: > "$work/$name.log"
+	PATH="$work/bin:$PATH" FAKE_NIX_LOG=$work/$name.log FUZZ_OPT=${FUZZ_OPT_UNDER_TEST:-ReleaseSafe} \
+		bash "$work/project/fuzz" "$@" > "$work/$name.out" 2> "$work/$name.err"
 	status=$?
-	expected=$'CALL\neval\n--impure\n--raw\n--expr\nbuiltins.currentSystem\nCALL\nbuild\n'
-	expected+="$work/project#$target"
-	expected+=$'\n--no-link\n--print-build-logs'
-	case $selection in rebuild-*) expected+=$'\n--rebuild' ;; esac
-	actual=$(cat "$log")
-	if [[ $status -eq 0 && $actual == "$expected" ]]; then
-		printf '    ok fuzz selects the declared Nix artifact (%s)\n' "$selection"
+}
+eval_call=$'CALL\neval\n--impure\n--raw\n--expr\nbuiltins.currentSystem\n'
+campaign_expr() {
+	printf '(builtins.getFlake "%s").legacyPackages.x86_64-linux.fuzzCampaign "%s"' "$work/project" "$1"
+}
+
+for selection in seeds rebuild-seeds; do
+	args=()
+	[[ $selection == rebuild-seeds ]] && args=(--rebuild)
+	run_fuzz "$selection" "${args[@]}"
+	expected=$eval_call$'CALL\nbuild\n'"$work/project#checks.x86_64-linux.fuzz-seeds"$'\n--no-link\n--print-build-logs'
+	[[ $selection == rebuild-seeds ]] && expected+=$'\n--rebuild'
+	if [[ $status -eq 0 && $(cat "$work/$selection.log") == "$expected" ]]; then
+		pass "fuzz replays the fixed seed corpus ($selection)"
 	else
-		printf '    FAIL fuzz selects the declared Nix artifact (%s, status=%s)\n' "$selection" "$status" >&2
-		printf 'expected adapter effects:\n%s\nactual adapter effects:\n%s\n' "$expected" "$actual" >&2
-		failures=$((failures+1))
+		fail "fuzz replays the fixed seed corpus ($selection, status=$status)"
+		printf 'expected:\n%s\nactual:\n%s\n' "$expected" "$(cat "$work/$selection.log")" >&2
 	fi
 done
 
+# An explicit seed is normalized to eight lowercase hex digits.
+for form in '--seed 0xABCD' '--seed=0x0000abcd' '--seed 0XaBcD'; do
+	read -r -a seed_args <<< "$form"
+	for rebuild in no yes; do
+		args=(--fuzz "${seed_args[@]}")
+		[[ $rebuild == yes ]] && args+=(--rebuild)
+		run_fuzz explicit "${args[@]}"
+		expected=$eval_call$'CALL\nbuild\n--impure\n--expr\n'"$(campaign_expr 0x0000abcd)"$'\n--no-link\n--print-build-logs'
+		[[ $rebuild == yes ]] && expected+=$'\n--rebuild'
+		if [[ $status -eq 0 && $(cat "$work/explicit.log") == "$expected" ]] &&
+			grep -qF 'campaign seed 0x0000abcd (reproduce with: ./fuzz --fuzz --seed 0x0000abcd)' "$work/explicit.err"; then
+			pass "fuzz campaign uses and announces an explicit seed ($form, rebuild=$rebuild)"
+		else
+			fail "fuzz campaign uses and announces an explicit seed ($form, rebuild=$rebuild, status=$status)"
+			printf 'expected:\n%s\nactual:\n%s\nstderr:\n%s\n' "$expected" "$(cat "$work/explicit.log")" "$(cat "$work/explicit.err")" >&2
+		fi
+	done
+done
+
+# Without --seed each campaign draws a fresh seed, announces it and builds it.
+seeds=()
+random_ok=1
+for attempt in 1 2 3; do
+	run_fuzz random --fuzz
+	announced=$(sed -n 's/^fuzz: campaign seed \(0x[0-9a-f]\{8\}\) (reproduce with: \.\/fuzz --fuzz --seed \1)$/\1/p' "$work/random.err")
+	if [[ $status -ne 0 || ! $announced =~ ^0x[0-9a-f]{8}$ ]]; then random_ok=0; break; fi
+	expected=$eval_call$'CALL\nbuild\n--impure\n--expr\n'"$(campaign_expr "$announced")"$'\n--no-link\n--print-build-logs'
+	[[ $(cat "$work/random.log") == "$expected" ]] || { random_ok=0; break; }
+	seeds+=("$announced")
+done
+if [[ $random_ok -eq 1 && ${#seeds[@]} -eq 3 ]] &&
+	! [[ ${seeds[0]} == "${seeds[1]}" && ${seeds[1]} == "${seeds[2]}" ]]; then
+	pass "fuzz campaign builds the random seed it announces (${seeds[*]})"
+else
+	fail "fuzz campaign builds the random seed it announces (status=$status, seeds=${seeds[*]:-none})"
+	cat "$work/random.err" "$work/random.log" >&2
+fi
+
+# A failed campaign keeps the Nix status and repeats the reproduction seed.
+FAKE_NIX_STATUS=17 run_fuzz failed-campaign --fuzz --seed 0x1
+if [[ $status -eq 17 ]] && grep -qF 'campaign failed with seed 0x00000001; reproduce with: ./fuzz --fuzz --seed 0x00000001' "$work/failed-campaign.err"; then
+	pass "fuzz reports the reproduction seed when a campaign fails"
+else
+	fail "fuzz reports the reproduction seed when a campaign fails (status=$status)"
+	cat "$work/failed-campaign.err" >&2
+fi
+FAKE_NIX_STATUS=17 run_fuzz failed-seeds
+if [[ $status -eq 17 ]]; then
+	pass "fuzz preserves a failed Nix check status"
+else
+	fail "fuzz preserves a failed Nix check status (status=$status)"
+fi
+
 # Classify the whole rejected argument set before any Nix effect.
-for argument in --fuzz=120s --fuzz=0 --fuzz=10000 --unknown -j8; do
-	log=$work/invalid.log
-	: > "$log"
-	PATH="$work/bin:$PATH" FAKE_NIX_LOG=$log FUZZ_OPT=ReleaseSafe \
-		bash "$work/project/fuzz" "$argument" > "$work/invalid.out" 2> "$work/invalid.err"
-	status=$?
-	if [[ $status -eq 2 && ! -s $log ]]; then
-		printf '    ok fuzz rejects unsupported arguments before Nix (%s)\n' "$argument"
+for argument_set in --fuzz=120s --fuzz=0 --fuzz=10000 --unknown -j8 '--seed 0x1' '--fuzz --seed' \
+	'--fuzz --seed=123' '--fuzz --seed=0x' '--fuzz --seed=0x123456789' '--fuzz --seed=0xg1' '--fuzz --seed=-0x1'; do
+	read -r -a args <<< "$argument_set"
+	run_fuzz invalid "${args[@]}"
+	if [[ $status -eq 2 && ! -s $work/invalid.log ]]; then
+		pass "fuzz rejects unsupported arguments before Nix ($argument_set)"
 	else
-		printf '    FAIL fuzz rejects unsupported arguments before Nix (%s, status=%s)\n' "$argument" "$status" >&2
-		failures=$((failures+1))
+		fail "fuzz rejects unsupported arguments before Nix ($argument_set, status=$status)"
 	fi
 done
 
 for optimize in Debug ReleaseFast ReleaseSmall; do
-	log=$work/optimize.log
-	: > "$log"
-	PATH="$work/bin:$PATH" FAKE_NIX_LOG=$log FUZZ_OPT=$optimize \
-		bash "$work/project/fuzz" > "$work/optimize.out" 2> "$work/optimize.err"
-	status=$?
-	if [[ $status -eq 2 && ! -s $log ]]; then
-		printf '    ok fuzz refuses unqualified profiles (%s)\n' "$optimize"
+	FUZZ_OPT_UNDER_TEST=$optimize run_fuzz optimize
+	if [[ $status -eq 2 && ! -s $work/optimize.log ]]; then
+		pass "fuzz refuses unqualified profiles ($optimize)"
 	else
-		printf '    FAIL fuzz refuses unqualified profiles (%s, status=%s)\n' "$optimize" "$status" >&2
-		failures=$((failures+1))
+		fail "fuzz refuses unqualified profiles ($optimize, status=$status)"
 	fi
 done
 
-log=$work/help.log
-PATH="$work/bin:$PATH" FAKE_NIX_LOG=$log FUZZ_OPT=ReleaseSafe \
-	bash "$work/project/fuzz" --help > "$work/help.out" 2> "$work/help.err"
-status=$?
-if [[ $status -eq 0 && ! -s $log ]] && grep -q '10000 iterations' "$work/help.out"; then
-	printf '    ok fuzz help describes the bounded campaign without Nix\n'
+run_fuzz help --help
+if [[ $status -eq 0 && ! -s $work/help.log ]] && grep -q '10000 iterations' "$work/help.out" &&
+	grep -q 'random 32-bit seed' "$work/help.out" && grep -q -- '--seed 0xHEX' "$work/help.out"; then
+	pass "fuzz help describes the random-seed bounded campaign without Nix"
 else
-	printf '    FAIL fuzz help describes the bounded campaign without Nix\n' >&2
-	failures=$((failures+1))
-fi
-
-log=$work/failure.log
-PATH="$work/bin:$PATH" FAKE_NIX_LOG=$log FAKE_NIX_STATUS=17 FUZZ_OPT=ReleaseSafe \
-	bash "$work/project/fuzz" > "$work/failure.out" 2> "$work/failure.err"
-status=$?
-if [[ $status -eq 17 ]]; then
-	printf '    ok fuzz preserves a failed Nix check status\n'
-else
-	printf '    FAIL fuzz preserves a failed Nix check status (status=%s)\n' "$status" >&2
-	failures=$((failures+1))
+	fail "fuzz help describes the random-seed bounded campaign without Nix"
 fi
 test "$failures" -eq 0

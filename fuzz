@@ -3,33 +3,65 @@
 set -u
 root=$(cd -- "$(dirname -- "$0")" && pwd) || exit 1
 campaign=0
+seed=''
 rebuild=()
-for argument in "$@"; do
-	case $argument in
-		--fuzz) campaign=1 ;;
-		--rebuild) rebuild=(--rebuild) ;;
-		-h|--help)
-			cat <<'EOF'
-usage: ./fuzz [--fuzz] [--rebuild]
+usage() {
+	cat <<'EOF'
+usage: ./fuzz [--fuzz [--seed 0xHEX]] [--rebuild]
 
 Default: replay the fixed seed corpus in a Nix ReleaseSafe check.
 --fuzz: run the bounded campaign requesting 10000 iterations per harness
-        with seed 0x6a706567; the runner can overshoot within a batch.
+        with a fresh random 32-bit seed; the runner can overshoot within a
+        batch. The seed is printed before the run and again on failure.
+--seed 0xHEX: rerun the campaign with a reported seed (1 to 8 hex digits).
 --rebuild: request fresh execution of an already prepared Nix check.
 
-Nix can reuse a previous check result without --rebuild. Custom compiler
-arguments and duration suffixes are unsupported by this wrapper. Both modes
-compile and execute inside the Nix build sandbox; no host compiler is used.
+Nix can reuse a previous check result without --rebuild; a passed seed is
+cached, a failed one is not. Custom compiler arguments and duration suffixes
+are unsupported by this wrapper. Both modes compile and execute inside the
+Nix build sandbox; no host compiler is used.
 EOF
-			exit 0 ;;
-		*) printf 'fuzz: unsupported argument: %s; use --help\n' "$argument" >&2; exit 2 ;;
+}
+reject() { printf 'fuzz: %s; use --help\n' "$1" >&2; exit 2; }
+while [[ $# -gt 0 ]]; do
+	case $1 in
+		--fuzz) campaign=1 ;;
+		--rebuild) rebuild=(--rebuild) ;;
+		--seed) [[ $# -ge 2 ]] || reject '--seed needs a value'; seed=$2; shift ;;
+		--seed=*) seed=${1#--seed=} ;;
+		-h|--help) usage; exit 0 ;;
+		*) reject "unsupported argument: $1" ;;
 	esac
+	shift
 done
+if [[ -n $seed ]]; then
+	[[ $campaign -eq 1 ]] || reject '--seed applies only to --fuzz'
+	[[ $seed =~ ^0[xX]([0-9a-fA-F]{1,8})$ ]] || reject "seed must be 0x followed by 1 to 8 hex digits: $seed"
+	printf -v seed '0x%08x' "$((16#${BASH_REMATCH[1]}))"
+fi
 if [[ ${FUZZ_OPT:-ReleaseSafe} != ReleaseSafe ]]; then
 	printf 'fuzz: only the qualified ReleaseSafe profile is supported\n' >&2
 	exit 2
 fi
 system=$(nix eval --impure --raw --expr builtins.currentSystem) || exit "$?"
-target=checks.$system.fuzz-seeds
-if [[ $campaign -eq 1 ]]; then target=packages.$system.fuzz-campaign; fi
-exec nix build "$root#$target" --no-link --print-build-logs "${rebuild[@]}"
+if [[ $campaign -eq 0 ]]; then
+	exec nix build "$root#checks.$system.fuzz-seeds" --no-link --print-build-logs "${rebuild[@]}"
+fi
+if [[ -z $seed ]]; then
+	random=$(od -An -N4 -tx4 /dev/urandom) || { printf 'fuzz: unable to read a random seed\n' >&2; exit 1; }
+	random=${random//[[:space:]]/}
+	[[ $random =~ ^[0-9a-f]{8}$ ]] || { printf 'fuzz: unable to read a random seed\n' >&2; exit 1; }
+	seed=0x$random
+fi
+# Quote the checkout path as a Nix string literal.
+flake_ref=${root//\\/\\\\}
+flake_ref=${flake_ref//\"/\\\"}
+flake_ref=${flake_ref//\$/\\\$}
+expression="(builtins.getFlake \"$flake_ref\").legacyPackages.$system.fuzzCampaign \"$seed\""
+printf 'fuzz: campaign seed %s (reproduce with: ./fuzz --fuzz --seed %s)\n' "$seed" "$seed" >&2
+nix build --impure --expr "$expression" --no-link --print-build-logs "${rebuild[@]}"
+status=$?
+if [[ $status -ne 0 ]]; then
+	printf 'fuzz: campaign failed with seed %s; reproduce with: ./fuzz --fuzz --seed %s\n' "$seed" "$seed" >&2
+fi
+exit "$status"

@@ -118,7 +118,10 @@ cache. `flake.lock` and `build.zig.zon` must name the same libjxlz revision.
 Builds default to ReleaseFast; tests default to ReleaseSafe. Nix supplies the
 dependencies. `./test` includes fixed fuzz-seed replay. `./fuzz --fuzz` selects
 the optional bounded campaign, requesting 10000 iterations per harness with a
-fixed seed; the pinned Zig runner can overshoot that limit within a batch. Add `--rebuild` to request fresh execution instead of a cached Nix result.
+fresh random seed each run; the pinned Zig runner can overshoot that limit
+within a batch. The seed is printed before the run and again on failure, with
+the crash input in base64; `./fuzz --fuzz --seed 0xHEX` reproduces a run.
+Add `--rebuild` to request fresh execution instead of a cached Nix result.
 `./bm` runs the separate benchmark suite.
 Build options and memory ownership are documented in [SPEC.md](SPEC.md).
 

@@ -242,8 +242,12 @@ Use `./test` for all unit, CLI, package, and consumer checks, and `./build`
 for the production build. Tests default to ReleaseSafe; production builds
 default to ReleaseFast. Fixed fuzz-seed replay is required by `./test`.
 `./fuzz --fuzz` selects an optional ReleaseSafe campaign requesting 10000
-iterations per harness with seed 0x6a706567. The pinned Zig runner can
-overshoot that request within a batch, so it is not an exact count. Both fuzz modes build and execute
+iterations per harness with a fresh random 32-bit seed per run. The wrapper
+prints the seed before the run and again on failure; the failed derivation
+also prints the seed and the base64 crash input. `./fuzz --fuzz --seed 0xHEX`
+reruns a reported seed, and `packages.fuzz-campaign` keeps the historical seed
+0x6a706567. The pinned Zig runner can overshoot the iteration request within a
+batch, so it is not an exact count. Both fuzz modes build and execute
 inside Nix derivations; `--rebuild` requests fresh execution of a prepared
 check. `./bm` runs the separate benchmark suite.
 

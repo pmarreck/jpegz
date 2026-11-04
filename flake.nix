@@ -337,8 +337,15 @@
 			printf 'fuzz result contract passed\n' > "$out/result"
 		'';
 
-		mkFuzzCheck = { campaign ? false }: pkgs.stdenv.mkDerivation {
-			pname = if campaign then "jpegz-fuzz-campaign" else "jpegz-fuzz-seeds";
+		# The replay check keeps the fixed default seed. ./fuzz --fuzz passes a
+		# fresh random seed per run; each seed is its own derivation, so a
+		# failing seed is never cached and reruns reproduce it.
+		fuzzSeedPattern = "0x[0-9a-f]{8}";
+		mkFuzzCheck = { campaign ? false, seed ? "0x6a706567" }:
+			assert pkgs.lib.assertMsg (builtins.match fuzzSeedPattern seed != null)
+				"fuzz seed must be 0x followed by 8 lowercase hex digits, got ${seed}";
+			pkgs.stdenv.mkDerivation {
+			pname = if campaign then "jpegz-fuzz-campaign-${seed}" else "jpegz-fuzz-seeds";
 			version = "0.0.1";
 			src = buildSource;
 			nativeBuildInputs = commonNativeBuildInputs;
@@ -357,16 +364,16 @@
 				chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
 				driver_status=0
 				timeout 600 zig build fuzz -j2 -Doptimize=ReleaseSafe -Dtest-optimize=ReleaseSafe \
-					${zigTargetFlag} ${depFlags} --seed 0x6a706567 --color off ${pkgs.lib.optionalString campaign "--fuzz=10000"} \
+					${zigTargetFlag} ${depFlags} --seed ${seed} --color off ${pkgs.lib.optionalString campaign "--fuzz=10000"} \
 					> fuzz-driver.log 2>&1 || driver_status=$?
 				cat fuzz-driver.log
-				bash tools/check-fuzz-result "$driver_status" .zig-cache fuzz-driver.log || exit $?
+				bash tools/check-fuzz-result "$driver_status" .zig-cache fuzz-driver.log ${seed} || exit $?
 				runHook postBuild
 			'';
 			installPhase = ''
 				runHook preInstall
 				mkdir -p "$out"
-				printf '%s\n' '${if campaign then "campaign requesting 10000 iterations per harness" else "fixed seed replay"} passed in ReleaseSafe; seed 0x6a706567' > "$out/result"
+				printf '%s\n' '${if campaign then "campaign requesting 10000 iterations per harness" else "fixed seed replay"} passed in ReleaseSafe; seed ${seed}' > "$out/result"
 				runHook postInstall
 			'';
 		};
@@ -454,6 +461,8 @@
         packages.validator = validatorPackage;
 		packages.coverage-stats = jpegzTestCheck;
 		packages.fuzz-campaign = mkFuzzCheck { campaign = true; };
+		# ./fuzz --fuzz builds this with a per-run random seed via --expr.
+		legacyPackages.fuzzCampaign = seed: mkFuzzCheck { campaign = true; inherit seed; };
 
         checks = {
           dependency-compatibility = dependencyCompatibilityCheck;
