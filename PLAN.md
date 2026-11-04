@@ -41,7 +41,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Complete scan consumption, MCU counts, sampling edges, noninterleaved scans, restart cadence and predictor-reset coverage across supported modes.
 - [ ] Complete progressive scan-history and coefficient-range constraints with independent normative review and valid boundary controls.
 - [ ] Classify the known-good corpus as a set and expand reproducible corruption-probe sweeps across JPEG-LS, JPEG 2000 and JPEG XL.
-- [x] Select the requested variable sparse-shotgun geometry after a red profile-set witness; literal facade controls, 436 independent reader cases and complete ./test pass, preserving operator identities and historical measurements (done 2026-10-29 13:46 EDT; delivered by this change).
 - [x] Publish d88957b with the mutation-profile correction; all eleven exact-commit CI targets pass in 16 seconds with prepared reuse, and scoped receipts preserve profile identities and pending pristine-control decisions (done 2026-10-29 13:49 EDT; commit d88957b).
 - [x] Move ./fuzz compilation into Nix derivations with fixed seed replay in ./test and a bounded 10000-iteration-request campaign; duration flags and custom compiler arguments are refused (done 2026-11-03 20:42 EST; commit 08e622a).
 - [ ] Compare proven malformed fixtures and false rejects against prior art; report demonstrated detection, hypothetical detectability and valid changes separately.
@@ -61,4 +60,4 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Implement JPEG-LS restart validation and test dormant run-mode/context findings.
 - [ ] Inventory remaining T.81/T.87 gaps including DNL, multiscan lossless, differential/hierarchical modes and uncommon component layouts.
 - [ ] Consider DRI parallelism and SIMD after correctness coverage; measure pixel divergence before proposing spec-derived IDCT/color replacement.
-- [ ] The C CLI prints "DEBUG BUILD" in ReleaseSafe because it keys on NDEBUG, which Zig leaves undefined there. Gate the banner on the real optimize mode (a build-time define) and cover ReleaseSafe in tests/cli.
+- [x] Gate the C CLI "DEBUG BUILD" banner on the real optimize mode: build.zig defines JPEGZ_DEBUG_BUILD, the source refuses to compile without it, and tests/cli asserts the banner matches the mode (red in ReleaseSafe before the fix) (done 2026-11-03 22:03 EST; delivered by this change).

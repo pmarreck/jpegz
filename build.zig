@@ -801,7 +801,9 @@ pub fn build(b: *std.Build) void {
     if (with_jxl) linkBrotli(cli_mod, brotli_lib_dir);
     cli_mod.addCSourceFile(.{
         .file = b.path("src/cli/jpegz.c"),
-        .flags = &.{ "-std=c23", "-Wall", "-Wextra", "-Wpedantic" },
+        // Zig leaves NDEBUG undefined in ReleaseSafe, so the debug banner keys
+        // on the actual optimize mode instead.
+        .flags = &.{ "-std=c23", "-Wall", "-Wextra", "-Wpedantic", if (optimize == .Debug) "-DJPEGZ_DEBUG_BUILD=1" else "-DJPEGZ_DEBUG_BUILD=0" },
     });
     cli_mod.addIncludePath(b.path("include"));
     cli_mod.addIncludePath(generated_errno_h.dirname());
@@ -819,6 +821,7 @@ pub fn build(b: *std.Build) void {
     // running the built binary as a black box.
     const cli_tests = b.addSystemCommand(&.{ "bash", "tests/cli/validate_cli.bash" });
     cli_tests.addFileArg(cli_exe.getEmittedBin());
+    cli_tests.addArg(@tagName(optimize));
     cli_tests.step.dependOn(&cli_exe.step);
     test_step.dependOn(&cli_tests.step);
 

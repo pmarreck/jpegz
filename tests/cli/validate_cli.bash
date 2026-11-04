@@ -71,6 +71,22 @@ capture "$jpegz_cli" --about
 # two together would make this test's verdict depend on the build mode.
 assert_contains "$out" "jpegz" "--about names the tool"
 [ "$rc" -eq 0 ] && pass "--about exits 0" || fail "--about exits 0" "got $rc"
+# The stderr banner warns about Debug binaries only; ReleaseSafe and the
+# release profiles must stay quiet. build.zig passes the real optimize mode.
+optimize_mode="${2:-}"
+case "$optimize_mode" in
+Debug | ReleaseSafe | ReleaseFast | ReleaseSmall)
+	out=; err=; rc=
+	capture env -u MUTE_DEBUG_STATUS "$jpegz_cli" --about
+	case "$err" in *"DEBUG BUILD"*) banner=1 ;; *) banner=0 ;; esac
+	want_banner=0
+	[ "$optimize_mode" = Debug ] && want_banner=1
+	[ "$banner" -eq "$want_banner" ] && pass "debug banner matches $optimize_mode" ||
+		fail "debug banner matches $optimize_mode" "banner=$banner; stderr: ${err:-<empty>}"
+	capture "$jpegz_cli" --about
+	;;
+*) fail "optimize mode supplied as argument 2" "got '${optimize_mode}'" ;;
+esac
 # --about must be ONE line.
 about_lines=$(printf '%s' "$out" | grep -c '')
 [ "$about_lines" -eq 1 ] && pass "--about is one line" || fail "--about is one line" "got $about_lines lines"

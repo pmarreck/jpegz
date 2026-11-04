@@ -387,8 +387,15 @@ static void print_help(void) {
 
 /* ── Main ─────────────────────────────────────────────────────────── */
 
+/* build.zig defines this from the optimize mode. NDEBUG cannot serve: Zig
+ * leaves it undefined in ReleaseSafe, which would mark tested binaries as
+ * debug builds. */
+#ifndef JPEGZ_DEBUG_BUILD
+#error "JPEGZ_DEBUG_BUILD must be defined to 0 or 1 by the build"
+#endif
+
 int main(int argc, char **argv) {
-#ifndef NDEBUG
+#if JPEGZ_DEBUG_BUILD
     if (!getenv("MUTE_DEBUG_STATUS")) {
         /* The banner must precede argument parsing (it warns about the binary
          * itself, regardless of what is being asked of it), but it still has
