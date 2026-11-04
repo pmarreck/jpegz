@@ -1404,3 +1404,76 @@ owner's runtime decision. No re-pin or adoption was requested or performed.
 Both new inbox notes were read and retained in place at the owner's explicit
 handoff direction. No reply or new cross-project message was sent during this
 handoff; tiffz's response-expected request remains visible for the next session.
+
+## November 3 2026: fuzz gate verification and progressive crash fix
+
+### Gate against the real campaign
+
+With the corrected gate (08e622a's tree), `nix build --keep-failed --no-link
+.#packages.x86_64-linux.fuzz-campaign` (seed 0x6a706567, 10000-iteration
+request) failed as intended: the decode harness aborted with "integer does not
+fit in destination type", the driver saved `.zig-cache/f/crash`, and the gate
+printed `fuzz-check: crash input was recorded` and exited 1. Run counts matched
+the original false-green build exactly (decode 9492, validate 10285), so the
+campaign is deterministic for this seed and source. Full `./test` on that tree
+passed all thirteen checks (22m49s wall, including about 15 minutes of shared
+build-budget queueing).
+
+### Crash input and root cause
+
+The retained crash file is 286 bytes, BLAKE3
+`101f796d83def5705af179ccf4d22fec1a1017d8ab1a48f5e0fbafda7bfd3b82`: a u32 LE
+length 282 followed by exactly 282 payload bytes, which are a complete SOF2
+8x8 one-component JPEG. The payload is tracked as
+`tests/unit/fixtures/fuzz_progressive_ac_refine_al15.jpg` and in the decode
+fuzz seed corpus. Its fourth scan is an AC refinement with Ss=1, Se=63, Ah=1,
+Al=15; `decodeProgressiveAcRefine` computed `positive: i16 = 1 << 15`. The
+optimized trace attributed the panic to the inlined line 887. T.81 G.1.1.1.1
+bounds Al to 0..13; the validator already reported such headers as FAIL
+progressive_scan_invalid, so only `decode` panicked.
+
+### Fix and witnesses (a3e5cac)
+
+`progressive.parseSos` rejects Al > 13 with InvalidMarker (shared by the
+arithmetic progressive path, whose `1 << al` masks had the same exposure).
+Under legal Al, the DC predictor sum, DC and AC point-transform shifts, DC
+refinement OR and AC refinement add now use checked i16 conversion and return
+BackendError. Both new public-API tests crashed on the unfixed decoder (285
+other native tests passed) and pass after the fix. The synthetic table covers
+DC shift, 12-bit predictor accumulation, AC shift, refinement add, and AC/DC
+refinement with Al=15, each with an in-range control that must decode. One
+control first failed because its pad bits mixed zeros and ones (BackendError
+per F.1.2.3); it was corrected to all-ones padding, not by relaxing the
+decoder. Only the first panicking witness in the synthetic table was observed
+red individually, since a panic aborts that test.
+
+Rerunning the same campaign on the fixed tree passed the gate: decode 11298
+runs, validate 10348, no crash. This is bounded evidence for one seed, not a
+claim that the decoder is crash-free.
+
+### libjxlz outcome note (received November 3, FYI)
+
+libjxlz reports, for a future pin review only, that commits 7ed529ee and
+f3ca6f12 move six invalid-histogram shapes from raw 8 (indeterminate) to raw 16
+`invalid_histogram` (corrupt), with approximate frame anchors, UNASSESSED
+severity and truncation precedence unchanged (270 of 18134 six-bit mutants
+moved; djxl rejects every raw-16 case; provider report
+`doc/histogram_validation_20260918.md` at f3ca6f12). Commit 1c792628 returns
+NEED_MORE_INPUT for open container prefixes before a complete codestream box;
+closed inputs and every JxlValidate call are reported unchanged. These are
+provider-reported results with local five-target evidence, not a CI receipt or
+an independent jpegz replay; the pin stays at 93b29e86.
+
+### libjxlz CI receipt (received November 3 21:05 EST)
+
+With SCS's 5400-second runtime exception extended to Mechatron Prime CI,
+libjxlz reports all five exact-commit targets (build, test, test-releasefast,
+windows-x86_64-cross, conformance-acceptance) passing at
+`1a53d9d9120d85496ceb0c7f975c19f673161ab8` and
+`d6cfb688293c2a180c0da6e79799ae0bba4b605f` (current tip; differs only in
+PLAN.md). Both contain ICC repair 72923214 and candidate e1c521d3. Each run
+took 10 s by reusing derivations the provider's local gate had realized for
+the same source trees, so this is an exact-commit receipt, not a fresh CI
+rebuild. It satisfies the CI condition of pin qualification; real-input
+integration and cold private-source access remain before re-pinning from
+93b29e86.
