@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Reject recorded fuzz failures even when the pinned driver exits successfully.
+set -u
+if [[ $# -ne 3 ]]; then
+	printf 'usage: check-fuzz-result STATUS CACHE_DIR DRIVER_LOG\n' >&2
+	exit 2
+fi
+case $1 in
+	0) ;;
+	[1-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5]) exit "$1" ;;
+	*) printf 'fuzz-check: invalid driver status\n' >&2; exit 2 ;;
+esac
+cache=$2
+log=$3
+if [[ ! -d $cache || ! -f $log || ! -r $log ]]; then
+	printf 'fuzz-check: required driver evidence is unavailable\n' >&2
+	exit 1
+fi
+if [[ -e $cache/f/crash || -L $cache/f/crash ]]; then
+	printf 'fuzz-check: crash input was recorded\n' >&2
+	exit 1
+fi
+# Match the pinned driver's error records, including its existing SGR colors.
+# The caller also disables color; the older recorded witness still must fail.
+diagnostic=$'^(\033\\[[0-9;]*m)*(error:|failed command:)'
+while IFS= read -r line || [[ -n $line ]]; do
+	if [[ $line =~ $diagnostic ]]; then
+		printf 'fuzz-check: driver reported a failed step\n' >&2
+		exit 1
+	fi
+done < "$log"
+exit 0

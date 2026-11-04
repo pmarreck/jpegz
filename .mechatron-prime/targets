@@ -4,6 +4,8 @@ checks.x86_64-linux.dependency-compatibility
 checks.x86_64-linux.source-inputs
 checks.x86_64-linux.no-c-consumer
 checks.x86_64-linux.test
+checks.x86_64-linux.fuzz-seeds
+checks.x86_64-linux.fuzz-result
 checks.x86_64-linux.build
 checks.x86_64-linux.cross-windows
 checks.x86_64-linux.cross-aarch64-linux

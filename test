@@ -44,6 +44,12 @@ coverage_stats_artifact() {
 }
 run_check "coverage statistics Nix artifact" coverage_stats_artifact
 
+run_check "fixed fuzz seed corpus (ReleaseSafe)" \
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".fuzz-seeds --no-link --print-build-logs
+
+run_check "fuzz result contract" \
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".fuzz-result --no-link --print-build-logs
+
 run_check "package builds (nix flake check .#build)" \
 	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".build --print-build-logs
 

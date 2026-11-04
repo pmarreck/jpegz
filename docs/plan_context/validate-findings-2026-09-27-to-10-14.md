@@ -1242,3 +1242,165 @@ its successful stdout receipt, including raw case records, is
 These are bounded operator checks, not malformed-input detection rates or a
 general proof over all seeds. Queue waiting was kept separate from execution;
 no fresh suite runtime-budget pass is claimed.
+
+Published `d88957b1c21c06c61020f62bfe64812b211ffaa6` passed all eleven
+exact-commit Mechatron Prime CI targets October 29 17:47:18Z..17:47:34Z
+(16 seconds, prepared reuse). Its fetched package hash is
+`jpegz-0.1.0-staw4K1WFQDEh5ri6YkTKrhSLur6Z52iVZtBb2JFi4JU`.
+The coordinator and validation consumer received scoped immutable receipts.
+The pending default JPEG-LS pristine-control decision was preserved.
+
+### Canonical and bounded fuzz entry point
+
+Read-only follow-up found that `./fuzz` invoked a compiler through the
+development shell rather than a Nix derivation. Its documented
+`--fuzz=120s` flag also conflicts with the actual pinned Zig 0.16 build runner:
+the parser accepts positive iteration counts with optional K/M/G suffixes,
+while bare `--fuzz` means indefinite execution. These are entry-point defects,
+separate from codec findings and the held sampling research.
+
+Fourteen isolated adapter checks failed against the old wrapper without
+launching a compiler. The replacement selects a Nix ReleaseSafe seed check by
+default, or an optional campaign with a fixed 10000-iteration limit per
+harness and seed 0x6a706567. This bounded preset is a reversible implementation
+choice. The wrapper accepts `--fuzz` and `--rebuild`; custom compiler flags and
+optimization profiles are refused before Nix runs. `--rebuild` explicitly
+requests fresh execution of a prepared check, while the normal path may reuse
+a cached result. Recorded-effect tests cover both modes, rebuild selection,
+the rejected argument/profile sets, help and failure-status preservation.
+
+Fixed seed replay now has its own required check in `./test` and the
+Mechatron Prime CI manifest. The optional extended campaign remains outside
+the default suite. Both modes compile and execute inside Nix, using pinned
+dependencies and private HOME/XDG/cache directories; they have a separate
+600-second process timeout covering compilation and execution. Native and
+cross-target codec/API checks remain required. New fuzz derivations evaluate
+for all three declared native systems; that is evaluation evidence, not
+foreign runtime qualification. Real native seed/campaign execution and the
+complete expanded suite are running before publication.
+
+**Reopened before shipment:** the first real bounded campaign is a false green.
+Zig logged a progressive AC-refinement integer-narrowing panic, terminated the
+decode fuzz child with ABRT and saved input to `.zig-cache/f/crash`, but its
+build command returned success. The draft derivation therefore installed an
+incorrect passing result. The default expanded suite and fixed seed replay
+passed, but this does not qualify the optional campaign or the uncommitted
+unit. No fuzz changes were committed or published. A premature commentary
+claim that the campaign passed was explicitly corrected.
+
+The observed trace points to `src/decode/progressive.zig:887` within
+`decodeProgressiveAcRefine`; optimized attribution is not a proven root cause.
+The report records 9492 decode runs before the crash and 10285 validation
+runs. The requested 10000-iteration limit can overshoot a batch, so it must
+not be described as an exact executed count. The complete preparation took
+283 seconds; mixed phases were 137 seconds for seed replay, 179 seconds for
+the campaign and 213 seconds for native tests; cached `./test` took 20 seconds.
+These timings do not rescue the campaign's incorrect success classification.
+
+Next, add a deterministic gate regression for a zero-exit fuzz driver that
+leaves a crash record, and make that condition fail before writing any passing
+result. Preserve normal nonzero exits too. Recover the actual input with a
+bounded, retained-failure Nix run after correcting the gate; the successful
+draft build likely discarded its temporary crash file. The native compiler's
+`std/Build/Step/Run.zig` writes `f/crash` under the local cache root, then returns
+a failed run step. The missing top-level failure propagation must remain
+visible. Crash input is a Smith byte stream, so do not assume it is a raw JPEG
+without reproducing the extraction path. The decoder fix requires a persistent
+failing regression before implementation. The existing sampling hold remains.
+
+The master runner also still omits `--no-link` on several legacy Nix build
+calls and updates the checkout's `result` symlink. That adjacent isolation
+finding now has a separate PLAN item; new fuzz calls already use `--no-link`.
+
+### Private SOF1 replay receipt, October 29 16:13 EDT
+
+Validate reports completing the exact three streams from September 30 item 4
+against published `d88957b1c21c06c61020f62bfe64812b211ffaa6`. Inputs were
+recovered from the original dated work order and extracted only into confined
+RAM scratch; no private names, paths, identities or bytes entered this
+repository or Nix inputs. This is the consumer's replay receipt, not a second
+independent execution by jpegz.
+
+All three reports contain only WARN finding 63, `entropy_padding_zero_bits`,
+with strict verdict KNOWN_DEFECT and CLI exit 4. Byte and host offsets are
+exact. Strict djpeg exits 0 for each:
+
+| Case | Dimensions | Pad bits | Exact offset |
+| --- | --- | ---: | ---: |
+| 1 | 1226 x 1856 | 1 | 154157 |
+| 2 | 1497 x 1018 | 7 | 53758 |
+| 3 | 1282 x 1902 | 2 | 114792 |
+
+Current independent header observations agree on 8-bit SOF1, component IDs
+0/1/2, sampling 2x2/1x1/1x1, quantization destinations 0/1/2, defined DC and
+AC destinations 0/1/2, and one three-component scan selecting 0/0, 1/1 and
+2/2 through EOI. DHT length 626 is reconstructed work-order metadata, not a
+newly measured field. No current Huffman-table rejection appears in these
+reports. Decoder acceptance alone does not establish strict validity.
+
+This closes the requested private SOF1 replay without a decoder change.
+Consumer dependency adoption, the separate full-stream DHT investigation,
+complete conformance, coverage-rate qualification and existing holds remain
+open. The consumer's coordinated dependency refresh has not landed.
+
+### Provider and recovery checkpoint, November 2
+
+The preserved checkout remains based on published d88957b with the unfinished
+fuzz/Nix work intact. Prior RAM evidence and the temporary isolation runner
+were lost, but the original campaign log was recovered through Nix. The
+pinned development environment still selects Zig 0.16.0. A fresh filesystem
+boundary qualification precedes resumed adapter tests.
+
+The JXL provider confirms raw 17/facade 197 semantics, approximate anchors,
+UNASSESSED severity, corruption-only emission and truncation precedence.
+Complete candidate CI remains pending a separate CI runtime approval: the
+existing 5400-second local build allowance does not apply to CI's repository
+key. No uncapped retry was made. The arithmetic scaling sweep has not started;
+it remains queued behind the provider's current milestone and needs no new
+owner decision. The fixed-size historical measurements are unchanged. These
+receipts release no pin or sampling hold and establish no end-to-end adoption.
+
+### Fuzz gate checkpoint and queued consumer requests, November 3
+
+The draft now captures the fuzz driver's log and status, disables diagnostic
+color at the call site and invokes `tools/check-fuzz-result` before any passing
+result is installed. The helper preserves nonzero statuses, rejects missing
+required evidence and any recorded crash artifact, and rejects the pinned
+driver's error/failed-command diagnostics, including its older SGR colors.
+Quoted unrelated text remains accepted. This is a bounded control over the
+known driver contract, not a universal guarantee about arbitrary log formats.
+
+A dedicated Nix check, `checks.x86_64-linux.fuzz-result`, reproduced nine
+false-green cases among 88 status/evidence combinations with the extracted
+passthrough behavior, then passed all 88 after the correction. The red
+derivation is `v0xwb5j2p5j2naa7ld12kvdfa1lw5hkc-jpegz-fuzz-result-tests`;
+the passing derivation is
+`jviksxwv5k7nx5gpixkp5sqzilqam40i-jpegz-fuzz-result-tests`. This check reaches
+the complete entry point and intended CI manifest, bringing the draft to
+thirteen targets. A fresh shared isolation-runner qualification also completed
+with zero failures after queued admission. No real campaign rerun, input
+recovery, decoder fix, complete-suite rerun or shipment followed this focused
+check. All changes remain uncommitted on d88957b.
+
+tiffz requests a public per-finding classic verdict function, or a larger
+strict-result API change retaining codec_check, to remove its current mirrored
+classification table. Its legacy validation path needs codec_check to verify
+single-component decoding of DNG CFA strips. The mirror is reported correct
+for d88957b and tested over every finding/severity pair. This low-priority
+request is queued after active fuzz work; no API design or implementation was
+selected during handoff.
+
+The JXL provider reports additional raw-16 invalid-histogram outcomes in
+7ed529ee/f3ca6f12, replacing some raw-8 indeterminate outcomes, without new
+finding codes. Approximate anchors, UNASSESSED severity and truncation
+precedence remain. Its four-source six-bit sweep reports 270 of 18134 mutants
+moving from 8 to 16, with djxl rejecting every 16; these are provider-reported
+results, not an independent jpegz replay. Commit 1c792628 changes open
+container-prefix streaming to NEED_MORE_INPUT, while closed/complete inputs
+and every JxlValidate call are reported unchanged. All five targets passed
+locally for those commits, but complete Mechatron Prime CI still awaits the
+owner's runtime decision. No re-pin or adoption was requested or performed.
+
+Both new inbox notes were read and retained in place at the owner's explicit
+handoff direction. No reply or new cross-project message was sent during this
+handoff; tiffz's response-expected request remains visible for the next session.

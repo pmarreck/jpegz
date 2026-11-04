@@ -848,6 +848,8 @@ pub fn build(b: *std.Build) void {
     // Shell entry must not `zig fetch` libjxlz when that pin is already cached.
     const seed_cache = b.addSystemCommand(&.{ "bash", "tests/cli/seed_libjxlz_cache.bash" });
     test_step.dependOn(&seed_cache.step);
+	const fuzz_cli = b.addSystemCommand(&.{ "bash", "tests/cli/fuzz.bash" });
+	test_step.dependOn(&fuzz_cli.step);
     // ============================================================
     // `zig build cleanroom-diff` — non-committed analysis tool that
     // walks a directory of JPEGs and diffs cleanroom vs. wrapper

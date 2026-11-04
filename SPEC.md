@@ -236,7 +236,12 @@ Historical classifier and closure measurements are dated in
 
 Use `./test` for all unit, CLI, package, and consumer checks, and `./build`
 for the production build. Tests default to ReleaseSafe; production builds
-default to ReleaseFast. `./bm` and `./fuzz` are separate entry points.
+default to ReleaseFast. Fixed fuzz-seed replay is required by `./test`.
+`./fuzz --fuzz` selects an optional ReleaseSafe campaign requesting 10000
+iterations per harness with seed 0x6a706567. The pinned Zig runner can
+overshoot that request within a batch, so it is not an exact count. Both fuzz modes build and execute
+inside Nix derivations; `--rebuild` requests fresh execution of a prepared
+check. `./bm` runs the separate benchmark suite.
 
 Nix supplies dependencies and sandboxed build outputs. Mechatron Prime uses
 [.mechatron-prime/targets](.mechatron-prime/targets); exact-commit CI evidence

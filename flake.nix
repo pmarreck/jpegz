@@ -324,6 +324,53 @@
 		  meta.mainProgram = "jpegz-coverage-stats";
         };
 
+		fuzzResultCheck = pkgs.runCommand "jpegz-fuzz-result-tests" {
+			nativeBuildInputs = [ pkgs.bash pkgs.coreutils ];
+		} ''
+			export HOME=$TMPDIR/home
+			export XDG_CONFIG_HOME=$HOME/config XDG_DATA_HOME=$HOME/data
+			export XDG_STATE_HOME=$HOME/state XDG_CACHE_HOME=$HOME/cache XDG_RUNTIME_DIR=$HOME/runtime
+			mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
+			chmod 700 "$XDG_RUNTIME_DIR"
+			bash ${buildSource}/tests/cli/fuzz-result.bash
+			mkdir -p "$out"
+			printf 'fuzz result contract passed\n' > "$out/result"
+		'';
+
+		mkFuzzCheck = { campaign ? false }: pkgs.stdenv.mkDerivation {
+			pname = if campaign then "jpegz-fuzz-campaign" else "jpegz-fuzz-seeds";
+			version = "0.0.1";
+			src = buildSource;
+			nativeBuildInputs = commonNativeBuildInputs;
+			buildInputs = commonBuildInputs ++ pkgs.lib.optionals isDarwin [ pkgs.apple-sdk ];
+			dontConfigure = true;
+			buildPhase = ''
+				runHook preBuild
+				export HOME=$TMPDIR/fuzz-home
+				export XDG_CONFIG_HOME=$HOME/config XDG_DATA_HOME=$HOME/data
+				export XDG_STATE_HOME=$HOME/state XDG_CACHE_HOME=$HOME/cache
+				export XDG_RUNTIME_DIR=$HOME/runtime ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
+				mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR" "$ZIG_GLOBAL_CACHE_DIR"
+				chmod 700 "$XDG_RUNTIME_DIR"
+				export BROTLI_INCLUDE_DIR=${brotliPkg.dev}/include BROTLI_LIB_DIR=${brotliPkg.lib}/lib
+				cp -r ${zigDeps}/* "$ZIG_GLOBAL_CACHE_DIR/"
+				chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
+				driver_status=0
+				timeout 600 zig build fuzz -j2 -Doptimize=ReleaseSafe -Dtest-optimize=ReleaseSafe \
+					${zigTargetFlag} ${depFlags} --seed 0x6a706567 --color off ${pkgs.lib.optionalString campaign "--fuzz=10000"} \
+					> fuzz-driver.log 2>&1 || driver_status=$?
+				cat fuzz-driver.log
+				bash tools/check-fuzz-result "$driver_status" .zig-cache fuzz-driver.log || exit $?
+				runHook postBuild
+			'';
+			installPhase = ''
+				runHook preInstall
+				mkdir -p "$out"
+				printf '%s\n' '${if campaign then "campaign requesting 10000 iterations per harness" else "fixed seed replay"} passed in ReleaseSafe; seed 0x6a706567' > "$out/result"
+				runHook postInstall
+			'';
+		};
+
         # Foreign-target compile/link gates. Vendored static OpenJPEG is what
         # lets jpegz cross-compile where system openjp2/libjpeg are unavailable.
         # test-build compiles and links every test executable but does not run
@@ -406,6 +453,7 @@
         packages.jpegz = self.packages.${system}.default;
         packages.validator = validatorPackage;
 		packages.coverage-stats = jpegzTestCheck;
+		packages.fuzz-campaign = mkFuzzCheck { campaign = true; };
 
         checks = {
           dependency-compatibility = dependencyCompatibilityCheck;
@@ -413,6 +461,8 @@
 		  no-c-consumer = noCConsumerCheck;
           build = self.packages.${system}.default;
           test = jpegzTestCheck;
+		  fuzz-seeds = mkFuzzCheck {};
+		  fuzz-result = fuzzResultCheck;
           cross-windows = mkCrossLinkCheck "x86_64-windows-gnu";
           cross-aarch64-linux = mkCrossLinkCheck "aarch64-linux-musl";
           cross-aarch64-macos = mkCrossLinkCheck "aarch64-macos";

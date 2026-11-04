@@ -1,35 +1,35 @@
 #!/usr/bin/env bash
-# Run the jpegz fuzz harnesses (decode + validate).
-#
-# Usage:
-#   ./fuzz              — replay the seed corpus once each (smoke).
-#                         Fast (~seconds); guards against harness rot.
-#   ./fuzz --fuzz       — coverage-guided mutation, runs until killed
-#                         (Ctrl-C). Zig 0.16's in-tree libfuzzer.
-#   ./fuzz --fuzz=120s  — bounded duration. Useful for CI / nightly.
-#
-# Per CLAUDE.md "Testing Principles": no `set -euo pipefail`. We do
-# want `set -u` for catching unset vars, but `set -e` would mask a
-# failing harness behind a clean exit. Explicit exit-code tracking.
-
+# Build and run sandboxed ReleaseSafe fuzz checks through Nix.
 set -u
+root=$(cd -- "$(dirname -- "$0")" && pwd) || exit 1
+campaign=0
+rebuild=()
+for argument in "$@"; do
+	case $argument in
+		--fuzz) campaign=1 ;;
+		--rebuild) rebuild=(--rebuild) ;;
+		-h|--help)
+			cat <<'EOF'
+usage: ./fuzz [--fuzz] [--rebuild]
 
-cd "$(dirname "$0")"
+Default: replay the fixed seed corpus in a Nix ReleaseSafe check.
+--fuzz: run the bounded campaign requesting 10000 iterations per harness
+        with seed 0x6a706567; the runner can overshoot within a batch.
+--rebuild: request fresh execution of an already prepared Nix check.
 
-# Build mode: ReleaseSafe is the sweet spot for fuzzing — runtime
-# safety checks are on (catches UB the fuzzer otherwise misses) while
-# performance is good enough to run for hours. Override with FUZZ_OPT.
-opt="${FUZZ_OPT:-ReleaseSafe}"
-
-# Pass through any extra args (e.g. --fuzz, --fuzz=120s, -j8).
-fuzz_args=("$@")
-
-echo "==> ./fuzz: zig build fuzz -Doptimize=$opt ${fuzz_args[*]:-}"
-nix develop -c zig build fuzz "-Doptimize=$opt" "${fuzz_args[@]}"
-status=$?
-
-if [ "$status" -ne 0 ]; then
-	echo "    FAIL (exit=$status)"
-	exit "$status"
+Nix can reuse a previous check result without --rebuild. Custom compiler
+arguments and duration suffixes are unsupported by this wrapper. Both modes
+compile and execute inside the Nix build sandbox; no host compiler is used.
+EOF
+			exit 0 ;;
+		*) printf 'fuzz: unsupported argument: %s; use --help\n' "$argument" >&2; exit 2 ;;
+	esac
+done
+if [[ ${FUZZ_OPT:-ReleaseSafe} != ReleaseSafe ]]; then
+	printf 'fuzz: only the qualified ReleaseSafe profile is supported\n' >&2
+	exit 2
 fi
-echo "    ok"
+system=$(nix eval --impure --raw --expr builtins.currentSystem) || exit "$?"
+target=checks.$system.fuzz-seeds
+if [[ $campaign -eq 1 ]]; then target=packages.$system.fuzz-campaign; fi
+exec nix build "$root#$target" --no-link --print-build-logs "${rebuild[@]}"
