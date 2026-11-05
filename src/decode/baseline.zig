@@ -701,7 +701,16 @@ fn decodeScanEntropy(
     // truncation already has an insufficient_data finding in the legacy API.
     if (!lenient_state.truncation_seen) {
         const marker = br.finishHuffmanSegment() catch |err| recovered: {
-            try reportEntropyBoundary(&br, err, base, options, "invalid Huffman entropy or padding at end of scan");
+            // Audit row 51b: name whole bytes after valid padding apart from
+            // invalid entropy. The finding and its class are unchanged.
+            var reason_buf: [96]u8 = undefined;
+            const reason = if (err == error.InvalidEntropyBoundary) if (br.trailingBytesAfterPadding()) |trailing|
+                std.fmt.bufPrint(&reason_buf, "{d} whole {s} after valid padding before marker 0x{X:0>2}", .{
+                    trailing.count, if (trailing.count == 1) "byte" else "bytes", trailing.marker,
+                }) catch unreachable
+            else
+                "invalid Huffman entropy or padding at end of scan" else "invalid Huffman entropy or padding at end of scan";
+            try reportEntropyBoundary(&br, err, base, options, reason);
             // Pad bits carry no image data: lenient decoding keeps going when a
             // marker follows them, as it does at restart boundaries. Every
             // decode accepts the known all-zero pattern.

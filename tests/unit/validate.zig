@@ -1466,6 +1466,51 @@ test "sampling finding scope and complete component guards classify every frame 
 	}
 }
 
+test "whole bytes after valid padding at the end of a scan have their own reason" {
+	// Validate, 2026-11-05 (audit row 51b): libjpeg's "N extraneous bytes
+	// before marker 0xd9" writer pattern must be told apart from invalid
+	// entropy. Detection and class are unchanged: FAIL 51 either way. One 8x8
+	// gray block: DC code 0 then AC EOB 000, so 0x0f ends with four 1 pad bits.
+	const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++
+		([_]u8{1} ** 64) ++
+		[_]u8{ 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 23, 0x10, 0, 0, 4 } ++ ([_]u8{0} ** 13) ++
+		[_]u8{ 0, 0xf0, 0xe1, 0xf1 } ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0 };
+	const cases = [_]struct { entropy: []const u8, trailing: ?[]const u8 }{
+		.{ .entropy = &.{ 0x0f, 0x00, 0x00 }, .trailing = "2 whole bytes after valid padding before marker 0xD9" },
+		.{ .entropy = &.{ 0x0f, 0x12, 0x34, 0x56, 0x78, 0x9a }, .trailing = "5 whole bytes after valid padding before marker 0xD9" },
+		.{ .entropy = &.{ 0x0f, 0xff, 0x00 }, .trailing = "1 whole byte after valid padding before marker 0xD9" }, // a stuffed FF is one byte
+		.{ .entropy = &.{ 0x0e, 0x00 }, .trailing = null }, // pad bits 1110: invalid, not a trailer
+		.{ .entropy = &.{ 0x0e, 0x00, 0x00, 0x00, 0x00, 0x00 }, .trailing = null },
+	};
+	const allocator = std.testing.allocator;
+	for (cases) |case| {
+		const data = try std.mem.concat(allocator, u8, &.{ &header, case.entropy, &.{ 0xff, 0xd9 } });
+		defer allocator.free(data);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expect(!report.isValid());
+		var huffman: usize = 0;
+		for (report.findings.items) |finding| {
+			if (finding.severity != .fail) continue;
+			try std.testing.expectEqual(jpegz.FindingCode.huffman_table_corrupt, finding.code);
+			huffman += 1;
+			const expected = case.trailing orelse "invalid Huffman entropy or padding at end of scan";
+			errdefer std.debug.print("expected {s}, got {s}\n", .{ expected, finding.detail.? });
+			try std.testing.expectEqualStrings(expected, finding.detail.?);
+		}
+		try std.testing.expectEqual(@as(usize, 1), huffman);
+	}
+	// Control: the same stream without trailing bytes is clean.
+	const clean = try std.mem.concat(allocator, u8, &.{ &header, &.{ 0x0f, 0xff, 0xd9 } });
+	defer allocator.free(clean);
+	var report = try jpegz.validate(allocator, clean);
+	defer report.deinit(allocator);
+	try std.testing.expect(report.isValid());
+}
+
 test "multi-component sampling factors and interleaved MCU size are typed" {
 	// Validate, 2026-11-05: a bogus multi-component factor yielded only
 	// "unsupported". T.81 Table B.2 bounds each Hi and Vi to 1..4, and B.2.3

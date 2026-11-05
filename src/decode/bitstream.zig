@@ -165,6 +165,41 @@ pub const BitReader = struct {
         return self.marker_byte;
     }
 
+    pub const TrailingBytes = struct { count: usize, marker: u8 };
+
+    /// After `finishHuffmanSegment` reports `InvalidEntropyBoundary`: when the
+    /// current byte's remaining pad bits are all 1 and only whole payload
+    /// bytes stand between them and a marker, the number of those bytes (a
+    /// stuffed 0xFF00 counts once; 0xFF fill before the marker counts none)
+    /// and the marker. This is libjpeg's "extraneous bytes before marker"
+    /// case, told apart from invalid entropy. Read-only; null otherwise.
+    pub fn trailingBytesAfterPadding(self: *const BitReader) ?TrailingBytes {
+        const partial: u5 = self.bits_valid % 8;
+        if (partial != 0) {
+            const pad = self.buf >> @intCast(32 - @as(u6, partial));
+            if (pad != (@as(u32, 1) << partial) - 1) return null;
+        }
+        var count: usize = self.bits_valid / 8;
+        var pos = self.byte_pos;
+        while (pos < self.data.len) {
+            if (self.data[pos] != 0xFF) {
+                count += 1;
+                pos += 1;
+                continue;
+            }
+            if (pos + 1 >= self.data.len) return null;
+            switch (self.data[pos + 1]) {
+                0x00 => {
+                    count += 1;
+                    pos += 2;
+                },
+                0xFF => pos += 1,
+                else => |marker| return if (count > 0) .{ .count = count, .marker = marker } else null,
+            }
+        }
+        return null;
+    }
+
     /// Byte offset in `data` of the leftover pad bits after `PaddingNotOnes`.
     /// Bytes enter the buffer whole, so fewer than eight leftover bits are the
     /// low bits of the latest payload byte, and refill parks `byte_pos` on a
