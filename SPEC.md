@@ -162,6 +162,12 @@ establish this notice. Major zero and 1.00 remain outside its initial scope,
 without a claim of complete conformance. A known-padding cause is retained and
 gives the known-defect verdict.
 
+Every component of a T.81 frame reports FAIL 66 (`sof_sampling_invalid`) at its
+sampling byte when Hi or Vi lies outside 1..4 (Table B.2). An interleaved scan
+(Ns > 1) whose otherwise legal factors add up to more than 10 data units per
+MCU (B.2.3) reports FAIL 66 at the scan's Ns byte, as libjpeg also refuses it.
+JPEG-LS frames are left to the T.87 validator.
+
 Reserved FF02..FFBF markers report FAIL 5 with a corrupt strict verdict: they
 have no specified decode, damage produces them and no writer is known. The
 codec check still runs, so its findings are kept. A zero marker byte outside

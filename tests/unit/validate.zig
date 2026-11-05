@@ -1445,7 +1445,9 @@ test "sampling finding scope and complete component guards classify every frame 
 			@memcpy(data[data.len - 2 ..], &[_]u8{ 0xff, 0xd9 });
 			var report = try jpegz.validate(allocator, data);
 			defer report.deinit(allocator);
-			try std.testing.expectEqual(count == 1 and (marker == 0xc0 or marker == 0xc1),
+			// Table B.2 bounds every component of every T.81 frame; the
+			// JPEG-LS frame (0xf7) stays with the T.87 validator.
+			try std.testing.expectEqual(count >= 1 and marker != 0xf7,
 				reportHasCode(report, .sof_sampling_invalid));
 		}
 	}
@@ -1461,6 +1463,55 @@ test "sampling finding scope and complete component guards classify every frame 
 		var report = try jpegz.validate(allocator, complete[0..length]);
 		defer report.deinit(allocator);
 		try std.testing.expect(!reportHasCode(report, .sof_sampling_invalid));
+	}
+}
+
+test "multi-component sampling factors and interleaved MCU size are typed" {
+	// Validate, 2026-11-05: a bogus multi-component factor yielded only
+	// "unsupported". T.81 Table B.2 bounds each Hi and Vi to 1..4, and B.2.3
+	// bounds an interleaved scan (Ns > 1) to 10 data units per MCU, which
+	// libjpeg enforces ("Sampling factors too large for interleaved scan").
+	const allocator = std.testing.allocator;
+	const Case = struct { y: u8, cb: u8 = 0x11, ns: u8 = 3, factor_faults: usize = 0, mcu_fault: bool = false };
+	const cases = [_]Case{
+		.{ .y = 0x22 }, // 4+1+1 = 6
+		.{ .y = 0x42 }, // 8+1+1 = 10, the largest legal MCU
+		.{ .y = 0x33, .mcu_fault = true }, // 9+1+1 = 11
+		.{ .y = 0x44, .mcu_fault = true }, // 16+1+1 = 18
+		.{ .y = 0x44, .ns = 1 }, // noninterleaved: no MCU limit
+		.{ .y = 0x33, .ns = 2 }, // 9+1 = 10
+		.{ .y = 0x22, .cb = 0x01, .factor_faults = 1 }, // Cb Hi = 0
+		.{ .y = 0x22, .cb = 0x50, .factor_faults = 2 }, // Cb Hi = 5, Vi = 0
+		.{ .y = 0x55, .factor_faults = 2 }, // out of range: no second MCU fault
+	};
+	for (cases) |case| {
+		const frame = [_]u8{ 0xff, 0xc0, 0, 17, 8, 0, 16, 0, 16, 3, 1, case.y, 0, 2, case.cb, 0, 3, 0x11, 0 };
+		const selectors = [_]u8{ 1, 0, 2, 0, 3, 0 };
+		const sos = [_]u8{ 0xff, 0xda, 0, 6 + 2 * case.ns, case.ns };
+		const data = try std.mem.concat(allocator, u8, &.{
+			&.{ 0xff, 0xd8 }, &frame, &sos, selectors[0 .. 2 * @as(usize, case.ns)], &.{ 0, 63, 0, 0x3f, 0xff, 0xd9 },
+		});
+		defer allocator.free(data);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		const ns_offset: u64 = 2 + frame.len + 4;
+		var factor_faults: usize = 0;
+		var mcu_faults: usize = 0;
+		for (report.findings.items) |finding| {
+			if (finding.code != .sof_sampling_invalid) continue;
+			try std.testing.expectEqual(jpegz.Severity.fail, finding.severity);
+			try std.testing.expect(finding.offset_is_exact);
+			if (finding.offset == ns_offset) {
+				mcu_faults += 1;
+				try std.testing.expect(std.mem.indexOf(u8, finding.detail.?, "at most 10") != null);
+			} else {
+				factor_faults += 1;
+				try std.testing.expect(finding.offset.? == 2 + 11 or finding.offset.? == 2 + 14);
+			}
+		}
+		errdefer std.debug.print("case y=0x{x} cb=0x{x} ns={d}: factor {d} mcu {d}\n", .{ case.y, case.cb, case.ns, factor_faults, mcu_faults });
+		try std.testing.expectEqual(case.factor_faults, factor_faults);
+		try std.testing.expectEqual(@as(usize, @intFromBool(case.mcu_fault)), mcu_faults);
 	}
 }
 

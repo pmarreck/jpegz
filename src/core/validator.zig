@@ -162,6 +162,8 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     // Membership bitmap of component IDs (Ci) declared by the SOF, used
     // to validate SOS component selectors (Cs) cross-segment.
     var sof_comp_ids = [_]bool{false} ** 256;
+	// Packed Hi/Vi sampling byte per declared component ID, for the MCU check.
+	var sof_comp_hv = [_]u8{0} ** 256;
     var sof_component_count: u8 = 0;
     var sos_count: u32 = 0; // number of SOS (scan) markers seen
 	// T.81 Annex J: a DHP before the first frame makes the stream hierarchical,
@@ -400,17 +402,18 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                         // Record each declared component ID (Ci) for the SOS cross-check.
                         var ci: usize = 0;
                         while (ci < nf) : (ci += 1) {
-                            sof_comp_ids[data[seg_body_start + 6 + 3 * ci]] = true;
-                        }
-						// Initial registry scope excludes other processes and layouts.
-						if (nf == 1 and (variant == .baseline_huffman or variant == .extended_huffman)) {
-							const offset = seg_body_start + 7;
-							const component = data[seg_body_start + 6];
+							const component = data[seg_body_start + 6 + 3 * ci];
+							const offset = seg_body_start + 7 + 3 * ci;
+                            sof_comp_ids[component] = true;
+							sof_comp_hv[component] = data[offset];
+							// T.81 Table B.2: every T.81 frame's Hi and Vi are 1..4.
+							// The JPEG-LS frame stays with the T.87 validator.
+							if (variant == .jpegls) continue;
 							try checkSamplingFactor(&report, allocator, offset, component,
 								"Hi (high nibble)", data[offset] >> 4);
 							try checkSamplingFactor(&report, allocator, offset, component,
 								"Vi (low nibble)", data[offset] & 15);
-						}
+                        }
                     }
 
                     const lossless_precision = variant == .lossless_huffman or variant == .lossless_arithmetic;
@@ -484,6 +487,27 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                             "SOS component selector Cs not declared in SOF");
                     }
                 }
+				// T.81 B.2.3: an interleaved scan (Ns > 1) has at most 10 data
+				// units per MCU. Out-of-range or undeclared factors are already
+				// reported, so only an otherwise legal combination is judged.
+				if (check_duplicates and ns > 1) {
+					var units: usize = 0;
+					var judged = true;
+					for (0..ns) |index| {
+						const cs = data[seg_body_start + 1 + 2 * index];
+						const hv = sof_comp_hv[cs];
+						const hi = hv >> 4;
+						const vi = hv & 15;
+						if (!sof_comp_ids[cs] or hi < 1 or hi > 4 or vi < 1 or vi > 4) judged = false;
+						units += @as(usize, hi) * vi;
+					}
+					if (judged and units > 10) {
+						const detail = try std.fmt.allocPrint(allocator,
+							"interleaved scan MCU has {d} data units; T.81 B.2.3 allows at most 10", .{units});
+						defer allocator.free(detail);
+						try addExactFinding(&report, allocator, .sof_sampling_invalid, seg_body_start, detail);
+					}
+				}
             }
 
             // Validate the scan's spectral / predictor parameters per frame
