@@ -255,14 +255,15 @@ capture "$jpegz_cli" --json "$fixtures/jxl_patches_lossless_unsupported.jxl"
 assert_contains "$out" '"verdict":"valid"' "supported patches JXL reports valid"
 [ "$rc" -eq 0 ] && pass "supported patches JXL exits 0" || fail "supported patches JXL exits 0" "rc=$rc"
 
-# Recoverable nonzero padding still violates the format. Match JSON fields,
+# Recoverable nonzero padding is likely damage (owner, 2026-11-05): FAIL class
+# whatever the provider's recoverability severity says. Match JSON fields,
 # not the input label, and exercise the public C ABI through stdin.
 out=; err=; rc=
 capture bash -c 'printf "%b" "$2" | "$1" --json -' _ "$jpegz_cli" \
 	'\xff\x0a\x00\x00\x00\x80\xa0\xb8\x31\x08\x02\x01\x00\x40\x00\x89\xa0\x56\x15\x40\x02\x00\xc2\x8d\x78\x9b\x02\xff\xaa\x32\x00'
 [ "$rc" -eq 1 ] && pass "recoverable JXL corruption exits 1" || fail "recoverable JXL corruption exits 1" "rc=$rc"
 assert_contains "$out" '"verdict":"corrupt"' "recoverable JXL corruption is invalid"
-assert_contains "$out" '"severity":"WARN","code":"jxl_nonzero_padding"' "recoverable JXL corruption keeps warning severity"
+assert_contains "$out" '"severity":"FAIL","code":"jxl_nonzero_padding"' "recoverable JXL nonzero padding is FAIL class"
 
 # The motivating bug: a smashed JP2 signature must not be diagnosed in JPEG terms.
 smashed="$TMPDIR/jpegz-cli-smashed-$$.jp2"

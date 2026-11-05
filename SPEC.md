@@ -116,8 +116,10 @@ with known defects. Batch exit precedence is I/O/usage (2), corrupt (1),
 inconclusive (3), known defect (4), then valid (0).
 
 JPEG XL findings keep validity, severity and completion separate. Nonzero
-padding and incomplete trailing box headers are corrupt even when libjxlz
-reports warning severity and completes decoding. Callback findings retain
+padding and incomplete trailing box headers are corrupt with FAIL severity
+even when libjxlz reports warning severity and completes decoding: libjxlz's
+severity is a recoverability axis, and the owner's 2026-11-05 rule classes
+these likely-damage findings as FAIL. Callback findings retain
 their order and offsets; later resource limits cannot erase proven invalidity.
 
 Registry values are append-only and shared with sibling validators.

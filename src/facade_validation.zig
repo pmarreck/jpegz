@@ -206,10 +206,17 @@ pub fn mapJxlFinding(raw_verdict: i32, raw_code: i32) MappedFinding {
     return .{
         .verdict = expected_verdict,
         .code = code,
-        .severity = if (raw_code == 9 or raw_code == 13)
-            .warn
-        else if (expected_verdict == .corrupt) .fail else .warn,
+        .severity = if (expected_verdict == .corrupt) .fail else .warn,
     };
+}
+
+/// libjxlz's finding severity is a recoverability axis: WARNING means only
+/// that decoding continues. Nonzero padding (9) and a truncated box header
+/// (13) are likely damage with no known writer, so the owner's 2026-11-05
+/// rule (validate TERMINOLOGY A2) makes them FAIL class whatever the
+/// provider's recoverability says.
+fn jxlFailsRegardlessOfRecovery(raw_code: i32) bool {
+	return raw_code == 9 or raw_code == 13;
 }
 
 /// Runs jp2z's public strict pure-Zig validator and translates its full report.
@@ -326,7 +333,11 @@ fn translateJxlFinding(raw: JxlReportedFinding, input_size: usize, host_base: u6
 		.source = .libjxlz,
 		.leaf_code = @bitCast(raw.raw_code),
 		.code = mapped.code,
-		.severity = if (mapped.verdict == .indeterminate) .warn else switch (raw.raw_severity) {
+		.severity = if (mapped.verdict == .indeterminate)
+			.warn
+		else if (jxlFailsRegardlessOfRecovery(raw.raw_code))
+			.fail
+		else switch (raw.raw_severity) {
 			1 => .warn,
 			2 => .fail,
 			else => mapped.severity,

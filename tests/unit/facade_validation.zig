@@ -818,11 +818,11 @@ test "JPEG XL mapping is exhaustive and unknown future codes fail closed" {
         .{ .leaf_verdict = 3, .leaf_code = 6, .verdict = .indeterminate, .code = .jxl_out_of_memory, .severity = .warn },
         .{ .leaf_verdict = 3, .leaf_code = 7, .verdict = .indeterminate, .code = .jxl_invalid_argument, .severity = .warn },
         .{ .leaf_verdict = 3, .leaf_code = 8, .verdict = .indeterminate, .code = .jxl_unclassified_decoder_error, .severity = .warn },
-        .{ .leaf_verdict = 1, .leaf_code = 9, .verdict = .corrupt, .code = .jxl_nonzero_padding, .severity = .warn },
+        .{ .leaf_verdict = 1, .leaf_code = 9, .verdict = .corrupt, .code = .jxl_nonzero_padding, .severity = .fail },
         .{ .leaf_verdict = 1, .leaf_code = 10, .verdict = .corrupt, .code = .jxl_invalid_context_map, .severity = .fail },
         .{ .leaf_verdict = 1, .leaf_code = 11, .verdict = .corrupt, .code = .jxl_invalid_ma_tree, .severity = .fail },
         .{ .leaf_verdict = 1, .leaf_code = 12, .verdict = .corrupt, .code = .jxl_invalid_ans_state, .severity = .fail },
-        .{ .leaf_verdict = 1, .leaf_code = 13, .verdict = .corrupt, .code = .jxl_truncated_box_header, .severity = .warn },
+        .{ .leaf_verdict = 1, .leaf_code = 13, .verdict = .corrupt, .code = .jxl_truncated_box_header, .severity = .fail },
         .{ .leaf_verdict = 1, .leaf_code = 14, .verdict = .corrupt, .code = .jxl_invalid_ac_nonzero_count, .severity = .fail },
         .{ .leaf_verdict = 0, .leaf_code = 999, .verdict = .indeterminate, .code = null, .severity = .warn },
     };
@@ -886,7 +886,9 @@ test "JXL finding classifier separates every current pair from unknown and incon
 				const wire: u32 = @intCast(raw_code + (if (raw_code <= 8) @as(i32, 179) else 180));
 				try std.testing.expectEqual(wire, @intFromEnum(mapped.code.?));
 			}
-			const severity: jpegz.Severity = if (expected == .valid) .pass else if (expected == .corrupt and raw_code != 9 and raw_code != 13) .fail else .warn;
+			// Owner, 2026-11-05: every corrupt pair, including nonzero padding (9)
+			// and a truncated box header (13), is FAIL class.
+			const severity: jpegz.Severity = if (expected == .valid) .pass else if (expected == .corrupt) .fail else .warn;
 			try std.testing.expectEqual(severity, mapped.severity);
 		}
 	}
@@ -1049,7 +1051,7 @@ test "JPEG XL facade preserves warning then fatal findings and completion" {
     try std.testing.expectEqual(@as(?u64, 1), warning.reported_warning_count);
     try std.testing.expectEqual(@as(usize, 1), warning.findings.items.len);
     try std.testing.expectEqual(jpegz.FindingCode.jxl_nonzero_padding, warning.findings.items[0].code.?);
-    try std.testing.expectEqual(jpegz.Severity.warn, warning.findings.items[0].severity);
+    try std.testing.expectEqual(jpegz.Severity.fail, warning.findings.items[0].severity);
     try std.testing.expect(warning.findings.items[0].is_assessed);
     try std.testing.expectEqual(@as(?u64, 8), warning.findings.items[0].offset);
     try std.testing.expectEqual(@as(?u64, 1008), warning.findings.items[0].host_offset);
@@ -1062,7 +1064,7 @@ test "JPEG XL facade preserves warning then fatal findings and completion" {
     try std.testing.expectEqual(@as(?u64, 1), stopped.reported_warning_count);
     try std.testing.expectEqual(@as(usize, 2), stopped.findings.items.len);
     try std.testing.expectEqual(jpegz.FindingCode.jxl_nonzero_padding, stopped.findings.items[0].code.?);
-    try std.testing.expectEqual(jpegz.Severity.warn, stopped.findings.items[0].severity);
+    try std.testing.expectEqual(jpegz.Severity.fail, stopped.findings.items[0].severity);
     try std.testing.expectEqual(jpegz.FindingCode.jxl_truncated, stopped.findings.items[1].code.?);
     try std.testing.expectEqual(jpegz.Severity.fail, stopped.findings.items[1].severity);
     try std.testing.expect(stopped.findings.items[1].is_assessed);
@@ -1096,7 +1098,7 @@ test "JPEG XL trailing header invalidity survives recovery and resource limits" 
         if (!valid) {
             const finding = result.findings.items[0];
             try std.testing.expectEqual(jpegz.FindingCode.jxl_truncated_box_header, finding.code.?);
-            try std.testing.expectEqual(jpegz.Severity.warn, finding.severity);
+            try std.testing.expectEqual(jpegz.Severity.fail, finding.severity);
             try std.testing.expectEqual(@as(?u64, boxed.len), finding.offset);
             try std.testing.expectEqual(@as(?u64, 1000 + boxed.len), finding.host_offset);
             try std.testing.expect(finding.offset_is_exact);
