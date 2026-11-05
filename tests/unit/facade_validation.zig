@@ -1289,6 +1289,61 @@ test "validateAny calls an unrecognized container indeterminate, never valid" {
 	try std.testing.expectEqual(jpegz.FindingCode.unrecognized_container, result.findings.items[0].code.?);
 }
 
+test "a damaged SOI keeps JPEG identity only on a chain of complete marker segments" {
+	// Validate, 2026-11-05: when the rest of the stream is unmistakably JPEG,
+	// damaged SOI bytes are corruption, not an unrecognized container. The
+	// bound is two or more complete T.81 marker segments chained from offset 2,
+	// where an intact SOI would hand off.
+	const allocator = std.testing.allocator;
+	const fixtures = [_][]const u8{
+		@embedFile("fixtures/baseline_2x2_rgb.jpg"),
+		@embedFile("fixtures/progressive_8x8_rgb.jpg"),
+		@embedFile("fixtures/lossless_4x4_gray8.jpg"),
+	};
+	// Each pair leaves the sniffer with no signature (0xFF 0x4F and 0xFF 0x0A
+	// would claim JPEG 2000 and JPEG XL instead).
+	const damaged = [_][2]u8{ .{ 0, 0 }, .{ 0xff, 0xd9 }, .{ 0x7f, 0xd8 }, .{ 0xff, 0x58 }, .{ 0xfe, 0xd8 } };
+	for (fixtures) |fixture| {
+		for (damaged) |soi| {
+			const data = try allocator.dupe(u8, fixture);
+			defer allocator.free(data);
+			data[0] = soi[0];
+			data[1] = soi[1];
+			try std.testing.expectEqual(jpegz.ValidationFormat.unknown, jpegz.sniff(data));
+			var result = try jpegz.validateAny(allocator, data);
+			defer result.deinit(allocator);
+			try std.testing.expectEqual(jpegz.ValidationFormat.jpeg, result.format);
+			try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
+			var found = false;
+			for (result.findings.items) |finding| {
+				try std.testing.expect(finding.code != .unrecognized_container);
+				if (finding.code == .missing_soi and finding.severity == .fail and finding.offset == 0) {
+					found = true;
+					try std.testing.expect(std.mem.indexOf(u8, finding.detail.?, "marker segments") != null);
+				}
+			}
+			try std.testing.expect(found);
+		}
+	}
+	// Controls stay unrecognized: one complete segment, a chain broken by a
+	// non-marker byte or an overlong length, foreign signatures and noise.
+	const one_segment = [_]u8{ 0, 0, 0xff, 0xe0, 0, 4, 'J', 'F', 0x00, 0x00, 0x00, 0x00 };
+	const broken = [_]u8{ 0, 0, 0xff, 0xe0, 0, 4, 'J', 'F', 0x00, 0xdb, 0, 4, 1, 2 };
+	const overlong = [_]u8{ 0, 0, 0xff, 0xe0, 0, 4, 'J', 'F', 0xff, 0xdb, 0, 9, 1, 2 };
+	const reserved = [_]u8{ 0, 0, 0xff, 0xe0, 0, 4, 'J', 'F', 0xff, 0x30, 0, 4, 1, 2 };
+	const png = "\x89PNG\r\n\x1a\n\x00\x00\x00\x0DIHDR\x00\x00\x00\x01";
+	var noise: [4096]u8 = undefined;
+	var prng = std.Random.DefaultPrng.init(0x6a706567);
+	prng.random().bytes(&noise);
+	noise[0] = 0;
+	for ([_][]const u8{ &one_segment, &broken, &overlong, &reserved, png, &noise }) |data| {
+		var result = try jpegz.validateAny(allocator, data);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(jpegz.ValidationFormat.unknown, result.format);
+		try std.testing.expectEqual(jpegz.StrictVerdict.indeterminate, result.verdict);
+	}
+}
+
 test "a JP2 with a destroyed signature box is not misdiagnosed as a JPEG missing SOI" {
 	// The C CLI's ad-hoc sniffer fell through to the JPEG path here and
 	// reported `missing_soi — JPEG must start with SOI marker`, naming a

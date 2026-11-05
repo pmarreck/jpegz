@@ -76,7 +76,11 @@ coefficient band; a decoded run overflow is an error even in recovery mode.
 
 `validateAny` sniffs the family and returns a `StrictValidationResult` with
 a classified verdict: valid, known_defect, corrupt, unsupported, or indeterminate.
-Unrecognized input is indeterminate. Findings preserve source, mapped code,
+Unrecognized input is indeterminate, with one exception: when the first two
+bytes are not an intact SOI and carry no other signature, but at least two
+complete T.81 marker segments chain from offset 2, the input keeps its JPEG
+identity and is corrupt with FAIL `missing_soi` at offset 0. On 29,181
+non-JPEG files this rule identified none as JPEG. Findings preserve source, mapped code,
 raw leaf code, and available location information.
 
 The older severity report remains available through `validate` and

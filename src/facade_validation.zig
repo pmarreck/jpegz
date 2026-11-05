@@ -81,6 +81,39 @@ pub fn sniff(data: []const u8) ValidationFormat {
     return .unknown;
 }
 
+/// Secondary JPEG identity for input whose first two bytes are not an intact
+/// SOI and carry no other signature: the number of complete T.81/T.87 marker
+/// segments chained from offset 2, where an intact SOI would hand off, when
+/// there are at least `damaged_soi_min_segments`; otherwise null. Validate
+/// asked (2026-11-05) that such a stream keep its identity, so damaged SOI
+/// bytes report corruption rather than an unrecognized container.
+pub fn damagedSoiSegments(data: []const u8) ?usize {
+	if (sniff(data) != .unknown) return null;
+	var pos: usize = 2;
+	var count: usize = 0;
+	while (pos + 4 <= data.len and data[pos] == 0xFF and isSegmentMarker(data[pos + 1])) {
+		const length = (@as(usize, data[pos + 2]) << 8) | data[pos + 3];
+		if (length < 2 or length > data.len - pos - 2) break;
+		count += 1;
+		// Entropy-coded data follows a scan header; the chain ends there.
+		if (data[pos + 1] == 0xDA) break;
+		pos += 2 + length;
+	}
+	return if (count >= damaged_soi_min_segments) count else null;
+}
+
+pub const damaged_soi_min_segments = 2;
+
+/// Length-prefixed markers T.81 (B.1.1.4, Annex J) and T.87 assign before or
+/// at the first scan: SOFn, DHT, DAC, SOS, DQT, DNL, DRI, DHP, EXP, APPn,
+/// SOF55, LSE and COM. Reserved and standalone markers do not count.
+fn isSegmentMarker(code: u8) bool {
+	return switch (code) {
+		0xC0...0xCF, 0xDA...0xDF, 0xE0...0xEF, 0xF7, 0xF8, 0xFE => true,
+		else => false,
+	};
+}
+
 pub const StrictFinding = struct {
     source: ValidatorSource,
     leaf_code: u32,

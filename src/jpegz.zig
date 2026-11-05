@@ -638,7 +638,26 @@ pub fn validateAny(
         .jpeg => strictFromReport(allocator, data),
         .jpeg2000 => jpeg2000.strictValidate(allocator, data),
         .jpeg_xl => jpegxl.validate(allocator, data, jpegxl.default_options),
-        .unknown => blk: {
+        .unknown => if (facade.damagedSoiSegments(data)) |segments| blk: {
+			// The rest of the stream is unmistakably JPEG, so the damaged SOI
+			// is corruption at offset 0, not an unrecognized container.
+			var result = StrictValidationResult{ .verdict = .corrupt, .format = .jpeg };
+			errdefer result.deinit(allocator);
+			const detail = try std.fmt.allocPrint(allocator,
+				"SOI (FF D8) is damaged: found {X:0>2} {X:0>2}; JPEG identity from {d} complete marker segments from offset 2",
+				.{ data[0], data[1], segments });
+			errdefer allocator.free(detail);
+			try result.findings.append(allocator, .{
+				.source = .jpegz,
+				.leaf_code = @intFromEnum(FindingCode.missing_soi),
+				.code = .missing_soi,
+				.severity = .fail,
+				.offset = 0,
+				.host_offset = 0,
+				.detail = detail,
+			});
+			break :blk result;
+		} else blk: {
             var result = StrictValidationResult{ .verdict = .indeterminate, .format = .unknown };
             errdefer result.deinit(allocator);
             try result.findings.append(allocator, .{

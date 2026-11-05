@@ -285,6 +285,12 @@ capture "$jpegz_cli" --simple "$foreign"
 assert_contains "$out" "indeterminate" "foreign bytes report indeterminate"
 [ "$rc" -eq 3 ] && pass "inconclusive input exits 3, distinct from corrupt" || fail "inconclusive input exits 3, distinct from corrupt" "rc=$rc"
 
+# A damaged SOI ahead of an unmistakable marker chain is corruption, not foreign.
+capture bash -c '{ printf "\000\000"; tail -c +3 "$2"; } | "$1" --json -' _ "$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg"
+[ "$rc" -eq 1 ] && pass "damaged SOI exits corrupt" || fail "damaged SOI exits corrupt" "rc=$rc"
+assert_contains "$out" '"format":"jpeg"' "damaged SOI keeps JPEG identity"
+assert_contains "$out" '"severity":"FAIL","code":"missing_soi"' "damaged SOI reports missing_soi"
+
 # KNOWN_DEFECT is a classification of a recognized encoder mistake. WARN
 # severity alone must not turn it into the ordinary valid/exit-0 outcome.
 known_defect="$fixtures/zero_pad_16x16_420.jpg"
