@@ -89,3 +89,20 @@ Expected effect: no file in the real-world corpus or the test suite changes verd
 - **JPEG XL (180-197):** classes come from libjxlz; its audit is `doc/severity_audit_draft_20261105.md` (`1f995a90`).
   - **Changed today, on the owner's 12:14 decision:** 189 `jxl_nonzero_padding` and 193 `jxl_truncated_box_header` now carry FAIL whatever libjxlz's recoverability severity says. The controlled red was 3 unit tests plus the CLI assertion. The corpus effect is none on clean files; on damaged files these findings move from WARN to FAIL.
   - **Unchanged:** 197 keeps the provider's unresolved ICC assessment.
+
+## Validate's ruling (2026-11-05, 13:14)
+
+- **Approved:** the five proposed changes, implemented with controlled reds.
+- **Held at FAIL** pending the owner: rows 64 and 65.
+- **Next for row 51b:** split out the narrower reason "whole bytes after valid padding before EOI" and report its real-world count.
+- **Separate detection items:** the multi-component sampling gap, and damaged-SOI identity.
+
+### Row 64 provenance (bounded search)
+
+There is a real producer.
+- **Writer:** Go's `image/jpeg` encoder wrote `Ss=0, Se=0, Ah/Al=0` in every sequential SOS, where Se must be 63. It did this from Go 1.0 until August 2012.
+- **Fix:** golang/go commit 5f7bec69 ("image/jpeg: send a correct Start Of Scan (SOS) header"), which fixed issue #3916, "Invalid SOS parameters for sequential JPEG", the libjpeg JWRN_NOT_SEQUENTIAL text. It was backported in 2015.
+- **Signature:** the sequential header bytes `0x00 0x00 0x00` in place of `0x00 0x3f 0x00`.
+- **Effect:** libjpeg-turbo warns, then decodes identical pixels.
+
+Following validate's rule, this is a KNOWN_DEFECT registry candidate for exactly that signature, not a softer default for row 64. Every other sequential SOS field violation stays FAIL.
