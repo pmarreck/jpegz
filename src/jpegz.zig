@@ -552,8 +552,10 @@ pub fn classicFindingVerdict(code: FindingCode, severity: Severity) StrictVerdic
 /// Translate the severity-rated T.81 / T.87 report into the family-wide
 /// classified result, so a caller reading `validateAny` never has to know which
 /// leg answered. Each finding is classified by `classicFindingVerdict`. Corrupt
-/// wins; inconclusive findings and known defects only replace an otherwise
-/// valid result.
+/// wins, then a known defect: an unsupported or inconclusive check describes
+/// the tool's reach, not the file, so it never hides a recognized producer
+/// defect (validate, 2026-11-05). Other inconclusive findings only replace an
+/// otherwise valid result.
 fn classifyClassicFindings(initial: StrictVerdict, findings: []const Finding) StrictVerdict {
 	var verdict = initial;
 	var known_defect = false;
@@ -567,8 +569,8 @@ fn classifyClassicFindings(initial: StrictVerdict, findings: []const Finding) St
 		}
 	}
 	if (verdict == .corrupt) return .corrupt;
+	if (known_defect) return .known_defect;
 	if (unchecked_marker and verdict == .valid) return .indeterminate;
-	if (known_defect and verdict == .valid) return .known_defect;
 	return verdict;
 }
 
@@ -1086,7 +1088,9 @@ test "classic finding precedence is independent of finding order" {
 	const Case = struct { initial: StrictVerdict, other: FindingCode, severity: Severity, expected: StrictVerdict };
 	const cases = [_]Case{
 		.{ .initial = .valid, .other = .entropy_padding_zero_bits, .severity = .warn, .expected = .known_defect },
-		.{ .initial = .unsupported, .other = .entropy_padding_zero_bits, .severity = .warn, .expected = .unsupported },
+		// A known defect outranks inconclusive reach (validate, 2026-11-05).
+		.{ .initial = .unsupported, .other = .entropy_padding_zero_bits, .severity = .warn, .expected = .known_defect },
+		.{ .initial = .indeterminate, .other = .entropy_padding_zero_bits, .severity = .warn, .expected = .known_defect },
 		.{ .initial = .valid, .other = .adobe_app14_conflicts_jfif, .severity = .warn, .expected = .valid },
 		.{ .initial = .valid, .other = .insufficient_data, .severity = .warn, .expected = .corrupt },
 		.{ .initial = .corrupt, .other = .quantization_table_corrupt, .severity = .fail, .expected = .corrupt },

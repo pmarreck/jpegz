@@ -117,11 +117,12 @@ only); 4, 8 and 12 are not frames.
 
 jpegz owns recognition of known JPEG encoder defects. All-zero Huffman padding
 is `known_defect` (appended verdict value 4), with typed finding 63 and WARN
-treatment. Ordinary warnings remain distinct. Corruption and incomplete checks
-retain precedence; decoding still accepts the recognized padding defect. The
-CLI reports `known_defect` in text/JSON and exits 4 when validation completes
-with known defects. Batch exit precedence is I/O/usage (2), corrupt (1),
-inconclusive (3), known defect (4), then valid (0).
+treatment. Ordinary warnings remain distinct. Corruption retains precedence;
+a known defect outranks an unsupported or inconclusive check, which describes
+the tool's reach rather than the file (validate, 2026-11-05). Decoding still
+accepts the recognized padding defect. The CLI reports `known_defect` in
+text/JSON and exits 4. Batch exit precedence is I/O/usage (2), corrupt (1),
+known defect (4), inconclusive (3), then valid (0).
 
 JPEG XL findings keep validity, severity and completion separate. Nonzero
 padding and incomplete trailing box headers are corrupt with FAIL severity

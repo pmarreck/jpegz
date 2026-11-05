@@ -401,13 +401,15 @@ assert_contains "$out" '"verdict":"valid"' "ordinary warning remains valid"
 assert_contains "$out" '"severity":"WARN","code":"jfif_version_unchecked"' "ordinary warning control actually warns"
 
 # Exhaust pairs in both orders. This table is the declared batch policy;
-# numeric exit values are identifiers, not an ordering of precedence.
+# numeric exit values are identifiers, not an ordering of precedence. A known
+# defect outranks inconclusive (validate, 2026-11-05): inconclusive describes
+# the tool's reach, not the file.
 batch_inputs=("$fixtures/baseline_2x2_rgb.jpg" "$known_defect" "$foreign" "$trunc" "$TMPDIR/jpegz-cli-absent-$$")
 batch_labels=(valid known_defect inconclusive corrupt io_error)
 batch_expected=(
 	0 4 3 1 2
-	4 4 3 1 2
-	3 3 3 1 2
+	4 4 4 1 2
+	3 4 3 1 2
 	1 1 1 1 2
 	2 2 2 2 2
 )

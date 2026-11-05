@@ -373,9 +373,10 @@ static void print_help(void) {
         "  0  every input was valid\n"
         "  1  at least one input was CORRUPT\n"
         "  2  usage or I/O error\n"
-        "  3  nothing corrupt, but at least one input was unsupported or\n"
-        "     indeterminate\n"
-        "  4  validation completed with at least one known encoder defect\n"
+        "  3  nothing corrupt or known-defective, but at least one input was\n"
+        "     unsupported or indeterminate\n"
+        "  4  nothing corrupt, and at least one known encoder defect\n"
+        "  Precedence: 2, then 1, then 4, then 3, then 0.\n"
         "\n"
         "FORMATS:\n"
         "  JPEG and JPEG-LS (T.81 / T.87), JPEG 2000 (T.800, via jp2z), and\n"
@@ -554,9 +555,10 @@ int main(int argc, char **argv) {
                 exit_code = EXIT_INVALID;
             }
         } else if (report.verdict == JPEGZ_VERDICT_KNOWN_DEFECT) {
-            if (exit_code == EXIT_OK) exit_code = EXIT_KNOWN_DEFECT;
-        } else if (report.verdict != JPEGZ_VERDICT_VALID &&
-                   (exit_code == EXIT_OK || exit_code == EXIT_KNOWN_DEFECT)) {
+            /* A known defect outranks inconclusive: an unsupported or
+             * indeterminate input describes the tool's reach, not a file. */
+            if (exit_code == EXIT_OK || exit_code == EXIT_INCONCLUSIVE) exit_code = EXIT_KNOWN_DEFECT;
+        } else if (report.verdict != JPEGZ_VERDICT_VALID && exit_code == EXIT_OK) {
             exit_code = EXIT_INCONCLUSIVE;
         }
 
