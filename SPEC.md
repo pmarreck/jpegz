@@ -82,8 +82,12 @@ raw leaf code, and available location information.
 The older severity report remains available through `validate` and
 `jpeg2000.validate`. Its `isValid()` accepts warnings. The facade supplies
 the classified vocabulary and classifies missing EOI, recovered entropy truncation and
-missing/misordered restart markers as corrupt, even when their findings have
-warning severity. Legal fill and metadata warnings remain valid. A codec check
+missing/misordered restart markers as corrupt. Under validate's 2026-11-05 rule
+(FAIL is likely damage, WARN a writer's spec violation; see
+`docs/plan_context/severity-audit-2026-11-05.md`) the report gives recovered
+truncation and restart findings FAIL severity, so the legacy `isValid()` rejects
+them too; the decoders still report them as recovered. Legal 0xFF fill is an
+INFO observation, and metadata warnings remain valid. A codec check
 that returns `NotImplemented` maps to unsupported; a skipped check maps to
 indeterminate. Known corruption takes precedence. The Zig legacy report's
 `codec_check` records whether decoding ran; its `isValid()` stays severity-based.
@@ -148,19 +152,27 @@ Generic application payloads retain their independent interpretation.
 
 A complete recognized JFIF APP0 header declaring major greater than 1, or
 major 1/minor greater than 2, reports WARN 67 `jfif_version_unchecked`.
-Its strict verdict is indeterminate (CLI exit 3) unless independent corruption
-is established. The exact location names the major byte for a future major,
+It is a WARN-class deviation, typed "not in the claimed spec version" in its
+detail: the strict verdict stays valid (CLI exit 0) unless corruption,
+inconclusive checks or a known defect apply. The exact location names the major byte for a future major,
 otherwise the minor byte; detail retains the full observed version and the
 unchecked metadata semantics. Historical units rules do not apply to these
 future versions. An incomplete header or generic application payload does not
 establish this notice. Major zero and 1.00 remain outside its initial scope,
-without a claim of complete conformance. A known-padding cause is retained,
-while incomplete metadata checks take precedence over a known-defect verdict.
+without a claim of complete conformance. A known-padding cause is retained and
+gives the known-defect verdict.
 
-Reserved FF02..FFBF markers report warning 5 with an indeterminate strict
-verdict because their semantics are unchecked. A zero marker byte outside
-entropy is forbidden and reports FAIL 5. Both retain their original and
-host marker-byte locations. Demonstrated corruption retains precedence.
+Reserved FF02..FFBF markers report FAIL 5 with a corrupt strict verdict: they
+have no specified decode, damage produces them and no writer is known. The
+codec check still runs, so its findings are kept. A zero marker byte outside
+entropy is forbidden and also reports FAIL 5. Both retain their original and
+host marker-byte locations.
+
+A second SOF reports FAIL 6 (`duplicate_sof`) at its marker, as libjpeg
+refuses it, unless a DHP precedes the first frame. Such a hierarchical stream
+(T.81 Annex J) may hold several frames; scans of its differential lossless
+frames may use predictor 0 (Table H.1). Its codec check is reported as
+unsupported with an INFO finding, never valid.
 
 JP2 strict reports retain positions within the supplied buffer, including
 nonexact EOF cursors, and copy them to the standalone host offset. A leaf

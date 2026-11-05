@@ -375,7 +375,8 @@ test "future JFIF version bytes classify coverage without asserting corruption" 
 				try std.testing.expect(finding.offset_is_exact);
 			}
 			if (future) {
-				try std.testing.expectEqual(jpegz.StrictVerdict.indeterminate, result.verdict);
+				// validate, 2026-11-05: a WARN-class deviation, not inconclusive.
+				try std.testing.expectEqual(jpegz.StrictVerdict.valid, result.verdict);
 				try std.testing.expectEqual(@as(usize, 1), notices);
 			} else {
 				try std.testing.expectEqual(@as(usize, 0), notices);
@@ -394,7 +395,7 @@ test "future JFIF version bytes classify coverage without asserting corruption" 
 		if (index != 0) data[13] = 255; // Future units semantics are not established.
 		var result = try jpegz.validateAny(allocator, data);
 		defer result.deinit(allocator);
-		try std.testing.expectEqual(if (index == 0) jpegz.StrictVerdict.valid else .indeterminate, result.verdict);
+		try std.testing.expectEqual(jpegz.StrictVerdict.valid, result.verdict);
 		for (result.findings.items) |finding|
 			try std.testing.expect(finding.code != .jfif_metadata_invalid);
 	}
@@ -443,7 +444,7 @@ test "future JFIF preserves known padding and independently corrupt metadata in 
 	future_padding[11] = 2;
 	var padding = try jpegz.validateAny(allocator, &future_padding);
 	defer padding.deinit(allocator);
-	try std.testing.expectEqual(jpegz.StrictVerdict.indeterminate, padding.verdict);
+	try std.testing.expectEqual(jpegz.StrictVerdict.known_defect, padding.verdict);
 	var causes: u8 = 0;
 	for (padding.findings.items) |finding| {
 		if (finding.code == .jfif_version_unchecked) causes |= 1;
@@ -531,7 +532,9 @@ test "classic strict findings retain bounded positions and declared segment exte
 	try std.testing.expect(found_eof);
 }
 
-test "reserved JPEG marker semantics remain inconclusive after successful pixel decoding" {
+test "reserved JPEG markers are FAIL class and still let the codec check run" {
+	// validate, 2026-11-05: FF02..FFBF have no specified decode, damage produces
+	// them and no writer is known. Detection is unchanged: the codec still runs.
 	const allocator = std.testing.allocator;
 	const pristine = @embedFile("fixtures/baseline_2x2_rgb.jpg");
 	try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xe0 }, pristine[2..4]);
@@ -541,12 +544,12 @@ test "reserved JPEG marker semantics remain inconclusive after successful pixel 
 		data[3] = @intCast(marker);
 		var result = try jpegz.validateAny(allocator, data);
 		defer result.deinit(allocator);
-		try std.testing.expectEqual(jpegz.StrictVerdict.indeterminate, result.verdict);
+		try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
 		var notices: usize = 0;
 		for (result.findings.items) |finding| {
 			if (finding.code != .unknown_marker) continue;
 			notices += 1;
-			try std.testing.expectEqual(jpegz.Severity.warn, finding.severity);
+			try std.testing.expectEqual(jpegz.Severity.fail, finding.severity);
 			try std.testing.expectEqual(@as(?u64, 3), finding.offset);
 			try std.testing.expectEqual(finding.offset, finding.host_offset);
 			try std.testing.expect(finding.offset_is_exact);
@@ -571,7 +574,7 @@ test "reserved JPEG marker semantics remain inconclusive after successful pixel 
 		data[3] = 0x1f;
 		var result = try jpegz.validateAny(allocator, data);
 		defer result.deinit(allocator);
-		try std.testing.expectEqual(if (truncate) jpegz.StrictVerdict.corrupt else .indeterminate, result.verdict);
+		try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
 		if (!truncate) {
 			var known_cause = false;
 			for (result.findings.items) |finding| {
@@ -579,6 +582,71 @@ test "reserved JPEG marker semantics remain inconclusive after successful pixel 
 			}
 			try std.testing.expect(known_cause);
 		}
+	}
+}
+
+/// A minimal legal hierarchical stream (T.81 Annex J): DHP, a lossless SOF3
+/// frame, then a differential lossless SOF7 frame at the same 1x1 size, whose
+/// scan uses selection value 0 ("no prediction", Table H.1, hierarchical
+/// differential coding only). Each scan codes one zero difference: Huffman
+/// code '0' (SSSS = 0) then 1-bit padding. `dhp` false omits the DHP and
+/// `dhp_late` moves it after the first frame.
+fn hierarchicalStream(comptime dhp: bool, comptime dhp_late: bool) []const u8 {
+	const dht = [_]u8{ 0xff, 0xc4, 0, 20, 0x00, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0};
+	const dhp_segment = [_]u8{ 0xff, 0xde, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0 };
+	const frame = [_]u8{ 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0 };
+	const first = [_]u8{ 0xff, 0xc3 } ++ frame ++ [_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, 0, 0, 0x7f };
+	const differential = [_]u8{ 0xff, 0xc7 } ++ frame ++ [_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 0, 0, 0x7f };
+	const early: []const u8 = if (dhp and !dhp_late) &dhp_segment else &.{};
+	const late: []const u8 = if (dhp and dhp_late) &dhp_segment else &.{};
+	return [_]u8{ 0xff, 0xd8 } ++ dht ++ early ++ first ++ late ++ differential ++ [_]u8{ 0xff, 0xd9 };
+}
+
+test "a repeated SOF is FAIL class except in a hierarchical stream" {
+	const allocator = std.testing.allocator;
+	// validate, 2026-11-05: libjpeg refuses two SOF markers and damage produces
+	// them, so a second frame outside hierarchical mode is FAIL at its marker.
+	const pristine = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	const header = try jpegz.frameHeader(pristine);
+	const sof_len = (@as(usize, pristine[header.sof_offset + 2]) << 8) | pristine[header.sof_offset + 3];
+	const sof = pristine[header.sof_offset .. header.sof_offset + 2 + sof_len];
+	const sos = std.mem.indexOf(u8, pristine, &.{ 0xff, 0xda }) orelse return error.MissingSos;
+	const repeated = try std.mem.concat(allocator, u8, &.{ pristine[0..sos], sof, pristine[sos..] });
+	defer allocator.free(repeated);
+	var result = try jpegz.validateAny(allocator, repeated);
+	defer result.deinit(allocator);
+	try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, result.verdict);
+	var repeats: usize = 0;
+	for (result.findings.items) |finding| {
+		if (finding.code != .duplicate_sof) continue;
+		repeats += 1;
+		try std.testing.expectEqual(jpegz.Severity.fail, finding.severity);
+		try std.testing.expectEqual(@as(?u64, sos), finding.offset);
+	}
+	try std.testing.expectEqual(@as(usize, 1), repeats);
+
+	// The legal hierarchical stream stays clean: no WARN or FAIL finding. Its
+	// codec is not checked, so the verdict is unsupported, never valid.
+	const legal = comptime hierarchicalStream(true, false);
+	try std.testing.expect((try jpegz.frameHeader(legal)).dhp_offset != null);
+	var clean = try jpegz.validateAny(allocator, legal);
+	defer clean.deinit(allocator);
+	try std.testing.expectEqual(jpegz.StrictVerdict.unsupported, clean.verdict);
+	for (clean.findings.items) |finding| {
+		errdefer std.debug.print("unexpected {s} {s}\n", .{ @tagName(finding.severity), @tagName(finding.code.?) });
+		try std.testing.expect(finding.severity != .warn and finding.severity != .fail);
+	}
+
+	// Controls: without a DHP before the first frame the same frames repeat.
+	for ([_][]const u8{ comptime hierarchicalStream(false, false), comptime hierarchicalStream(true, true) }) |stream| {
+		var flagged = try jpegz.validateAny(allocator, stream);
+		defer flagged.deinit(allocator);
+		try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, flagged.verdict);
+		var found = false;
+		for (flagged.findings.items) |finding| {
+			if (finding.code == .duplicate_sof and finding.severity == .fail) found = true;
+		}
+		try std.testing.expect(found);
 	}
 }
 
@@ -764,37 +832,39 @@ test "classic facade rejects recovered entropy damage but accepts legal fill" {
 	try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xd0 }, restart[652..654]);
 	wrong_restart[653] = 0xd5;
 	@memcpy(missing_restart[652..654], &[_]u8{ 0xaa, 0xbb });
+	// validate, 2026-11-05: recovered damage is FAIL class and legal fill is an
+	// INFO observation; the decoders report the same findings as before.
 	const cases = [_]struct {
 		bytes: []const u8,
 		verdict: jpegz.StrictVerdict,
-		warning: ?jpegz.FindingCode = null,
+		finding: ?jpegz.FindingCode = null,
+		severity: jpegz.Severity = .fail,
 	}{
 		.{ .bytes = baseline, .verdict = .valid },
 		.{ .bytes = restart, .verdict = .valid },
 		.{ .bytes = @embedFile("fixtures/progressive_8x8_rgb.jpg"), .verdict = .valid },
 		.{ .bytes = @embedFile("fixtures/lossless_4x4_gray8.jpg"), .verdict = .valid },
 		.{ .bytes = @embedFile("fixtures/arith_baseline_8x8_gray.jpg"), .verdict = .valid },
-		.{ .bytes = &legal_fill, .verdict = .valid, .warning = .entropy_fill_bytes },
-		.{ .bytes = &truncated, .verdict = .corrupt, .warning = .insufficient_data },
+		.{ .bytes = &legal_fill, .verdict = .valid, .finding = .entropy_fill_bytes, .severity = .info },
+		.{ .bytes = &truncated, .verdict = .corrupt, .finding = .insufficient_data },
 		.{ .bytes = progressive, .verdict = .valid },
-		.{ .bytes = &progressive_truncated, .verdict = .corrupt, .warning = .insufficient_data },
-		.{ .bytes = &wrong_restart, .verdict = .corrupt, .warning = .restart_marker_unexpected },
-		.{ .bytes = &missing_restart, .verdict = .corrupt, .warning = .restart_marker_missing },
+		.{ .bytes = &progressive_truncated, .verdict = .corrupt, .finding = .insufficient_data },
+		.{ .bytes = &wrong_restart, .verdict = .corrupt, .finding = .restart_marker_unexpected },
+		.{ .bytes = &missing_restart, .verdict = .corrupt, .finding = .restart_marker_missing },
 	};
 	for (cases) |case| {
 		var legacy = try jpegz.validate(allocator, case.bytes);
 		defer legacy.deinit(allocator);
 		var strict = try jpegz.validateAny(allocator, case.bytes);
 		defer strict.deinit(allocator);
-		if (case.warning) |code| {
+		if (case.finding) |code| {
 			var found = false;
 			for (strict.findings.items) |finding| {
-				if (finding.code == code and finding.severity == .warn) found = true;
+				if (finding.code == code and finding.severity == case.severity) found = true;
 			}
 			try std.testing.expect(found);
-			// Pin the legacy API's recovery behavior separately from the verdict.
-			if (code == .entropy_fill_bytes or code == .insufficient_data)
-				try std.testing.expect(legacy.isValid());
+			// The legacy report carries the same class.
+			try std.testing.expectEqual(case.severity != .fail, legacy.isValid());
 		}
 		try std.testing.expectEqual(case.verdict, strict.verdict);
 	}

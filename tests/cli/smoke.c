@@ -585,8 +585,9 @@ int main(void) {
 				jpegz_strict_result_t r = {0};
 				ASSERT(jpegz_validate_any(copy, baseline_2x2_rgb_len, &r) == JPEGZ_OK,
 				       "future JFIF validation returns through the ABI");
-				ASSERT(r.verdict == JPEGZ_VERDICT_INDETERMINATE,
-				       "future metadata semantics are inconclusive without claiming corruption");
+				/* A WARN-class deviation (validate, 2026-11-05), not inconclusive. */
+				ASSERT(r.verdict == JPEGZ_VERDICT_VALID,
+				       "future JFIF version warns without claiming corruption");
 				size_t notices = 0;
 				int correct = 1;
 				char observed[32];
@@ -599,6 +600,7 @@ int main(void) {
 					correct &= f.severity == JPEGZ_SEVERITY_WARN && f.offset == (int64_t)cases[c].offset &&
 						f.host_offset == f.offset && f.offset_is_exact;
 					correct &= f.detail != NULL && strstr(f.detail, observed) != NULL &&
+						strstr(f.detail, "not in the claimed spec version") != NULL &&
 						strstr(f.detail, "metadata semantics are unchecked") != NULL;
 				}
 				ASSERT(correct && notices == 1, "future JFIF notice retains its severity and exact version byte");

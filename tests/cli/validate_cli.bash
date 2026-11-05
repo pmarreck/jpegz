@@ -312,19 +312,20 @@ for version in '01 03' '02 00' 'fe 01'; do
 	read -r major minor <<< "$version"
 	capture bash -c '{ head -c 11 "$2"; printf "%b" "\\x$3\\x$4"; tail -c +14 "$2"; } | "$1" --json -' _ \
 		"$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg" "$major" "$minor"
-	[ "$rc" -eq 3 ] && pass "future JFIF $version exits inconclusive" || fail "future JFIF $version exits inconclusive" "rc=$rc"
-	assert_contains "$out" '"verdict":"indeterminate"' "future JFIF $version is incomplete checking"
-	assert_contains "$out" '"severity":"WARN","code":"jfif_version_unchecked"' "future JFIF $version has its typed capability cause"
+	# validate, 2026-11-05: a WARN-class deviation with no proven violation.
+	[ "$rc" -eq 0 ] && pass "future JFIF $version exits 0 with a warning" || fail "future JFIF $version exits 0 with a warning" "rc=$rc"
+	assert_contains "$out" '"verdict":"valid"' "future JFIF $version is a deviation, not inconclusive"
+	assert_contains "$out" '"severity":"WARN","code":"jfif_version_unchecked"' "future JFIF $version has its typed cause"
 	if [ "$major" = 01 ]; then location=12; else location=11; fi
 	assert_contains "$out" "\"offset\":$location,\"host_offset\":$location,\"offset_is_exact\":true" "future JFIF $version retains the version-byte location"
 	printf -v observed 'JFIF version %d.%02d' "$((16#$major))" "$((16#$minor))"
-	assert_contains "$out" "$observed: metadata semantics are unchecked" "future JFIF $version detail names the unchecked version"
+	assert_contains "$out" "$observed: not in the claimed spec version" "future JFIF $version detail names the unchecked version"
 done
 
 capture bash -c '{ head -c 11 "$2"; printf "\002"; tail -c +13 "$2"; } | "$1" --json -' _ "$jpegz_cli" "$known_defect"
-[ "$rc" -eq 3 ] && pass "future metadata outranks known padding" || fail "future metadata outranks known padding" "rc=$rc"
-assert_contains "$out" '"code":"entropy_padding_zero_bits"' "inconclusive metadata retains the known-defect cause"
-assert_contains "$out" '"code":"jfif_version_unchecked"' "known padding retains the incomplete-check cause"
+[ "$rc" -eq 4 ] && pass "known padding outranks a future-version warning" || fail "known padding outranks a future-version warning" "rc=$rc"
+assert_contains "$out" '"code":"entropy_padding_zero_bits"' "future metadata retains the known-defect cause"
+assert_contains "$out" '"severity":"WARN","code":"jfif_version_unchecked"' "known padding retains the version warning"
 
 for reverse in 0 1; do
 	capture bash -c '
@@ -341,8 +342,10 @@ for marker in 1f 00; do
 	capture bash -c '{ head -c 3 "$2"; printf "%b" "\\x$3"; tail -c +5 "$2"; } | "$1" --json -' _ \
 		"$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg" "$marker"
 	if [ "$marker" = 1f ]; then
-		[ "$rc" -eq 3 ] && pass "reserved JPEG marker exits inconclusive" || fail "reserved JPEG marker exits inconclusive" "rc=$rc"
-		assert_contains "$out" '"verdict":"indeterminate"' "unrecognized reserved semantics remain inconclusive"
+		# validate, 2026-11-05: no specified decode and damage-produced, so FAIL.
+		[ "$rc" -eq 1 ] && pass "reserved JPEG marker exits corrupt" || fail "reserved JPEG marker exits corrupt" "rc=$rc"
+		assert_contains "$out" '"verdict":"corrupt"' "reserved JPEG marker is FAIL class"
+		assert_contains "$out" '"severity":"FAIL","code":"unknown_marker"' "reserved JPEG marker carries FAIL severity"
 	else
 		[ "$rc" -eq 1 ] && pass "zero JPEG marker byte exits corrupt" || fail "zero JPEG marker byte exits corrupt" "rc=$rc"
 		assert_contains "$out" '"verdict":"corrupt"' "zero marker byte outside entropy is malformed"
@@ -367,17 +370,29 @@ capture bash -c '{ head -c 4 "$2"; printf "\xff\xff"; tail -c +7 "$2"; } | "$1" 
 assert_contains "$out" '"offset":null,"host_offset":null,"offset_is_exact":false' "declared extents do not invent input byte locations"
 assert_contains "$out" 'position 65539 beyond input length' "declared segment extent is retained as diagnostic evidence"
 
-# Legal marker fill is an ordinary warning, with the valid/exit-0 outcome.
-ordinary_warning="$TMPDIR/jpegz-cli-fill-$$.jpg"
+# Legal marker fill (T.81 B.1.1.2) is an INFO observation with the valid/exit-0
+# outcome; a future JFIF version is the ordinary-warning control.
+legal_fill="$TMPDIR/jpegz-cli-fill-$$.jpg"
 {
 	printf '\xff\xd8\xff'
 	tail -c +3 "$fixtures/baseline_2x2_rgb.jpg"
+} > "$legal_fill"
+out=; err=; rc=
+capture "$jpegz_cli" --json "$legal_fill"
+[ "$rc" -eq 0 ] && pass "legal marker fill exits 0" || fail "legal marker fill exits 0" "rc=$rc"
+assert_contains "$out" '"verdict":"valid"' "legal marker fill remains valid"
+assert_contains "$out" '"severity":"INFO","code":"entropy_fill_bytes"' "legal marker fill is an INFO observation"
+ordinary_warning="$TMPDIR/jpegz-cli-warn-$$.jpg"
+{
+	head -c 11 "$fixtures/baseline_2x2_rgb.jpg"
+	printf '\002'
+	tail -c +13 "$fixtures/baseline_2x2_rgb.jpg"
 } > "$ordinary_warning"
 out=; err=; rc=
 capture "$jpegz_cli" --json "$ordinary_warning"
 [ "$rc" -eq 0 ] && pass "ordinary warning exits 0" || fail "ordinary warning exits 0" "rc=$rc"
 assert_contains "$out" '"verdict":"valid"' "ordinary warning remains valid"
-assert_contains "$out" '"severity":"WARN","code":"entropy_fill_bytes"' "ordinary warning control actually warns"
+assert_contains "$out" '"severity":"WARN","code":"jfif_version_unchecked"' "ordinary warning control actually warns"
 
 # Exhaust pairs in both orders. This table is the declared batch policy;
 # numeric exit values are identifiers, not an ordering of precedence.
@@ -408,7 +423,7 @@ capture "$jpegz_cli" --json "$fixtures/jxl_delta_palette_valid.jxl"
 assert_contains "$out" '"verdict":"valid"' "JSON exposes the verdict"
 assert_contains "$out" '"format":"jpeg_xl"' "JSON names the format that answered"
 
-rm -f "$smashed" "$foreign" "$ordinary_warning" 2>/dev/null
+rm -f "$smashed" "$foreign" "$ordinary_warning" "$legal_fill" 2>/dev/null
 
 # ── 10b. Locale selection (i18n prepare phase) ───────────────────────
 #

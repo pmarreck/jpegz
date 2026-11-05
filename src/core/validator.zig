@@ -103,6 +103,21 @@ fn addExactFinding(report: *ValidationReport, allocator: Allocator, code: Findin
 	report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
 }
 
+/// Validation class of a codec finding, assigned when the report takes it from
+/// the decoder (validate TERMINOLOGY A2 as rewritten 2026-11-05; approved rows
+/// in docs/plan_context/severity-audit-2026-11-05.md). The decoder still
+/// reports what it recovered from at its own severity; only the class in the
+/// report changes, so detection and decoder control flow are untouched.
+fn reportSeverity(code: FindingCode, emitted: Severity) Severity {
+	return switch (code) {
+		// Recovered damage: readers fill or resync, which hides the loss.
+		.insufficient_data, .restart_marker_missing, .restart_marker_unexpected => .fail,
+		// T.81 B.1.1.2 permits 0xFF fill before any marker: an observation.
+		.entropy_fill_bytes => .info,
+		else => emitted,
+	};
+}
+
 fn checkSequentialScanField(report: *ValidationReport, allocator: Allocator, offset: usize,
 	name: []const u8, observed: u8, required: u8) Allocator.Error!void
 {
@@ -149,6 +164,13 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     var sof_comp_ids = [_]bool{false} ** 256;
     var sof_component_count: u8 = 0;
     var sos_count: u32 = 0; // number of SOS (scan) markers seen
+	// T.81 Annex J: a DHP before the first frame makes the stream hierarchical,
+	// where several frames are legal and later ones are differential.
+	var hierarchical = false;
+	var frame_differential = false;
+	// FAIL findings that do not stop the codec check or the EOI check. They
+	// were WARN before 2026-11-05; reclassifying them must not drop findings.
+	var nonblocking_fails: usize = 0;
 
     // ── Step 2: Walk markers ──────────────────────────────────
     while (pos < data.len) {
@@ -178,12 +200,15 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 		}
 		// Reserved semantics cannot be established by decoding around them.
 		if (marker_byte >= 0x02 and marker_byte <= 0xbf) {
+			// FAIL class (validate, 2026-11-05): no specified decode, damage
+			// produces it and no writer is known.
 			const detail = try std.fmt.allocPrint(allocator,
 				"reserved JPEG marker FF{X:0>2}; marker semantics are not checked", .{marker_byte});
 			defer allocator.free(detail);
-			try addFinding(&report, allocator, .warn, .unknown_marker, marker_offset + 1, detail);
-			report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
+			try addExactFinding(&report, allocator, .unknown_marker, marker_offset + 1, detail);
+			nonblocking_fails += 1;
 		}
+		if (marker_byte == 0xde and !seen_sof) hierarchical = true;
 
         // ── Standalone markers (no length) ─────────────────────
         if (isStandaloneMarker(marker_byte)) {
@@ -253,8 +278,10 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 				if (body.len >= jfif_header_bytes and std.mem.eql(u8, body[0..5], "JFIF\x00") and
 					(body[5] > 1 or (body[5] == 1 and body[6] > 2)))
 				{
+					// WARN class (validate, 2026-11-05): a deviation with no
+					// proven violation; JFIF 1.02 is the latest version.
 					const detail = try std.fmt.allocPrint(allocator,
-						"JFIF version {d}.{d:0>2}: metadata semantics are unchecked", .{ body[5], body[6] });
+						"JFIF version {d}.{d:0>2}: not in the claimed spec version (latest is 1.02); metadata semantics are unchecked", .{ body[5], body[6] });
 					defer allocator.free(detail);
 					try addFinding(&report, allocator, .warn, .jfif_version_unchecked,
 						seg_body_start + (if (body[5] > 1) @as(usize, 5) else 6), detail);
@@ -320,10 +347,17 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 
         // ── SOF: identify variant and record dimensions ───────
         if (classifyVariant(marker_byte)) |variant| {
-            if (seen_sof) {
-                try addFinding(&report, allocator, .warn, .duplicate_sof, marker_offset,
-                    "more than one SOF marker (using first)");
-            } else {
+			frame_differential = switch (marker_byte) {
+				0xc5, 0xc6, 0xc7, 0xcd, 0xce, 0xcf => true,
+				else => false,
+			};
+            if (seen_sof and !hierarchical) {
+				// FAIL class (validate, 2026-11-05): libjpeg refuses two SOF
+				// markers and damage produces them.
+                try addFinding(&report, allocator, .fail, .duplicate_sof, marker_offset,
+                    "more than one SOF marker outside a hierarchical (DHP) stream (using first)");
+				nonblocking_fails += 1;
+            } else if (!seen_sof) {
                 report.variant = variant;
                 sof_offset = marker_offset;
                 seen_sof = true;
@@ -485,10 +519,13 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                             // Ah must be 0 (lossless has no successive
                             // approximation — the byte carries only the point
                             // transform in Al).
-                            if (ss < 1 or ss > 7)
+                            // Table H.1: selection value 0 ("no prediction") is
+                            // only for differential coding in hierarchical mode.
+                            if (if (frame_differential) ss > 7 else ss < 1 or ss > 7)
                                 try addFinding(&report, allocator, .fail,
                                     .lossless_predictor_invalid, spec_off,
-                                    "lossless predictor (Ss) must be 1..7");
+                                    if (frame_differential) "differential lossless predictor (Ss) must be 0..7"
+                                    else "lossless predictor (Ss) must be 1..7");
                             if (ah != 0)
                                 try addFinding(&report, allocator, .fail,
                                     .lossless_pointtransform_invalid, spec_off + 2,
@@ -528,7 +565,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         try addFinding(&report, allocator, .fail, .truncated_stream, null,
             "no SOS marker found before stream end");
     }
-    if (!seen_eoi and report.overall != .fail) {
+    if (!seen_eoi and !blockingFail(&report, nonblocking_fails)) {
         try addFinding(&report, allocator, .warn, .missing_eoi, data.len,
             "stream lacks EOI marker (0xFF 0xD9)");
     }
@@ -569,7 +606,13 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     //     (the cleanroom would just rediscover it; saves cycles).
     //   - The variant is JPEG 2000 (separate `jpegz.jpeg2000`
     //     entry point with its own validation path).
-    if (report.overall != .fail and shouldRunCodecCheck(report.variant)) {
+    if (hierarchical and !blockingFail(&report, nonblocking_fails)) {
+		// The cleanroom decoders do not implement Annex J. Say so, as for any
+		// other unchecked variant, rather than decode only the first frame.
+		report.codec_check = .unsupported;
+		try addFinding(&report, allocator, .info, .unknown_marker, null,
+			"hierarchical (DHP) process beyond cleanroom scope — codec integrity not checked");
+	} else if (!blockingFail(&report, nonblocking_fails) and shouldRunCodecCheck(report.variant)) {
         var sink = types.FindingsSink.init(allocator);
         defer sink.deinit();
 
@@ -579,7 +622,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         // insufficient_data, etc.). Same severity/code/offset/detail
         // shape used by the marker walker, so the report is uniform.
         for (sink.items()) |f| {
-            try addFinding(&report, allocator, f.severity, f.code, f.offset, f.detail);
+            try addFinding(&report, allocator, reportSeverity(f.code, f.severity), f.code, f.offset, f.detail);
             report.findings.items[report.findings.items.len - 1].offset_is_exact = f.offset_is_exact;
         }
 
@@ -610,6 +653,16 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     }
 
     return report;
+}
+
+/// True when a FAIL finding other than the reclassified non-blocking ones is
+/// present: the codec check would only rediscover a structural fault.
+fn blockingFail(report: *const ValidationReport, nonblocking_fails: usize) bool {
+	var fails: usize = 0;
+	for (report.findings.items) |finding| {
+		if (finding.severity == .fail) fails += 1;
+	}
+	return fails > nonblocking_fails;
 }
 
 fn checkCodec(allocator: Allocator, data: []const u8, variant: Variant, sink: *types.FindingsSink) errors.DecodeError!void {

@@ -509,9 +509,10 @@ test {
 /// Classify one finding from the legacy `validate` report the way
 /// `validateAny` classifies the classic T.81 / T.87 leg. Any FAIL is corrupt.
 /// Recovered entropy truncation and restart faults are corrupt at every
-/// severity; all-zero entropy padding is a recognized encoder defect; an
-/// unrecognized marker, an unchecked future JFIF version and the facade
-/// meta-findings leave the file inconclusive. Everything else is valid.
+/// severity; all-zero entropy padding is a recognized encoder defect; a
+/// non-FAIL unknown marker (an unchecked codec variant) and the facade
+/// meta-findings leave the file inconclusive. Everything else, including the
+/// WARN-class future JFIF version, is valid.
 ///
 /// Consumers that emit per-finding verdicts should call this instead of
 /// copying the table. The switch is exhaustive, so appending a
@@ -523,8 +524,8 @@ pub fn classicFindingVerdict(code: FindingCode, severity: Severity) StrictVerdic
 	return switch (code) {
 		.missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => .corrupt,
 		.entropy_padding_zero_bits => .known_defect,
-		.unknown_marker, .jfif_version_unchecked, .unrecognized_container, .jxl_validator_unavailable => .indeterminate,
-		.missing_soi, .truncated_stream, .bad_marker_length, .duplicate_sof, .extraneous_bytes_before_marker,
+		.unknown_marker, .unrecognized_container, .jxl_validator_unavailable => .indeterminate,
+		.jfif_version_unchecked, .missing_soi, .truncated_stream, .bad_marker_length, .duplicate_sof, .extraneous_bytes_before_marker,
 		.entropy_fill_bytes, .invalid_sof_precision, .huffman_table_corrupt, .quantization_table_corrupt,
 		.arithmetic_table_corrupt, .sof_component_count_invalid, .sos_component_mismatch,
 		.dct_coefficient_overflow, .progressive_scan_invalid, .adobe_app14_conflicts_jfif, .invalid_dimensions,
@@ -551,28 +552,22 @@ pub fn classicFindingVerdict(code: FindingCode, severity: Severity) StrictVerdic
 /// Translate the severity-rated T.81 / T.87 report into the family-wide
 /// classified result, so a caller reading `validateAny` never has to know which
 /// leg answered. Each finding is classified by `classicFindingVerdict`. Corrupt
-/// wins; an unchecked JFIF version makes even an unsupported result
-/// inconclusive; other inconclusive findings and known defects only replace
-/// an otherwise valid result.
+/// wins; inconclusive findings and known defects only replace an otherwise
+/// valid result.
 fn classifyClassicFindings(initial: StrictVerdict, findings: []const Finding) StrictVerdict {
 	var verdict = initial;
 	var known_defect = false;
 	var unchecked_marker = false;
-	var unchecked_version = false;
 	for (findings) |finding| {
 		switch (classicFindingVerdict(finding.code, finding.severity)) {
 			.corrupt => verdict = .corrupt,
 			.known_defect => known_defect = true,
-			.indeterminate => if (finding.code == .jfif_version_unchecked) {
-				unchecked_version = true;
-			} else {
-				unchecked_marker = true;
-			},
+			.indeterminate => unchecked_marker = true,
 			.valid, .unsupported => {},
 		}
 	}
 	if (verdict == .corrupt) return .corrupt;
-	if (unchecked_version or (unchecked_marker and verdict == .valid)) return .indeterminate;
+	if (unchecked_marker and verdict == .valid) return .indeterminate;
 	if (known_defect and verdict == .valid) return .known_defect;
 	return verdict;
 }
@@ -1038,7 +1033,9 @@ test "version is non-empty" {
 test "classic per-finding verdict covers every code and severity" {
 	// Independent literal expectation: the only non-valid codes below FAIL.
 	const corrupt_codes = [_]FindingCode{ .missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected };
-	const indeterminate_codes = [_]FindingCode{ .unknown_marker, .jfif_version_unchecked, .unrecognized_container, .jxl_validator_unavailable };
+	// A future JFIF version is a WARN-class deviation (validate, 2026-11-05),
+	// so it no longer leaves the file inconclusive.
+	const indeterminate_codes = [_]FindingCode{ .unknown_marker, .unrecognized_container, .jxl_validator_unavailable };
 	const severities = [_]Severity{ .pass, .info, .warn, .fail };
 	inline for (@typeInfo(FindingCode).@"enum".fields) |field| {
 		const code: FindingCode = @enumFromInt(field.value);
@@ -1069,8 +1066,9 @@ test "classic per-finding verdict covers every code and severity" {
 test "classic finding precedence is independent of finding order" {
 	const Case = struct { initial: StrictVerdict, other: FindingCode, severity: Severity, expected: StrictVerdict };
 	const cases = [_]Case{
-		.{ .initial = .valid, .other = .entropy_padding_zero_bits, .severity = .warn, .expected = .indeterminate },
-		.{ .initial = .unsupported, .other = .entropy_padding_zero_bits, .severity = .warn, .expected = .indeterminate },
+		.{ .initial = .valid, .other = .entropy_padding_zero_bits, .severity = .warn, .expected = .known_defect },
+		.{ .initial = .unsupported, .other = .entropy_padding_zero_bits, .severity = .warn, .expected = .unsupported },
+		.{ .initial = .valid, .other = .adobe_app14_conflicts_jfif, .severity = .warn, .expected = .valid },
 		.{ .initial = .valid, .other = .insufficient_data, .severity = .warn, .expected = .corrupt },
 		.{ .initial = .corrupt, .other = .quantization_table_corrupt, .severity = .fail, .expected = .corrupt },
 	};

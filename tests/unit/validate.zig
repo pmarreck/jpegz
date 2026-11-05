@@ -337,7 +337,8 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 		}
 		var report = try jpegz.validate(allocator, data);
 		defer report.deinit(allocator);
-		try std.testing.expectEqual(case.valid or case.insufficient_count > 0, report.isValid());
+		// Recovered truncation is FAIL class in the report (validate, 2026-11-05).
+		try std.testing.expectEqual(case.valid, report.isValid());
 		const dc_start = header.len + dri.len + case.table.len + 10;
 		const mixed_start = switch (case.mixed_pad_scan) {
 			.dc => dc_start,
@@ -514,9 +515,13 @@ test "entropy padding is classified by its bits for every pad width" {
 			.{ .pad = 1, .code = if (case.pad_bits > 1) .entropy_padding_not_ones else null },
 		};
 		for (variants) |variant| {
-			const data = try std.mem.concat(allocator, u8, &.{ &header, case.entropy, &.{ 0xff, 0xd9 } });
+			// B.1.1.5: an entropy byte that becomes 0xFF is followed by a stuffed
+			// 0x00. Without it the byte reads as marker fill and the scan really
+			// is short, which the decoder reports as insufficient data.
+			const last = case.entropy[case.entropy.len - 1] | variant.pad;
+			const stuffing: []const u8 = if (last == 0xff) &.{0x00} else &.{};
+			const data = try std.mem.concat(allocator, u8, &.{ &header, case.entropy[0 .. case.entropy.len - 1], &.{last}, stuffing, &.{ 0xff, 0xd9 } });
 			defer allocator.free(data);
-			data[pad_offset] |= variant.pad;
 			var report = try jpegz.validate(allocator, data);
 			defer report.deinit(allocator);
 			const code = variant.code orelse {
@@ -602,8 +607,8 @@ test "sequential entropy bounds classify legal endings and malformed runs" {
 		.{ .entropy = &.{ 0x0f, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
 		.{ .entropy = &.{ 0x0f, 0xff, 0x00, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .corrupt },
 		.{ .entropy = &.{ 0x0f, 0xff, 0xff, 0xd0, 0x0f }, .width = 16, .restart = 1, .verdict = .valid },
-		.{ .entropy = &.{0x0f}, .width = 16, .verdict = .corrupt, .legacy_valid = true }, // Missing second MCU.
-		.{ .entropy = &.{0x00}, .width = 17, .verdict = .corrupt, .legacy_valid = true }, // Missing partial-edge MCU.
+		.{ .entropy = &.{0x0f}, .width = 16, .verdict = .corrupt }, // Missing second MCU: recovered, FAIL class.
+		.{ .entropy = &.{0x00}, .width = 17, .verdict = .corrupt }, // Missing partial-edge MCU: recovered, FAIL class.
 	};
 	const allocator = std.testing.allocator;
 	for (cases) |case| {
@@ -935,10 +940,10 @@ test "validate surfaces trailing-data-after-EOI as INFO" {
     try std.testing.expect(offset_seen != null);
 }
 
-test "validate surfaces libjpeg-style insufficient_data tolerance as Finding(warn)" {
-    // Architecture decision (NEXT_STEPS.md §"Validation-strictness"):
-    // when the decoder tolerates a spec deviation that libjpeg-turbo
-    // would WARNMS about, validate(...) must surface a Finding(.warn).
+test "validate reports libjpeg-style insufficient_data recovery as FAIL class" {
+    // The decoder still tolerates the truncation libjpeg-turbo would WARNMS
+    // about, but under validate's 2026-11-05 rule recovered damage is FAIL
+    // class: readers fill the missing blocks gray and hide the loss.
     //
     // Setup: take a clean baseline JPEG, truncate bytes from the END
     // of its entropy stream, then re-attach the FFD9 EOI marker.
@@ -964,16 +969,12 @@ test "validate surfaces libjpeg-style insufficient_data tolerance as Finding(war
     var report = try jpegz.validate(allocator, corrupted);
     defer report.deinit(allocator);
 
-    // Must surface at least one .warn finding tagged insufficient_data.
-    var found_warn = false;
+    var found = false;
     for (report.findings.items) |f| {
-        if (f.severity == .warn and f.code == .insufficient_data) {
-            found_warn = true;
-        }
+        if (f.severity == .fail and f.code == .insufficient_data) found = true;
     }
-    try std.testing.expect(found_warn);
-    // Overall must not regress to .fail — libjpeg recovers, so should we.
-    try std.testing.expect(report.overall != .fail);
+    try std.testing.expect(found);
+    try std.testing.expectEqual(jpegz.Severity.fail, report.overall);
 }
 
 test "validate non-JPEG bytes → FAIL, missing_soi finding" {
