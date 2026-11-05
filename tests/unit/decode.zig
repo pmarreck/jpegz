@@ -2427,6 +2427,7 @@ test "frameHeader reports fixture geometry and sampling factors" {
 		try std.testing.expectEqual(@as(u8, 0xFF), fixture.data[header.sof_offset]);
 		try std.testing.expectEqual(@as(u8, 0xC0) + fixture.sof_type, fixture.data[header.sof_offset + 1]);
 		try std.testing.expectEqual(fixture.sof_type, header.sof_type);
+		try std.testing.expectEqual(@as(?usize, null), header.dhp_offset);
 		try std.testing.expectEqual(jpegz.frameKind(fixture.sof_type).?, header.kind);
 		try std.testing.expectEqual(fixture.width, header.width);
 		try std.testing.expectEqual(fixture.height, header.height);
@@ -2442,6 +2443,27 @@ test "frameHeader reports fixture geometry and sampling factors" {
 		try std.testing.expectEqual(@as(u32, header.width), image.width);
 		try std.testing.expectEqual(@as(u32, header.height), image.height);
 	}
+}
+
+test "frameHeader reports a DHP inserted before a real lossless frame" {
+	// Splice a DHP segment (B.3.2, Tq = 0) mirroring the frame just before
+	// the SOF3 of a real lossless stream; the frame fields must not change.
+	const original = @embedFile("fixtures/lossless_4x4_gray8.jpg");
+	const plain = try jpegz.frameHeader(original);
+	const sof = plain.sof_offset;
+	const dhp = [_]u8{ 0xFF, 0xDE, 0x00, 0x0B, 0x08, 0x00, 0x04, 0x00, 0x04, 0x01, 0x01, 0x11, 0x00 };
+	var spliced: [original.len + dhp.len]u8 = undefined;
+	@memcpy(spliced[0..sof], original[0..sof]);
+	@memcpy(spliced[sof..][0..dhp.len], &dhp);
+	@memcpy(spliced[sof + dhp.len ..], original[sof..]);
+	const header = try jpegz.frameHeader(&spliced);
+	try std.testing.expectEqual(@as(?usize, sof), header.dhp_offset);
+	try std.testing.expectEqual(sof + dhp.len, header.sof_offset);
+	try std.testing.expectEqual(@as(u4, 3), header.sof_type);
+	try std.testing.expectEqual(plain.kind, header.kind);
+	try std.testing.expectEqual(plain.width, header.width);
+	try std.testing.expectEqual(plain.height, header.height);
+	try std.testing.expectEqualSlices(jpegz.FrameComponent, plain.components(), header.components());
 }
 
 test "frameHeader rejects non-frame family inputs without decoding" {

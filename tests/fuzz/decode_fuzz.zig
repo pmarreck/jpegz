@@ -1,8 +1,8 @@
 //! Fuzz target: `jpegz.decode` must never panic, hang, or leak on
 //! arbitrary byte input — it can only return a valid `Image` or a
 //! `DecodeError`. The same inputs exercise `jpegz.frameHeader`, whose
-//! result must describe a SOFn inside the input and agree with any
-//! decoded dimensions. Caught by mutation: the SOF9 Q-coder infinite-loop
+//! result must describe a SOFn inside the input, place any reported DHP
+//! before it, and agree with any decoded dimensions. Caught by mutation: the SOF9 Q-coder infinite-loop
 //! bug that shipped past B1 checkpoint 1 would have been caught here.
 //!
 //! Two modes:
@@ -101,6 +101,12 @@ fn fuzzDecode(ctx: Ctx, smith: *std.testing.Smith) !void {
         const frame_length = (@as(usize, input[h.sof_offset + 2]) << 8) | input[h.sof_offset + 3];
         try std.testing.expectEqual(8 + 3 * @as(usize, h.component_count), frame_length);
         try std.testing.expect(h.sof_offset + 2 + frame_length <= input.len);
+        // A reported DHP is a 0xFFDE marker that precedes the frame.
+        if (h.dhp_offset) |d| {
+            try std.testing.expect(d + 4 <= h.sof_offset);
+            try std.testing.expectEqual(@as(u8, 0xFF), input[d]);
+            try std.testing.expectEqual(@as(u8, 0xDE), input[d + 1]);
+        }
     }
 
     // The contract: decode must either succeed (return a valid Image

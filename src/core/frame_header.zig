@@ -9,6 +9,11 @@
 //! JPEG-in-TIFF (TIFF Technical Note 2) keeps the frame header in each
 //! strip or tile; a JPEGTables stream holds only tables, so this function
 //! reports `error.NoFrameHeader` for it rather than needing it as input.
+//!
+//! A hierarchical stream (T.81 Annex J) carries a DHP segment before its
+//! first frame, and that frame can be a non-differential SOF0..3. The walk
+//! records the first DHP it passes in `dhp_offset` so a caller can tell a
+//! hierarchical stream from a plain one without walking the markers again.
 
 const std = @import("std");
 
@@ -68,6 +73,11 @@ pub const FrameComponent = struct {
 pub const FrameHeader = struct {
 	/// Byte offset of the 0xFF that begins the SOFn marker (after any fill bytes).
 	sof_offset: usize,
+	/// Byte offset of the 0xFF that begins the first DHP marker (0xFFDE)
+	/// before the SOFn, after any fill bytes; null when none precedes it.
+	/// A DHP marks a hierarchical stream (T.81 Annex J, B.3.2). Its segment
+	/// is skipped by length like any other; validation judges its contents.
+	dhp_offset: ?usize,
 	/// The n of SOFn.
 	sof_type: u4,
 	kind: FrameKind,
@@ -107,6 +117,7 @@ pub fn frameHeader(data: []const u8) FrameHeaderError!FrameHeader {
 	}
 	if (data[0] != 0xFF or data[1] != 0xD8) return error.MissingSoi;
 	var pos: usize = 2;
+	var dhp_offset: ?usize = null;
 	while (true) {
 		if (pos >= data.len) return error.Truncated;
 		if (data[pos] != 0xFF) return error.InvalidMarkerStream;
@@ -122,9 +133,10 @@ pub fn frameHeader(data: []const u8) FrameHeaderError!FrameHeader {
 			0xD9, 0xDA => return error.NoFrameHeader,
 			0xF7 => return error.UnsupportedFrameType,
 			0xC0...0xC3, 0xC5...0xC7, 0xC9...0xCB, 0xCD...0xCF => {
-				return parseFrame(data, marker_offset, @intCast(code - 0xC0));
+				return parseFrame(data, marker_offset, @intCast(code - 0xC0), dhp_offset);
 			},
 			else => {
+				if (code == 0xDE and dhp_offset == null) dhp_offset = marker_offset;
 				if (data.len - pos < 2) return error.Truncated;
 				const length = readU16(data, pos);
 				if (length < 2) return error.InvalidMarkerStream;
@@ -135,7 +147,7 @@ pub fn frameHeader(data: []const u8) FrameHeaderError!FrameHeader {
 	}
 }
 
-fn parseFrame(data: []const u8, marker_offset: usize, sof_type: u4) FrameHeaderError!FrameHeader {
+fn parseFrame(data: []const u8, marker_offset: usize, sof_type: u4, dhp_offset: ?usize) FrameHeaderError!FrameHeader {
 	const pos = marker_offset + 2;
 	if (data.len - pos < 2) return error.Truncated;
 	const length = readU16(data, pos);
@@ -145,6 +157,7 @@ fn parseFrame(data: []const u8, marker_offset: usize, sof_type: u4) FrameHeaderE
 	if (count == 0 or length != 8 + 3 * @as(usize, count)) return error.InvalidFrameHeader;
 	var header: FrameHeader = .{
 		.sof_offset = marker_offset,
+		.dhp_offset = dhp_offset,
 		.sof_type = sof_type,
 		.kind = frameKind(sof_type).?,
 		.precision = data[pos + 2],
@@ -237,6 +250,7 @@ test "frameHeader reports raw fields and the SOF marker offset" {
 		try testing.expectEqual(@as(usize, 8 + fill), header.sof_offset);
 		try testing.expectEqual(@as(u8, 0xFF), stream[header.sof_offset]);
 		try testing.expectEqual(@as(u8, 0xC0), stream[header.sof_offset + 1]);
+		try testing.expectEqual(@as(?usize, null), header.dhp_offset);
 		try testing.expectEqual(@as(u4, 0), header.sof_type);
 		try testing.expect(header.kind.baseline);
 		try testing.expectEqual(@as(u8, 8), header.precision);
@@ -334,4 +348,71 @@ test "frameHeader rejects a frame length that disagrees with its component count
 	frame[7] = 0; // Nf=0
 	try testing.expectError(error.InvalidFrameHeader, frameHeader(buildStream(&buffer, 0xC0, 0, &frame, &sos_tail)));
 	try testing.expectError(error.InvalidFrameHeader, frameHeader(buildStream(&buffer, 0xC0, 0, &[_]u8{ 0x00, 0x07, 0, 0, 0, 0, 0 }, &sos_tail)));
+}
+
+/// A DHP segment (B.3.2: frame-header syntax with Tq = 0) for 16x32, Nf=3.
+const dhp_segment = [_]u8{
+	0xFF, 0xDE, 0x00, 0x11, 0x08, 0x00, 0x10, 0x00, 0x20, 0x03,
+	0x01, 0x22, 0x00,
+	0x02, 0x11, 0x00,
+	0x03, 0x11, 0x00,
+};
+
+/// SOI, APP0 stub, `fill_dhp` fill bytes, then `dhps` DHP segments, each
+/// followed by `fill_sof` fill bytes, then marker `sof_code`, the frame and `tail`.
+fn buildHierarchical(buffer: []u8, sof_code: u8, fill_dhp: usize, dhps: usize, fill_sof: usize, tail: []const u8) []const u8 {
+	const prefix = [_]u8{ 0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0xAA, 0xBB };
+	var len: usize = 0;
+	@memcpy(buffer[len..][0..prefix.len], &prefix);
+	len += prefix.len;
+	@memset(buffer[len..][0..fill_dhp], 0xFF);
+	len += fill_dhp;
+	for (0..dhps) |_| {
+		@memcpy(buffer[len..][0..dhp_segment.len], &dhp_segment);
+		len += dhp_segment.len;
+		@memset(buffer[len..][0..fill_sof], 0xFF);
+		len += fill_sof;
+	}
+	buffer[len] = 0xFF;
+	buffer[len + 1] = sof_code;
+	len += 2;
+	@memcpy(buffer[len..][0..ycbcr_420_frame.len], &ycbcr_420_frame);
+	len += ycbcr_420_frame.len;
+	@memcpy(buffer[len..][0..tail.len], tail);
+	len += tail.len;
+	return buffer[0..len];
+}
+
+test "frameHeader reports a DHP that precedes the first frame" {
+	var buffer: [160]u8 = undefined;
+	for ([_]usize{ 0, 3 }) |fill_dhp| {
+		for ([_]usize{ 0, 2 }) |fill_sof| {
+			// A hierarchical stream whose first frame is lossless SOF3.
+			const stream = buildHierarchical(&buffer, 0xC3, fill_dhp, 1, fill_sof, &sos_tail);
+			const header = try frameHeader(stream);
+			const dhp = header.dhp_offset orelse return error.TestExpectedDhp;
+			try testing.expectEqual(@as(usize, 8 + fill_dhp), dhp);
+			try testing.expectEqual(@as(u8, 0xFF), stream[dhp]);
+			try testing.expectEqual(@as(u8, 0xDE), stream[dhp + 1]);
+			try testing.expectEqual(dhp + dhp_segment.len + fill_sof, header.sof_offset);
+			try testing.expectEqual(@as(u4, 3), header.sof_type);
+			try testing.expectEqual(FrameProcess.lossless, header.kind.process);
+			try testing.expect(!header.kind.differential);
+			try testing.expectEqual(@as(u16, 16), header.height);
+			try testing.expectEqual(@as(u16, 32), header.width);
+		}
+	}
+	// Without the DHP the same frame reports none.
+	const plain = buildHierarchical(&buffer, 0xC3, 0, 0, 0, &sos_tail);
+	const header = try frameHeader(plain);
+	try testing.expectEqual(@as(?usize, null), header.dhp_offset);
+	try testing.expectEqual(@as(usize, 8), header.sof_offset);
+	// A repeated DHP reports the first one.
+	const twice = buildHierarchical(&buffer, 0xC0, 1, 2, 1, &sos_tail);
+	try testing.expectEqual(@as(?usize, 9), (try frameHeader(twice)).dhp_offset);
+	// A DHP followed by EOI is still a stream without a frame header, and a
+	// cut inside the DHP segment is truncated input.
+	const dhp_only = buildHierarchical(&buffer, 0xD9, 0, 1, 0, &.{});
+	try testing.expectError(error.NoFrameHeader, frameHeader(dhp_only[0 .. 8 + dhp_segment.len + 2]));
+	for (8..8 + dhp_segment.len) |cut| try testing.expectError(error.Truncated, frameHeader(dhp_only[0..cut]));
 }

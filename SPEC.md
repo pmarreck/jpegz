@@ -96,7 +96,10 @@ above rather than taking the worst label.
 `frameHeader(data)` (Zig only) walks markers from SOI to the first T.81 SOFn
 without entropy decoding and returns the marker offset, SOFn number, precision,
 dimensions and each component's Ci, Hi, Vi and Tqi as stored, for up to 255
-components and with no allocation. It does not judge sampling factors, zero
+components and with no allocation. It also returns the offset of the first DHP
+marker before that frame, or null, so a hierarchical stream (T.81 Annex J)
+whose first frame is a non-differential SOF0..3 is distinguishable from a plain
+one; the DHP segment's contents are not judged. It does not judge sampling factors, zero
 height or selectors; `validate` reports those. Its errors separate a stream with
 no frame (`NoFrameHeader`, SOS or EOI first, as in TIFF JPEGTables) from
 missing SOI, truncation, a malformed marker sequence, an Lf/Nf mismatch and a
