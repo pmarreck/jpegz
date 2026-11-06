@@ -2470,3 +2470,60 @@ test "frameHeader rejects non-frame family inputs without decoding" {
 	try std.testing.expectError(error.UnsupportedFrameType, jpegz.frameHeader(@embedFile("fixtures/jpegls_4x4_gray8.jls")));
 	try std.testing.expectError(error.MissingSoi, jpegz.frameHeader(@embedFile("fixtures/jp2_8x8_rgb.jp2")));
 }
+
+test "two- and four-component lossless frames decode every sample exactly (DNG CFA layout)" {
+	// Fixtures from tools/gen-lossless-components.c (libjpeg-turbo encoder);
+	// sample (x, y, c) = (37x + 101y + 53c + 7xy) mod 2^P, so the samples
+	// themselves are the oracle. See LOSSLESS_COMPONENTS_PROVENANCE.md.
+	const Case = struct { bytes: []const u8, nc: u8, precision: u8, width: u32, height: u32 };
+	const cases = [_]Case{
+		.{ .bytes = @embedFile("fixtures/lossless_6x5_2comp_p8_pred1.jpg"), .nc = 2, .precision = 8, .width = 6, .height = 5 },
+		.{ .bytes = @embedFile("fixtures/lossless_8x6_2comp_p14_pred4.jpg"), .nc = 2, .precision = 14, .width = 8, .height = 6 },
+		.{ .bytes = @embedFile("fixtures/lossless_9x7_2comp_p16_pred6_dri9.jpg"), .nc = 2, .precision = 16, .width = 9, .height = 7 },
+		.{ .bytes = @embedFile("fixtures/lossless_5x4_4comp_p12_pred7.jpg"), .nc = 4, .precision = 12, .width = 5, .height = 4 },
+	};
+	for (cases) |case| {
+		var image = try jpegz.decode(std.testing.allocator, case.bytes);
+		defer image.deinit(std.testing.allocator);
+		try std.testing.expectEqual(case.width, image.width);
+		try std.testing.expectEqual(case.height, image.height);
+		try std.testing.expectEqual(case.nc, image.channels);
+		try std.testing.expectEqual(case.precision, image.bits_per_sample);
+		try std.testing.expectEqual(jpegz.PixelLayout.components, image.layout);
+		const mask = (@as(u32, 1) << @intCast(case.precision)) - 1;
+		var y: u32 = 0;
+		while (y < case.height) : (y += 1) {
+			var x: u32 = 0;
+			while (x < case.width) : (x += 1) {
+				var c: u32 = 0;
+				while (c < case.nc) : (c += 1) {
+					const want = (37 * x + 101 * y + 53 * c + 7 * x * y) & mask;
+					const index = (y * case.width + x) * case.nc + c;
+					const got: u32 = if (case.precision <= 8) image.pixels[index] else image.pixelsU16()[index];
+					if (got != want) {
+						std.debug.print("P{d} Nf={d} ({d},{d},{d}): got {d}, want {d}\n", .{ case.precision, case.nc, x, y, c, got, want });
+						return error.TestUnexpectedResult;
+					}
+				}
+			}
+		}
+	}
+
+	// tiffz's minimal stream: 2x4, two components, one 1-bit code for
+	// difference 0, so every sample is the predictor's 2^(P-1) = 128.
+	const minimal = [_]u8{ 0xff, 0xd8, 0xff, 0xc3, 0x00, 0x0e, 0x08, 0x00, 0x04, 0x00, 0x02, 0x02, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00,
+		0xff, 0xc4, 0x00, 0x14, 0x00, 0x01 } ++ ([_]u8{0} ** 15) ++ [_]u8{ 0x00,
+		0xff, 0xda, 0x00, 0x0a, 0x02, 0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0xff, 0xd9 };
+	var tiny = try jpegz.decode(std.testing.allocator, &minimal);
+	defer tiny.deinit(std.testing.allocator);
+	try std.testing.expectEqual(@as(u8, 2), tiny.channels);
+	try std.testing.expectEqual(jpegz.PixelLayout.components, tiny.layout);
+	for (tiny.pixels) |sample| try std.testing.expectEqual(@as(u8, 128), sample);
+	try std.testing.expectEqual(@as(usize, 2 * 4 * 2), tiny.pixels.len);
+
+	// Control: subsampled components stay out of scope, not silently wrong.
+	var subsampled = @embedFile("fixtures/lossless_6x5_2comp_p8_pred1.jpg").*;
+	try std.testing.expectEqual(@as(u8, 0x11), subsampled[13]); // first component's Hi/Vi
+	subsampled[13] = 0x21;
+	try std.testing.expectError(error.NotImplemented, jpegz.decode(std.testing.allocator, &subsampled));
+}

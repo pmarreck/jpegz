@@ -325,7 +325,7 @@ pub fn decodeWithOptions(
 
     // Try lossless cleanroom (SOF3, T.81 §H — predictive coding).
     // Byte-perfect vs libjpeg-turbo across all 13 lossless fixtures:
-    // precision 8/12/14/16, 1- and 3-component, DRI > 0, all 7
+    // precision 8/12/14/16, 1- to 4-component, DRI > 0, all 7
     // predictors. Non-1×1 sampling factors return NotImplemented;
     // point transforms are supported.
     const lossless = @import("decode/lossless.zig");

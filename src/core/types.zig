@@ -24,6 +24,10 @@ pub const PixelLayout = enum(u8) {
     grayscale,
     rgb,
     cmyk,
+    /// Raw interleaved component samples with no color model: `channels`
+    /// samples per pixel, in frame component order. A lossless frame with two
+    /// or four components (a DNG CFA tile) decodes to this. Appended.
+    components,
 };
 
 pub const Image = struct {

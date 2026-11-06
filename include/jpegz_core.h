@@ -88,6 +88,10 @@ typedef enum {
     JPEGZ_LAYOUT_GRAYSCALE = 0,
     JPEGZ_LAYOUT_RGB       = 1,
     JPEGZ_LAYOUT_CMYK      = 2,
+    /* Raw interleaved component samples with no color model; `channels`
+     * samples per pixel, in frame component order (e.g. a two-component
+     * lossless DNG CFA tile). Appended. */
+    JPEGZ_LAYOUT_COMPONENTS = 3,
 } jpegz_pixel_layout_t;
 
 typedef enum {

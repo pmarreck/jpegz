@@ -11,7 +11,9 @@
 //! Coverage (2026-05-16 audit — 13 fixtures byte-perfect vs
 //! libjpeg-turbo wrapper):
 //!   - Precision 2..16 (gray8 / 12 / 14 / 16 fixtures all byte-exact).
-//!   - 1- and 3-component (RGB lossless byte-exact).
+//!   - 1- and 3-component (RGB lossless byte-exact), and 2- and 4-component
+//!     frames (DNG CFA tiles) as raw component samples, exact against
+//!     libjpeg-turbo-encoded formula samples.
 //!   - All 7 predictors (Ss = 1..7) — each tested independently.
 //!   - DRI / restart markers (lossless_16x16_gray_dri.jpg byte-exact).
 //!
@@ -164,8 +166,6 @@ pub fn decodeWithOptions(allocator: Allocator, data: []const u8, options: Decode
                 // u16 host-endian for P>8.
                 if (frame.?.precision < 2 or frame.?.precision > 16)
                     return error.NotImplemented;
-                if (frame.?.num_components != 1 and frame.?.num_components != 3)
-                    return error.NotImplemented;
                 seen_sof = true;
                 var i: usize = 0;
                 while (i < frame.?.num_components) : (i += 1) {
@@ -220,9 +220,19 @@ pub fn decodeWithOptions(allocator: Allocator, data: []const u8, options: Decode
         // For lossless, libjpeg-turbo does NO YCbCr→RGB conversion: the
         // raw component samples ARE the output. cjpeg with PPM input
         // writes R, G, B as-is. Mark as RGB for 3 components, grayscale
-        // for 1; consumers reading `image.layout` get the right shape.
-        .source_color_space = if (nc == 1) .grayscale else .rgb,
-        .layout = if (nc == 1) .grayscale else .rgb,
+        // for 1. Two or four components (a DNG CFA tile pairs one
+        // component per CFA color) carry no color model in SOF3, so they
+        // are raw `components`, never guessed as CMYK.
+        .source_color_space = switch (nc) {
+            1 => .grayscale,
+            3 => .rgb,
+            else => .unknown,
+        },
+        .layout = switch (nc) {
+            1 => .grayscale,
+            3 => .rgb,
+            else => .components,
+        },
     };
 }
 
