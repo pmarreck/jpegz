@@ -65,6 +65,42 @@ pub fn parseApp14ColorTransform(body: []const u8) ?ColorTransform {
     };
 }
 
+/// The color signals a marker walk collects before the first scan: a JFIF
+/// APP0 and the Adobe APP14 ColorTransform. Shared by the baseline,
+/// progressive and arithmetic decoders so they decide RGB passthrough alike.
+pub const ColorSignals = struct {
+	saw_jfif: bool = false,
+	app14: ColorTransform = .none,
+
+	/// Record `marker` when it is APP0 JFIF or APP14 Adobe. `pos` is the
+	/// segment's length field. Never advances the walk; malformed or short
+	/// segments are ignored here and left to the caller's length checks.
+	pub fn observe(self: *ColorSignals, marker: u8, data: []const u8, pos: usize) void {
+		if (marker != 0xE0 and marker != 0xEE) return;
+		if (pos + 2 > data.len) return;
+		const seg_len = (@as(usize, data[pos]) << 8) | data[pos + 1];
+		if (seg_len < 2 or pos + seg_len > data.len) return;
+		const body = data[pos + 2 .. pos + seg_len];
+		if (marker == 0xE0) {
+			if (body.len >= 5 and std.mem.eql(u8, body[0..5], "JFIF\x00")) self.saw_jfif = true;
+		} else if (parseApp14ColorTransform(body)) |ct| {
+			self.app14 = ct;
+		}
+	}
+};
+
+/// Whether a 3-component frame already holds R,G,B samples, following
+/// libjpeg-turbo's default_decompress_parms precedence at every precision:
+/// JFIF means YCbCr; else Adobe transform 0 means RGB and 1 or 2 YCbCr;
+/// else component IDs 'R','G','B' mean RGB; anything else is YCbCr.
+pub fn rgbPassthrough(channels: u8, signals: ColorSignals, ids: [3]u8) bool {
+	if (channels != 3) return false;
+	if (signals.saw_jfif) return false;
+	if (signals.app14 == .cmyk) return true;
+	if (signals.app14 != .none) return false;
+	return ids[0] == 'R' and ids[1] == 'G' and ids[2] == 'B';
+}
+
 /// Same integer fixed-point YCbCr→RGB constants `color.zig` uses
 /// (libjpeg-turbo's jdcolor.c ycc_rgb_convert). Centralized here so
 /// the YCCK conversion is byte-identical to the 3-comp path's

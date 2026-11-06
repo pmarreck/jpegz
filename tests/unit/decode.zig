@@ -2527,3 +2527,53 @@ test "two- and four-component lossless frames decode every sample exactly (DNG C
 	subsampled[13] = 0x21;
 	try std.testing.expectError(error.NotImplemented, jpegz.decode(std.testing.allocator, &subsampled));
 }
+
+test "RGB-signaled three-component frames pass through at 12-bit and in progressive scans" {
+	// cjpeg -rgb -quality 100 (libjpeg-turbo 3.2.1) writes Adobe transform 0
+	// and component IDs R,G,B; djpeg returns every source sample exactly, so
+	// the source formula is the oracle. tiffz bug report, 2026-11-06.
+	const Case = struct { name: []const u8, bytes: []const u8, precision: u8 };
+	const cases = [_]Case{
+		.{ .name = "baseline P12", .bytes = @embedFile("fixtures/rgb_8x8_p12_baseline.jpg"), .precision = 12 },
+		.{ .name = "progressive P12", .bytes = @embedFile("fixtures/rgb_8x8_p12_progressive.jpg"), .precision = 12 },
+		.{ .name = "progressive P8", .bytes = @embedFile("fixtures/rgb_8x8_p8_progressive.jpg"), .precision = 8 },
+		.{ .name = "arithmetic progressive P8", .bytes = @embedFile("fixtures/rgb_8x8_p8_arith_progressive.jpg"), .precision = 8 },
+		.{ .name = "baseline P8 control", .bytes = @embedFile("fixtures/rgb_8x8_p8_baseline.jpg"), .precision = 8 },
+	};
+	const allocator = std.testing.allocator;
+	const jfif = [_]u8{ 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0x02, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00 };
+	for (cases) |case| {
+		// APP14 Adobe is bytes 2..18 in every fixture.
+		try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xee, 0x00, 0x0e }, case.bytes[2..6]);
+		const ids_only = try std.mem.concat(allocator, u8, &.{ case.bytes[0..2], case.bytes[18..] });
+		defer allocator.free(ids_only);
+		const with_jfif = try std.mem.concat(allocator, u8, &.{ case.bytes[0..2], &jfif, case.bytes[18..] });
+		defer allocator.free(with_jfif);
+		const variants = [_]struct { label: []const u8, bytes: []const u8, rgb: bool }{
+			.{ .label = "Adobe transform 0", .bytes = case.bytes, .rgb = true },
+			.{ .label = "component IDs R,G,B only", .bytes = ids_only, .rgb = true },
+			.{ .label = "JFIF wins over the IDs", .bytes = with_jfif, .rgb = false },
+		};
+		for (variants) |variant| {
+			var image = try jpegz.decode(allocator, variant.bytes);
+			defer image.deinit(allocator);
+			try std.testing.expectEqual(@as(u8, 3), image.channels);
+			try std.testing.expectEqual(case.precision, image.bits_per_sample);
+			var mismatches: usize = 0;
+			for (0..8) |y| for (0..8) |x| for (0..3) |c| {
+				const want: u32 = if (case.precision > 8)
+					@intCast(256 * x + 128 * y + 512 * c + 100)
+				else
+					@intCast((16 * x + 8 * y + 32 * c + 10) % 256);
+				const index = (y * 8 + x) * 3 + c;
+				const got: u32 = if (case.precision > 8) image.pixelsU16()[index] else image.pixels[index];
+				if (got != want) mismatches += 1;
+			};
+			const want_space: jpegz.ColorSpace = if (variant.rgb) .rgb else .ycbcr;
+			if ((variant.rgb and mismatches != 0) or (!variant.rgb and mismatches == 0) or image.source_color_space != want_space) {
+				std.debug.print("{s}, {s}: {d} mismatched samples, color space {t}\n", .{ case.name, variant.label, mismatches, image.source_color_space });
+				return error.TestUnexpectedResult;
+			}
+		}
+	}
+}

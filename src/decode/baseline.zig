@@ -1063,17 +1063,13 @@ fn decodeScanT(
     //                                          anything else (incl. 1,2,3) YCbCr
     // The original gap-D fix only covered case 2 (Adobe transform=0). A
     // JPEGTables-spliced TIFF strip (Mode 2) carries neither JFIF nor Adobe
-    // and signals RGB purely through component IDs — case 3. 12-bit never
-    // hits this (always YCbCr in v1).
-    const rgb_passthrough: bool = if (comptime P <= 8) blk: {
-        if (channels != 3) break :blk false;
-        if (saw_jfif) break :blk false;
-        if (app14_color_transform == .cmyk) break :blk true;
-        if (app14_color_transform != .none) break :blk false;
-        break :blk frame.components[0].id == 'R' and
-            frame.components[1].id == 'G' and
-            frame.components[2].id == 'B';
-    } else false;
+    // and signals RGB purely through component IDs — case 3. The rule is
+    // the same at every precision: a 12-bit RGB frame (cjpeg -precision 12
+    // -rgb) passes through too, as in libjpeg-turbo.
+    const rgb_passthrough = cmyk_mod.rgbPassthrough(channels, .{
+        .saw_jfif = saw_jfif,
+        .app14 = app14_color_transform,
+    }, .{ frame.components[0].id, frame.components[1].id, frame.components[2].id });
     return assembleOutputT(P, allocator, frame, channels, width, height, max_h, max_v, plane_w_3, plane_h_3, &planes_3, pool_ptr, rgb_passthrough);
 }
 
@@ -1416,7 +1412,17 @@ pub fn assembleOutputT(
             const pixels_u16: []align(1) u16 = std.mem.bytesAsSlice(u16, pixels);
             var y: u32 = 0;
             while (y < height) : (y += 1) {
-                color.ycbcrRowToRgb12(canvas_planes[0], canvas_planes[1], canvas_planes[2], canvas_w, width, pixels_u16, y);
+                if (rgb_passthrough) {
+                    var x: u32 = 0;
+                    while (x < width) : (x += 1) {
+                        const o = (y * width + x) * 3;
+                        pixels_u16[o + 0] = canvas_planes[0][y * canvas_w + x];
+                        pixels_u16[o + 1] = canvas_planes[1][y * canvas_w + x];
+                        pixels_u16[o + 2] = canvas_planes[2][y * canvas_w + x];
+                    }
+                } else {
+                    color.ycbcrRowToRgb12(canvas_planes[0], canvas_planes[1], canvas_planes[2], canvas_w, width, pixels_u16, y);
+                }
             }
         }
     }

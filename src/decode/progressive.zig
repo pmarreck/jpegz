@@ -29,6 +29,7 @@ const bitstream = @import("bitstream.zig");
 const huffman = @import("huffman.zig");
 const idct = @import("idct.zig");
 const color = @import("color.zig");
+const cmyk_mod = @import("cmyk.zig");
 const findings_mod = @import("findings.zig");
 const jpeg_markers = @import("jpeg_markers.zig");
 
@@ -253,6 +254,8 @@ pub fn decodeWithOptions(
     var eob_run: u32 = 0;
     _ = &eob_run; // populated inside scan-decoders
     var restart_interval: u16 = 0;
+    // JFIF / Adobe APP14 seen before the frame decides RGB passthrough.
+    var color_signals: cmyk_mod.ColorSignals = .{};
 
     errdefer {
         var i: usize = 0;
@@ -295,6 +298,7 @@ pub fn decodeWithOptions(
         if (pos + 1 >= data.len) return error.TruncatedStream;
         const marker = data[pos + 1];
         pos += 2;
+        color_signals.observe(marker, data, pos);
 
         switch (marker) {
             0xD9 => { // EOI
@@ -390,14 +394,23 @@ pub fn decodeWithOptions(
 
     // ── Final pass: dequant + IDCT each block, emit pixels ────────
     // Dispatch on precision at comptime via the generic Phase 2.
+    const rgb_passthrough = frameRgbPassthrough(&frame.?, color_signals);
     return switch (frame.?.precision) {
-        8 => try assembleProgressiveGeneric(8, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, options.findings_sink),
-        12 => try assembleProgressiveGeneric(12, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, options.findings_sink),
+        8 => try assembleProgressiveGeneric(8, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, rgb_passthrough, options.findings_sink),
+        12 => try assembleProgressiveGeneric(12, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, rgb_passthrough, options.findings_sink),
         else => unreachable, // gated above
     };
 }
 
 pub const parseSegmentLength = @import("segment.zig").parseSegmentLength;
+
+pub const ColorSignals = cmyk_mod.ColorSignals;
+
+/// libjpeg-turbo's RGB precedence for this frame (see cmyk.rgbPassthrough).
+pub fn frameRgbPassthrough(frame: *const FrameInfo, signals: cmyk_mod.ColorSignals) bool {
+    if (frame.num_components != 3) return false;
+    return cmyk_mod.rgbPassthrough(3, signals, .{ frame.components[0].id, frame.components[1].id, frame.components[2].id });
+}
 
 // SOF / DQT / DHT parsing shared with baseline (see jpeg_markers.zig).
 pub const parseSof = jpeg_markers.parseSof;
@@ -1015,7 +1028,7 @@ fn assembleProgressive(
     max_h: u32,
     max_v: u32,
 ) Error!types.Image {
-    return assembleProgressiveGeneric(8, allocator, frame, quant_tables, coefs, blocks_w, blocks_h, max_h, max_v, null);
+    return assembleProgressiveGeneric(8, allocator, frame, quant_tables, coefs, blocks_w, blocks_h, max_h, max_v, false, null);
 }
 
 /// Phase 2 of progressive decode, generic over precision P ∈ {8, 12}.
@@ -1052,6 +1065,8 @@ pub fn assembleProgressiveGeneric(
     blocks_h: *const [3]u32,
     max_h: u32,
     max_v: u32,
+    /// The 3-component frame already holds R,G,B (cmyk.rgbPassthrough).
+    rgb_passthrough: bool,
     sink: ?*findings_mod.FindingsSink,
 ) Error!types.Image {
     const Sample = idct.Sample(P); // u8 for P=8, u16 for P=12.
@@ -1193,7 +1208,20 @@ pub fn assembleProgressiveGeneric(
             try upsample(allocator, planes[2], plane_w[2], plane_h[2], canvas_w, canvas_h, active_w2, active_h2, h_ratio_2, v_ratio_2);
         defer if (h_ratio_2 != 1 or v_ratio_2 != 1) allocator.free(@constCast(cr_canvas));
 
-        if (P == 8) {
+        if (rgb_passthrough) {
+            // Already R,G,B at canvas resolution: interleave, no transform.
+            const out: []align(1) Sample = std.mem.bytesAsSlice(Sample, pixels);
+            var y: u32 = 0;
+            while (y < height) : (y += 1) {
+                var x: u32 = 0;
+                while (x < width) : (x += 1) {
+                    const o = (y * width + x) * 3;
+                    out[o + 0] = planes[0][y * canvas_w + x];
+                    out[o + 1] = cb_canvas[y * canvas_w + x];
+                    out[o + 2] = cr_canvas[y * canvas_w + x];
+                }
+            }
+        } else if (P == 8) {
             var y: u32 = 0;
             while (y < height) : (y += 1) {
                 color.ycbcrRowToRgb(planes[0], cb_canvas, cr_canvas, canvas_w, width, pixels, y);
@@ -1216,7 +1244,7 @@ pub fn assembleProgressiveGeneric(
         .height = height,
         .channels = channels,
         .bits_per_sample = P,
-        .source_color_space = if (channels == 1) .grayscale else .ycbcr,
+        .source_color_space = if (channels == 1) .grayscale else if (rgb_passthrough) .rgb else .ycbcr,
         .layout = if (channels == 1) .grayscale else .rgb,
     };
 }

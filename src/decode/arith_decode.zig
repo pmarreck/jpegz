@@ -572,6 +572,7 @@ fn decodeArithProgressive(allocator: Allocator, data: []const u8) Error!types.Im
     var max_v: u32 = 1;
     var seen_sof = false;
     var saw_eoi = false;
+    var color_signals: progressive.ColorSignals = .{};
 
     // ScanState persists DAC overrides across scans; the per-scan
     // resets happen inside each SOS branch via `state.startScan(...)`.
@@ -588,6 +589,7 @@ fn decodeArithProgressive(allocator: Allocator, data: []const u8) Error!types.Im
         if (pos + 1 >= data.len) return error.TruncatedStream;
         const marker = data[pos + 1];
         pos += 2;
+        color_signals.observe(marker, data, pos);
 
         switch (marker) {
             0xD9 => { saw_eoi = true; break; },
@@ -672,7 +674,8 @@ fn decodeArithProgressive(allocator: Allocator, data: []const u8) Error!types.Im
     if (!seen_sof) return error.InvalidMarker;
     return switch (frame.?.precision) {
         8 => try progressive.assembleProgressiveGeneric(
-            8, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, null,
+            8, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v,
+            progressive.frameRgbPassthrough(&frame.?, color_signals), null,
         ),
         else => return error.NotImplemented, // 12-bit progressive arithmetic — corpus has none yet.
     };
