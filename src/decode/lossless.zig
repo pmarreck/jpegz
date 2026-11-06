@@ -377,6 +377,18 @@ fn zeroPadMarker(br: *bitstream.BitReader, err: anyerror, base: usize, sink: *fi
 		try sink.emitExact(.fail, .entropy_padding_not_ones, base + br.padByteOffset(),
 			"mixed Huffman pad bits before marker (T.81 F.1.2.3)");
 	}
+	if (err == error.InvalidEntropyBoundary) {
+		// Whole bytes after valid padding (libjpeg's "extraneous bytes
+		// before marker"): name them, as baseline does. Same code and class.
+		if (br.trailingBytesAfterPadding()) |trailing| {
+			var buf: [96]u8 = undefined;
+			const detail = std.fmt.bufPrint(&buf, "{d} whole {s} after valid padding before marker 0x{X:0>2}", .{
+				trailing.count, if (trailing.count == 1) "byte" else "bytes", trailing.marker,
+			}) catch unreachable;
+			try sink.emit(.fail, .huffman_table_corrupt, base + br.byte_pos, detail);
+			return error.BackendError;
+		}
+	}
 	if (err != error.PaddingZeroBits) return entropyError(br);
 	try sink.emitZeroPadding(base + br.padByteOffset(), br.padBitCount());
 	br.seekToMarker();

@@ -2300,3 +2300,41 @@ test "SOF1 accepts every component ID and all four Huffman destinations" {
 		}
 	}
 }
+
+test "lossless scans name whole bytes after valid padding instead of a generic decoder error" {
+	// tiffz observation 2026-11-06: one stray byte before EOI read as
+	// huffman_table_corrupt "BackendError". Same code and class as the
+	// baseline reason (f8a1e57); only the detail is narrower.
+	const allocator = std.testing.allocator;
+	const good = @embedFile("fixtures/lossless_4x4_gray8.jpg");
+	const body = good[0 .. good.len - 2];
+	const Case = struct { extra: []const u8, detail: []const u8 };
+	const cases = [_]Case{
+		.{ .extra = &.{0x00}, .detail = "1 whole byte after valid padding before marker 0xD9" },
+		.{ .extra = &.{ 0x00, 0x5a }, .detail = "2 whole bytes after valid padding before marker 0xD9" },
+		.{ .extra = &.{ 0xff, 0x00 }, .detail = "1 whole byte after valid padding before marker 0xD9" },
+	};
+	for (cases) |case| {
+		const data = try std.mem.concat(allocator, u8, &.{ body, case.extra, &.{ 0xff, 0xd9 } });
+		defer allocator.free(data);
+		var result = try jpegz.validate(allocator, data);
+		defer result.deinit(allocator);
+		try std.testing.expect(!result.isValid());
+		var named: usize = 0;
+		for (result.findings.items) |finding| {
+			if (finding.code != .huffman_table_corrupt) continue;
+			try std.testing.expectEqual(jpegz.Severity.fail, finding.severity);
+			const detail = finding.detail orelse return error.TestExpectedDetail;
+			if (!std.mem.eql(u8, detail, case.detail)) {
+				std.debug.print("extra {x}: got detail '{s}', want '{s}'\n", .{ case.extra, detail, case.detail });
+				return error.TestUnexpectedResult;
+			}
+			named += 1;
+		}
+		try std.testing.expectEqual(@as(usize, 1), named);
+	}
+	// Control: the unmodified file stays valid.
+	var clean = try jpegz.validate(allocator, good);
+	defer clean.deinit(allocator);
+	try std.testing.expect(clean.isValid());
+}
