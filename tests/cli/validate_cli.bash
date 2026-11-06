@@ -226,12 +226,13 @@ assert_rc 0 "later --no-json overrides earlier --json" -- \
 # Unknown switch is an error, not a silently-ignored no-op.
 out=; err=; rc=
 capture "$jpegz_cli" --definitely-not-a-real-flag "$fixtures/baseline_2x2_rgb.jpg"
-[ "$rc" -ne 0 ] && pass "unknown switch is rejected" || fail "unknown switch is rejected" "exited 0"
+[ "$rc" -eq 2 ] && pass "unknown switch is a usage error (2)" || fail "unknown switch is a usage error (2)" "rc=$rc"
+assert_rc 2 "no input is a usage error (2)" -- "$jpegz_cli"
 
 # Missing file is an error with a message on stderr.
 out=; err=; rc=
 capture "$jpegz_cli" "$TMPDIR/definitely-does-not-exist-$$.jpg"
-[ "$rc" -ne 0 ] && pass "missing file is rejected" || fail "missing file is rejected" "exited 0"
+[ "$rc" -eq 66 ] && pass "missing file exits 66 (EX_NOINPUT)" || fail "missing file exits 66 (EX_NOINPUT)" "rc=$rc"
 [ -n "$err" ] && pass "missing-file error goes to stderr" || fail "missing-file error goes to stderr" "stderr empty"
 
 # ── 9. Whole-family facade: JPEG XL, and honest four-way verdicts ────
@@ -283,7 +284,7 @@ printf '\211PNG\r\n\032\n' > "$foreign"
 out=; err=; rc=
 capture "$jpegz_cli" --simple "$foreign"
 assert_contains "$out" "indeterminate" "foreign bytes report indeterminate"
-[ "$rc" -eq 3 ] && pass "inconclusive input exits 3, distinct from corrupt" || fail "inconclusive input exits 3, distinct from corrupt" "rc=$rc"
+[ "$rc" -eq 5 ] && pass "inconclusive input exits 5, distinct from corrupt and WARN" || fail "inconclusive input exits 5, distinct from corrupt and WARN" "rc=$rc"
 
 # A damaged SOI ahead of an unmistakable marker chain is corruption, not foreign.
 capture bash -c '{ printf "\000\000"; tail -c +3 "$2"; } | "$1" --json -' _ "$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg"
@@ -324,7 +325,7 @@ for version in '01 03' '02 00' 'fe 01'; do
 	capture bash -c '{ head -c 11 "$2"; printf "%b" "\\x$3\\x$4"; tail -c +14 "$2"; } | "$1" --json -' _ \
 		"$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg" "$major" "$minor"
 	# validate, 2026-11-05: a WARN-class deviation with no proven violation.
-	[ "$rc" -eq 0 ] && pass "future JFIF $version exits 0 with a warning" || fail "future JFIF $version exits 0 with a warning" "rc=$rc"
+	[ "$rc" -eq 3 ] && pass "future JFIF $version exits 3 (WARN)" || fail "future JFIF $version exits 3 (WARN)" "rc=$rc"
 	assert_contains "$out" '"verdict":"valid"' "future JFIF $version is a deviation, not inconclusive"
 	assert_contains "$out" '"severity":"WARN","code":"jfif_version_unchecked"' "future JFIF $version has its typed cause"
 	if [ "$major" = 01 ]; then location=12; else location=11; fi
@@ -401,29 +402,46 @@ ordinary_warning="$TMPDIR/jpegz-cli-warn-$$.jpg"
 } > "$ordinary_warning"
 out=; err=; rc=
 capture "$jpegz_cli" --json "$ordinary_warning"
-[ "$rc" -eq 0 ] && pass "ordinary warning exits 0" || fail "ordinary warning exits 0" "rc=$rc"
+[ "$rc" -eq 3 ] && pass "ordinary warning exits 3 (WARN)" || fail "ordinary warning exits 3 (WARN)" "rc=$rc"
 assert_contains "$out" '"verdict":"valid"' "ordinary warning remains valid"
 assert_contains "$out" '"severity":"WARN","code":"jfif_version_unchecked"' "ordinary warning control actually warns"
 
-# Exhaust pairs in both orders. This table is the declared batch policy;
-# numeric exit values are identifiers, not an ordering of precedence. A known
-# defect outranks inconclusive (validate, 2026-11-05): inconclusive describes
-# the tool's reach, not the file.
-batch_inputs=("$fixtures/baseline_2x2_rgb.jpg" "$known_defect" "$foreign" "$trunc" "$TMPDIR/jpegz-cli-absent-$$")
-batch_labels=(valid known_defect inconclusive corrupt io_error)
+# Exhaust pairs in both orders. This table is the declared batch policy
+# (validate, 2026-11-06); numeric exit values are identifiers, not an ordering:
+# FAIL 1 > I/O 74 > permission 77 > missing 66 > known defect 4 >
+# inconclusive 5 > WARN 3 > OK 0.
+unreadable="$TMPDIR/jpegz-cli-unreadable-$$.jpg"
+cp "$fixtures/baseline_2x2_rgb.jpg" "$unreadable" && chmod 000 "$unreadable"
+directory_input="$TMPDIR/jpegz-cli-directory-$$"
+mkdir -p "$directory_input"
+batch_inputs=("$fixtures/baseline_2x2_rgb.jpg" "$ordinary_warning" "$known_defect" "$foreign" "$trunc"
+	"$TMPDIR/jpegz-cli-absent-$$" "$unreadable" "$directory_input")
+batch_labels=(valid warn known_defect inconclusive corrupt missing unreadable directory)
 batch_expected=(
-	0 4 3 1 2
-	4 4 4 1 2
-	3 4 3 1 2
-	1 1 1 1 2
-	2 2 2 2 2
+	0  3  4  5  1 66 77 74
+	3  3  4  5  1 66 77 74
+	4  4  4  4  1 66 77 74
+	5  5  4  5  1 66 77 74
+	1  1  1  1  1  1  1  1
+	66 66 66 66 1 66 77 74
+	77 77 77 77 1 77 77 74
+	74 74 74 74 1 74 74 74
 )
-for i in 0 1 2 3 4; do
-	for j in 0 1 2 3 4; do
-		assert_rc "${batch_expected[i * 5 + j]}" "batch ${batch_labels[i]} + ${batch_labels[j]}" -- \
+# Root can read a mode-000 file, so 77 cannot be produced; say so instead of
+# letting those cells pass or fail for the wrong reason.
+skip_unreadable=0
+if [ -r "$unreadable" ]; then
+	skip_unreadable=1
+	printf '  SKIP batch cases with an unreadable file: running with read access to mode 000\n'
+fi
+for i in 0 1 2 3 4 5 6 7; do
+	for j in 0 1 2 3 4 5 6 7; do
+		if [ "$skip_unreadable" -eq 1 ] && { [ "$i" -eq 6 ] || [ "$j" -eq 6 ]; }; then continue; fi
+		assert_rc "${batch_expected[i * 8 + j]}" "batch ${batch_labels[i]} + ${batch_labels[j]}" -- \
 			"$jpegz_cli" --quiet "${batch_inputs[i]}" "${batch_inputs[j]}"
 	done
 done
+chmod 600 "$unreadable"
 
 # A corrupt file must still outrank an inconclusive one in the exit code.
 out=; err=; rc=
@@ -436,7 +454,8 @@ capture "$jpegz_cli" --json "$fixtures/jxl_delta_palette_valid.jxl"
 assert_contains "$out" '"verdict":"valid"' "JSON exposes the verdict"
 assert_contains "$out" '"format":"jpeg_xl"' "JSON names the format that answered"
 
-rm -f "$smashed" "$foreign" "$ordinary_warning" "$legal_fill" 2>/dev/null
+rm -f "$smashed" "$foreign" "$ordinary_warning" "$legal_fill" "$unreadable" 2>/dev/null
+rmdir "$directory_input" 2>/dev/null
 
 # ── 10b. Locale selection (i18n prepare phase) ───────────────────────
 #

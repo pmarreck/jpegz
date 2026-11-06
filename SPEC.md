@@ -124,8 +124,16 @@ any FAIL still wins. Ordinary warnings remain distinct. Corruption retains prece
 a known defect outranks an unsupported or inconclusive check, which describes
 the tool's reach rather than the file (validate, 2026-11-05). Decoding still
 accepts the recognized padding defect. The CLI reports `known_defect` in
-text/JSON and exits 4. Batch exit precedence is I/O/usage (2), corrupt (1),
-known defect (4), inconclusive (3), then valid (0).
+text/JSON and exits 4.
+
+CLI exit codes follow validate's table where the meaning is shared
+(2026-11-06): 0 valid with no WARN, 1 corrupt, 2 usage only, 3 valid with a
+WARN deviation, 4 known defect, 5 inconclusive (unsupported, indeterminate or
+over the input limit; jpegz only), 66 no such file, 70 internal error, 71 out
+of memory, 74 read error, 77 permission denied or no access, 130 interrupted.
+Numbers are identifiers, not ranks. Batch precedence is 1, 71, 70, 74, 77, 66,
+4, 5, 3, then 0: damage first, then inputs jpegz could not check, and
+inconclusive above WARN so unverified bytes never look like a passing warning.
 
 JPEG XL findings keep validity, severity and completion separate. Nonzero
 padding and incomplete trailing box headers are corrupt with FAIL severity
@@ -161,7 +169,7 @@ Generic application payloads retain their independent interpretation.
 A complete recognized JFIF APP0 header declaring major greater than 1, or
 major 1/minor greater than 2, reports WARN 67 `jfif_version_unchecked`.
 It is a WARN-class deviation, typed "not in the claimed spec version" in its
-detail: the strict verdict stays valid (CLI exit 0) unless corruption,
+detail: the strict verdict stays valid (CLI exit 3, WARN) unless corruption,
 inconclusive checks or a known defect apply. The exact location names the major byte for a future major,
 otherwise the minor byte; detail retains the full observed version and the
 unchecked metadata semantics. Historical units rules do not apply to these

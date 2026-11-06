@@ -46,16 +46,48 @@
 
 #include "jpegz_core.h"
 
+/* Exit codes follow validate's table where the meaning is shared
+ * (validate TERMINOLOGY, 2026-11-06). Numbers are identifiers, not ranks;
+ * exit_rank() orders a batch. */
 #define EXIT_OK 0
-#define EXIT_INVALID 1
-#define EXIT_USAGE 2
-/* Nothing was found damaged, but at least one input could not be given a
- * clean bill of health either — an unsupported feature or an unrecognized
- * container. Distinct from 0 so a script does not read "I could not check
- * this" as "this is fine", and distinct from 1 so it is not reported to a
- * user as corruption. */
-#define EXIT_INCONCLUSIVE 3
+#define EXIT_INVALID 1       /* FAIL: likely damage */
+#define EXIT_USAGE 2         /* usage only */
+#define EXIT_WARN 3          /* valid, with at least one WARN deviation */
 #define EXIT_KNOWN_DEFECT 4
+/* Nothing was found damaged, but at least one input could not be given a
+ * clean bill of health either: an unsupported feature, an unrecognized
+ * container, or an input over jpegz's size limit. A claim about jpegz's
+ * reach, not about the file; jpegz only (validate has no such verdict). */
+#define EXIT_INCONCLUSIVE 5
+#define EXIT_NOINPUT 66      /* EX_NOINPUT: no such file */
+#define EXIT_SOFTWARE 70     /* EX_SOFTWARE: internal error */
+#define EXIT_OSERR 71        /* EX_OSERR: out of memory */
+#define EXIT_IOERR 74        /* EX_IOERR: a read failed */
+#define EXIT_NOPERM 77       /* EX_NOPERM: permission denied or no access */
+
+/* Batch precedence: FAIL > out of memory > internal > I/O > permission >
+ * missing > known defect > inconclusive > WARN > OK. Damage stays the
+ * strongest signal; an input we could not check outranks every verdict
+ * below FAIL; inconclusive outranks WARN so unverified bytes never look
+ * like a passing warning. */
+static int exit_rank(int code) {
+    switch (code) {
+    case EXIT_INVALID:      return 10;
+    case EXIT_OSERR:        return 9;
+    case EXIT_SOFTWARE:     return 8;
+    case EXIT_IOERR:        return 7;
+    case EXIT_NOPERM:       return 6;
+    case EXIT_NOINPUT:      return 5;
+    case EXIT_KNOWN_DEFECT: return 4;
+    case EXIT_INCONCLUSIVE: return 3;
+    case EXIT_WARN:         return 2;
+    default:                return 1;
+    }
+}
+
+static void raise_exit(int *exit_code, int candidate) {
+    if (exit_rank(candidate) > exit_rank(*exit_code)) *exit_code = candidate;
+}
 
 /* Largest input we will buffer. jpegz borrows the buffer for the call only,
  * so this bounds memory, not correctness. */
@@ -144,8 +176,9 @@ static bool is_stdin_path(const char *p) {
     return strcmp(p, "-") == 0 || strcmp(p, "@stdin") == 0;
 }
 
-/* Returns malloc'd buffer, or NULL with a message already on stderr. */
-static uint8_t *read_all(const char *path, size_t *out_len) {
+/* Returns malloc'd buffer, or NULL with a message already on stderr and the
+ * exit code for that failure in *out_exit. */
+static uint8_t *read_all(const char *path, size_t *out_len, int *out_exit) {
     FILE *f = NULL;
     bool from_stdin = is_stdin_path(path);
 
@@ -154,7 +187,9 @@ static uint8_t *read_all(const char *path, size_t *out_len) {
     } else {
         f = fopen(path, "rb");
         if (!f) {
-            fprintf(stderr, "jpegz: cannot open '%s': %s\n", path, strerror(errno));
+            int open_errno = errno;
+            fprintf(stderr, "jpegz: cannot open '%s': %s\n", path, strerror(open_errno));
+            *out_exit = (open_errno == ENOENT || open_errno == ENOTDIR) ? EXIT_NOINPUT : EXIT_NOPERM;
             return NULL;
         }
     }
@@ -164,6 +199,7 @@ static uint8_t *read_all(const char *path, size_t *out_len) {
     if (!buf) {
         if (!from_stdin) fclose(f);
         fprintf(stderr, "jpegz: out of memory reading '%s'\n", path);
+        *out_exit = EXIT_OSERR;
         return NULL;
     }
 
@@ -174,6 +210,7 @@ static uint8_t *read_all(const char *path, size_t *out_len) {
                         path, MAX_INPUT_BYTES);
                 free(buf);
                 if (!from_stdin) fclose(f);
+                *out_exit = EXIT_INCONCLUSIVE;
                 return NULL;
             }
             size_t ncap = cap * 2;
@@ -182,6 +219,7 @@ static uint8_t *read_all(const char *path, size_t *out_len) {
                 free(buf);
                 if (!from_stdin) fclose(f);
                 fprintf(stderr, "jpegz: out of memory reading '%s'\n", path);
+                *out_exit = EXIT_OSERR;
                 return NULL;
             }
             buf = nbuf;
@@ -191,9 +229,10 @@ static uint8_t *read_all(const char *path, size_t *out_len) {
         len += got;
         if (got == 0) {
             if (ferror(f)) {
-                fprintf(stderr, "jpegz: read error on '%s'\n", path);
+                fprintf(stderr, "jpegz: read error on '%s': %s\n", path, strerror(errno));
                 free(buf);
                 if (!from_stdin) fclose(f);
+                *out_exit = EXIT_IOERR;
                 return NULL;
             }
             break; /* EOF */
@@ -372,13 +411,19 @@ static void print_help(void) {
         "                 resource limit, or an untyped validator error)\n"
         "\n"
         "EXIT CODES:\n"
-        "  0  every input was valid\n"
-        "  1  at least one input was CORRUPT\n"
-        "  2  usage or I/O error\n"
-        "  3  nothing corrupt or known-defective, but at least one input was\n"
-        "     unsupported or indeterminate\n"
-        "  4  nothing corrupt, and at least one known encoder defect\n"
-        "  Precedence: 2, then 1, then 4, then 3, then 0.\n"
+        "  0    every input was valid, with no WARN finding\n"
+        "  1    at least one input was CORRUPT\n"
+        "  2    usage error (nothing was validated)\n"
+        "  3    valid, but at least one WARN finding (a writer's deviation)\n"
+        "  4    at least one known encoder defect\n"
+        "  5    at least one input was unsupported, indeterminate, or too large\n"
+        "  66   no such file\n"
+        "  70   internal error\n"
+        "  71   out of memory\n"
+        "  74   read error\n"
+        "  77   permission denied or no access\n"
+        "  130  interrupted\n"
+        "  Precedence: 1, 71, 70, 74, 77, 66, 4, 5, 3, then 0.\n"
         "\n"
         "FORMATS:\n"
         "  JPEG and JPEG-LS (T.81 / T.87), JPEG 2000 (T.800, via jp2z), and\n"
@@ -529,8 +574,9 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < npaths; i++) {
         const char *path = paths[i];
         size_t len = 0;
-        uint8_t *data = read_all(path, &len);
-        if (!data) { exit_code = EXIT_USAGE; continue; }
+        int read_exit = EXIT_IOERR;
+        uint8_t *data = read_all(path, &len, &read_exit);
+        if (!data) { raise_exit(&exit_code, read_exit); continue; }
 
         jpegz_strict_result_t report = {0};
         jpegz_status_t rc = jpegz_validate_any(data, len, &report);
@@ -539,7 +585,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "jpegz: validation could not run on '%s': %s\n",
                     path, jpegz_last_error_message());
             free(data);
-            exit_code = EXIT_USAGE;
+            raise_exit(&exit_code, rc == JPEGZ_ERR_OUT_OF_MEMORY ? EXIT_OSERR : EXIT_SOFTWARE);
             continue;
         }
 
@@ -548,21 +594,20 @@ int main(int argc, char **argv) {
             else print_human(path, &report, &opt);
         }
 
-        /* Corruption is the strongest verdict and must survive being mixed
-         * with inconclusive inputs in one invocation — otherwise a batch run
-         * over a directory could hide a damaged file behind an unsupported
-         * one. EXIT_USAGE, once set by an I/O failure, still wins. */
+        /* exit_rank() keeps corruption from hiding behind any other input
+         * in a batch, and a known defect above inconclusive. */
+        int file_exit = EXIT_INCONCLUSIVE;
         if (report.verdict == JPEGZ_VERDICT_CORRUPT) {
-            if (exit_code == EXIT_OK || exit_code == EXIT_INCONCLUSIVE || exit_code == EXIT_KNOWN_DEFECT) {
-                exit_code = EXIT_INVALID;
-            }
+            file_exit = EXIT_INVALID;
         } else if (report.verdict == JPEGZ_VERDICT_KNOWN_DEFECT) {
-            /* A known defect outranks inconclusive: an unsupported or
-             * indeterminate input describes the tool's reach, not a file. */
-            if (exit_code == EXIT_OK || exit_code == EXIT_INCONCLUSIVE) exit_code = EXIT_KNOWN_DEFECT;
-        } else if (report.verdict != JPEGZ_VERDICT_VALID && exit_code == EXIT_OK) {
-            exit_code = EXIT_INCONCLUSIVE;
+            file_exit = EXIT_KNOWN_DEFECT;
+        } else if (report.verdict == JPEGZ_VERDICT_VALID) {
+            file_exit = EXIT_OK;
+            for (size_t k = 0; k < report.findings_len; k++) {
+                if (report.findings[k].severity == JPEGZ_SEVERITY_WARN) file_exit = EXIT_WARN;
+            }
         }
+        raise_exit(&exit_code, file_exit);
 
         jpegz_strict_result_free(&report);
         free(data);
