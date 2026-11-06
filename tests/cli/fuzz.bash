@@ -6,6 +6,9 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/jpegz-fuzz-cli.XXXXXX") || exit 1
 trap 'rm -rf -- "$work"' EXIT
 mkdir "$work/bin" "$work/project" || exit 1
 cp "$root/fuzz" "$work/project/fuzz" || exit 1
+mkdir -p "$work/project/tools" "$work/project/tests/fuzz" || exit 1
+cp "$root/tools/fuzz-save-crash" "$work/project/tools/" || exit 1
+: > "$work/project/tests/fuzz/decode_fuzz.zig" || exit 1
 {
 	printf '#!%s\n' "$(command -v bash)"
 	cat <<'EOF'
@@ -14,7 +17,10 @@ printf 'CALL\n' >> "$FAKE_NIX_LOG"
 printf '%s\n' "$@" >> "$FAKE_NIX_LOG"
 case ${1:-} in
 	eval) printf 'x86_64-linux'; exit 0 ;;
-	build) printf 'SEED=%s\n' "${JPEGZ_FUZZ_SEED-<unset>}" >> "$FAKE_NIX_LOG"; exit "${FAKE_NIX_STATUS:-0}" ;;
+	build)
+		printf 'SEED=%s\n' "${JPEGZ_FUZZ_SEED-<unset>}" >> "$FAKE_NIX_LOG"
+		[[ -n ${FAKE_NIX_STDERR-} ]] && cat "$FAKE_NIX_STDERR" >&2
+		exit "${FAKE_NIX_STATUS:-0}" ;;
 	*) exit 79 ;;
 esac
 EOF
@@ -92,11 +98,30 @@ fi
 
 # A failed campaign keeps the Nix status and repeats the reproduction seed.
 FAKE_NIX_STATUS=17 run_fuzz failed-campaign --fuzz --seed 0x1
-if [[ $status -eq 17 ]] && grep -qF 'campaign failed with seed 0x00000001; reproduce with: ./fuzz --fuzz --seed 0x00000001' "$work/failed-campaign.err"; then
+if [[ $status -eq 17 ]] && grep -qF 'campaign failed with seed 0x00000001; reproduce with: ./fuzz --fuzz --seed 0x00000001' "$work/failed-campaign.err" &&
+	grep -qF 'no crash input to save' "$work/failed-campaign.err" && [[ ! -e $work/project/tests/fuzz/regressions ]]; then
 	pass "fuzz reports the reproduction seed when a campaign fails"
 else
 	fail "fuzz reports the reproduction seed when a campaign fails (status=$status)"
 	cat "$work/failed-campaign.err" >&2
+fi
+# A failed campaign whose log carries a crash record saves the exact input
+# under its harness and seed, so it replays after later code changes.
+evidence=$work/crash-evidence
+mkdir -p "$evidence/cache/f" || exit 1
+printf '\x00\xff\nnot a JPEG' > "$evidence/cache/f/crash" || exit 1
+printf "error: test 'decode_fuzz.test.fuzz: jpegz.decode never panics or leaks' terminated with signal ABRT; input saved to '.zig-cache/f/crash'\n" > "$evidence/driver.log"
+{ cat "$evidence/driver.log"; bash "$root/tools/check-fuzz-result" 1 "$evidence/cache" "$evidence/driver.log" 0x00000002 2>&1; } |
+	sed 's/^/jpegz-fuzz-campaign-0x00000002> /' > "$evidence/nix.err"
+FAKE_NIX_STATUS=1 FAKE_NIX_STDERR=$evidence/nix.err run_fuzz crash-campaign --fuzz --seed 0x2
+saved=$work/project/tests/fuzz/regressions/decode_fuzz/0x00000002.bin
+if [[ $status -eq 1 ]] && cmp -s "$evidence/cache/f/crash" "$saved" &&
+	grep -qF "crash input saved to $saved" "$work/crash-campaign.err" &&
+	grep -qF 'campaign failed with seed 0x00000002' "$work/crash-campaign.err"; then
+	pass "a failed campaign saves its crash input as a replayable regression"
+else
+	fail "a failed campaign saves its crash input as a replayable regression (status=$status)"
+	cat "$work/crash-campaign.err" >&2
 fi
 FAKE_NIX_STATUS=17 run_fuzz failed-seeds
 if [[ $status -eq 17 ]]; then
@@ -128,7 +153,8 @@ done
 
 run_fuzz help --help
 if [[ $status -eq 0 && ! -s $work/help.log ]] && grep -q '10000 iterations' "$work/help.out" &&
-	grep -q 'random 32-bit seed' "$work/help.out" && grep -q -- '--seed 0xHEX' "$work/help.out"; then
+	grep -q 'random 32-bit seed' "$work/help.out" && grep -q -- '--seed 0xHEX' "$work/help.out" &&
+	grep -q 'tests/fuzz/regressions' "$work/help.out"; then
 	pass "fuzz help describes the random-seed bounded campaign without Nix"
 else
 	fail "fuzz help describes the random-seed bounded campaign without Nix"

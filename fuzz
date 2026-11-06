@@ -14,6 +14,10 @@ Default: replay the fixed seed corpus in a Nix ReleaseSafe check.
         with a fresh random 32-bit seed; the runner can overshoot within a
         batch. The seed is printed before the run and again on failure.
 --seed 0xHEX: rerun the campaign with a reported seed (1 to 8 hex digits).
+        A seed repeats a run only on unchanged code, because the fuzzer is
+        coverage-guided. So a failed campaign also saves the crash input to
+        tests/fuzz/regressions/<harness>/<seed>.bin; commit that file and every
+        ./test replays it, whatever changes later.
 --rebuild: request fresh execution of an already prepared Nix check.
 
 Nix can reuse a previous check result without --rebuild; a passed seed is
@@ -56,10 +60,18 @@ fi
 printf 'fuzz: campaign seed %s (reproduce with: ./fuzz --fuzz --seed %s)\n' "$seed" "$seed" >&2
 # The seed travels in the environment (read under --impure) so the flake
 # source is resolved like every other target: git-tracked files only.
+log=$(mktemp "${TMPDIR:-/tmp}/jpegz-fuzz-log.XXXXXX") || { printf 'fuzz: unable to create a log file\n' >&2; exit 1; }
+trap 'rm -f -- "$log"' EXIT
+# Nix writes build logs to stderr; keep a copy to recover the crash input.
 JPEGZ_FUZZ_SEED=$seed nix build "$root#legacyPackages.$system.fuzz-campaign-seeded" --impure \
-	--no-link --print-build-logs "${rebuild[@]}"
-status=$?
+	--no-link --print-build-logs "${rebuild[@]}" 2>&1 | tee "$log" >&2
+status=${PIPESTATUS[0]}
 if [[ $status -ne 0 ]]; then
 	printf 'fuzz: campaign failed with seed %s; reproduce with: ./fuzz --fuzz --seed %s\n' "$seed" "$seed" >&2
+	if saved=$(bash "$root/tools/fuzz-save-crash" "$log" "$root" 2>/dev/null); then
+		printf 'fuzz: crash input saved to %s; commit it so ./test replays it after any code change\n' "$saved" >&2
+	else
+		printf 'fuzz: no crash input to save (a failure without a recorded crash, or an input over the print limit)\n' >&2
+	fi
 fi
 exit "$status"

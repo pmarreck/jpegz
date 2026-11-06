@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Save a failed fuzz campaign's crash input as a permanent regression.
+#
+# usage: fuzz-save-crash LOG [ROOT]
+#
+# LOG is the campaign output (Nix "name> " line prefixes are accepted). It must
+# hold Zig's "test 'HARNESS.test...' ...; input saved to" line and the base64
+# block tools/check-fuzz-result prints. The decoded bytes go to
+# ROOT/tests/fuzz/regressions/HARNESS/SEED.bin (ROOT defaults to this
+# repository), where every later `zig build fuzz` replays them as a corpus
+# entry. A seed alone cannot do that: the fuzzer is coverage-guided, so the
+# same seed takes a different path once the code or corpus changes.
+#
+# Prints the saved path. Exit 0 when saved (or already saved with identical
+# bytes), 1 when the log has no complete crash record or the destination
+# holds different bytes, 2 on usage errors.
+set -u
+if [[ $# -lt 1 || $# -gt 2 || $1 == -h || $1 == --help ]]; then
+	printf 'usage: fuzz-save-crash LOG [ROOT]\n' >&2
+	exit 2
+fi
+log=$1
+root=${2:-$(cd -- "$(dirname -- "$0")/.." && pwd)}
+[[ -f $log && -r $log ]] || { printf 'fuzz-save-crash: cannot read %s\n' "$log" >&2; exit 2; }
+[[ -d $root/tests/fuzz ]] || { printf 'fuzz-save-crash: %s has no tests/fuzz\n' "$root" >&2; exit 2; }
+
+harness='' seed='' size='' in_block=0 encoded=''
+prefix='^[A-Za-z0-9._+-]+> '
+while IFS= read -r line || [[ -n $line ]]; do
+	[[ $line =~ $prefix ]] && line=${line:${#BASH_REMATCH[0]}}
+	if [[ $in_block -eq 1 ]]; then
+		if [[ $line == 'fuzz-check: end of crash input' ]]; then
+			in_block=2
+		elif [[ $line =~ ^[A-Za-z0-9+/=]*$ ]]; then
+			encoded+=$line
+		else
+			printf 'fuzz-save-crash: unexpected line inside the crash input block\n' >&2
+			exit 1
+		fi
+		continue
+	fi
+	if [[ -z $harness && $line =~ test\ \'([A-Za-z0-9_]+)\.test\..*input\ saved\ to ]]; then
+		harness=${BASH_REMATCH[1]}
+	elif [[ $line =~ ^fuzz-check:\ failed\ with\ seed\ (0x[0-9a-f]{8}) ]]; then
+		seed=${BASH_REMATCH[1]}
+	elif [[ $in_block -eq 0 && $line =~ ^fuzz-check:\ crash\ input,\ ([0-9]+)\ bytes.*base64:$ ]]; then
+		size=${BASH_REMATCH[1]}
+		in_block=1
+	fi
+done < "$log"
+
+if [[ -z $harness || -z $seed || $in_block -ne 2 ]]; then
+	printf 'fuzz-save-crash: no complete crash record (harness=%s seed=%s block=%s)\n' \
+		"${harness:-none}" "${seed:-none}" "$in_block" >&2
+	exit 1
+fi
+if [[ ! -f $root/tests/fuzz/$harness.zig ]]; then
+	printf 'fuzz-save-crash: unknown harness %s\n' "$harness" >&2
+	exit 1
+fi
+dir=$root/tests/fuzz/regressions/$harness
+mkdir -p -- "$dir" || exit 1
+tmp=$(mktemp "$dir/.crash.XXXXXX") || exit 1
+trap 'rm -f -- "$tmp"' EXIT
+printf '%s' "$encoded" | base64 -d > "$tmp" 2>/dev/null || {
+	printf 'fuzz-save-crash: the crash input is not valid base64\n' >&2
+	exit 1
+}
+actual=$(wc -c < "$tmp")
+actual=${actual//[[:space:]]/}
+if [[ $actual != "$size" ]]; then
+	printf 'fuzz-save-crash: decoded %s bytes, the log announced %s\n' "$actual" "$size" >&2
+	exit 1
+fi
+dest=$dir/$seed.bin
+if [[ -e $dest ]]; then
+	if cmp -s -- "$tmp" "$dest"; then
+		printf '%s\n' "$dest"
+		exit 0
+	fi
+	printf 'fuzz-save-crash: %s exists with different bytes; not overwriting\n' "$dest" >&2
+	exit 1
+fi
+mv -- "$tmp" "$dest" || exit 1
+trap - EXIT
+printf '%s\n' "$dest"

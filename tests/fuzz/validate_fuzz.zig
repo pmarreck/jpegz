@@ -15,6 +15,7 @@
 const std = @import("std");
 const jpegz = @import("jpegz");
 const seed = @import("seed");
+const regressions = @import("regressions");
 
 fn withLenPrefix(comptime data: []const u8) [data.len + 4]u8 {
     var out: [data.len + 4]u8 = undefined;
@@ -34,7 +35,7 @@ const seed_progressive = withLenPrefix(seed.progressive_rgb);
 const seed_lossless = withLenPrefix(seed.lossless_gray);
 const seed_arith = withLenPrefix(seed.arith_baseline_gray);
 
-const corpus: []const []const u8 = &.{
+const seeds = [_][]const u8{
     &seed_baseline_rgb,
     &seed_baseline_gray,
     &seed_baseline_dri,
@@ -44,6 +45,10 @@ const corpus: []const []const u8 = &.{
     &seed_lossless,
     &seed_arith,
 };
+// Saved crash inputs from tests/fuzz/regressions/validate_fuzz/ follow the seeds.
+// Each is the exact byte stream the fuzzer recorded, so it replays here on
+// every `zig build fuzz` no matter how the code or the coverage map changed.
+const corpus: []const []const u8 = &(seeds ++ regressions.validate_fuzz);
 
 const MAX_INPUT_BYTES: usize = 256 * 1024;
 

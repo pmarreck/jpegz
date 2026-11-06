@@ -20,6 +20,7 @@
 const std = @import("std");
 const jpegz = @import("jpegz");
 const seed = @import("seed");
+const regressions = @import("regressions");
 
 /// Wrap a raw byte slice in the length-prefix shape `std.testing.Smith`
 /// expects when consuming corpus entries via `smith.slice(buf)`. The
@@ -55,7 +56,7 @@ const seed_arith_rgb = withLenPrefix(seed.arith_baseline_rgb);
 const seed_arith_progressive = withLenPrefix(seed.arith_progressive_gray);
 const seed_fuzz_progressive_al15 = withLenPrefix(seed.fuzz_progressive_ac_refine_al15);
 
-const corpus: []const []const u8 = &.{
+const seeds = [_][]const u8{
     &seed_baseline_rgb,
     &seed_baseline_gray,
     &seed_baseline_yuv420,
@@ -74,6 +75,10 @@ const corpus: []const []const u8 = &.{
     &seed_arith_progressive,
     &seed_fuzz_progressive_al15,
 };
+// Saved crash inputs from tests/fuzz/regressions/decode_fuzz/ follow the seeds.
+// Each is the exact byte stream the fuzzer recorded, so it replays here on
+// every `zig build fuzz` no matter how the code or the coverage map changed.
+const corpus: []const []const u8 = &(seeds ++ regressions.decode_fuzz);
 
 /// Per-test scratch buffer cap. Real JPEGs in the wild can be huge,
 /// but for fuzzing what matters is exercising the marker walker and
