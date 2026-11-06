@@ -73,6 +73,9 @@ JPEG-family signature are not evidence of damage.
 Each finding keeps the originating validator's own code in `leaf_code`
 alongside jpegz's mapped `code`, so a code jpegz has no name for is still
 reportable verbatim against jp2z or libjxlz.
+For JPEG XL, `jpegz.jpegxl.leafCode(finding)` returns that code as libjxlz's
+own enum (`jpegz.jpegxl.FindingCode`), so a Zig consumer can switch on it
+exhaustively and a code added by a libjxlz update fails its compile.
 
 ### Two archives, one header
 

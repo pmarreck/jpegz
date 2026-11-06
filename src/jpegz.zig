@@ -825,6 +825,11 @@ pub const jpeg2000 = struct {
 pub const jpegxl = struct {
     pub const Options = facade.JxlOptions;
     pub const default_options = facade.default_jxl_options;
+    /// libjxlz's finding enum, for exhaustive switches over `leafCode`.
+    pub const FindingCode = facade.JxlLeafFindingCode;
+    /// The typed libjxlz code of a finding, or null when another validator
+    /// produced it or the raw `leaf_code` is outside the pinned enum.
+    pub const leafCode = facade.jxlLeafCode;
 
     pub fn validate(
         allocator: Allocator,

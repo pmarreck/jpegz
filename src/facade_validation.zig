@@ -326,6 +326,22 @@ pub const JxlOptions = if (with_jxl) libjxlz.validation.Options else struct {
 pub const default_jxl_options: JxlOptions =
     if (with_jxl) libjxlz.validation.default_options else .{};
 
+/// libjxlz's own finding enum, re-exported so consumers can switch on a JXL
+/// leaf code exhaustively: a code added by a libjxlz repin then fails their
+/// compile instead of falling into an `else`. The disabled build has no leaf.
+pub const JxlLeafFindingCode = if (with_jxl)
+	libjxlz.ffi.decode.JxlValidationFindingCode
+else
+	enum(c_int) { JXL_VALIDATION_FINDING_NONE = 0 };
+
+/// The typed libjxlz code behind a finding. Null for findings from another
+/// source and for a raw code outside the pinned enum; `leaf_code` keeps the
+/// raw number in both cases.
+pub fn jxlLeafCode(finding: StrictFinding) ?JxlLeafFindingCode {
+	if (finding.source != .libjxlz) return null;
+	return std.enums.fromInt(JxlLeafFindingCode, @as(i32, @bitCast(finding.leaf_code)));
+}
+
 const JxlReportedFinding = struct {
 	raw_verdict: i32,
 	raw_code: i32,
@@ -652,4 +668,35 @@ test "JXL callback and scalar outcomes classify the complete cross product" {
 			}
 		}
 	}
+}
+
+test "every pinned libjxlz finding code round-trips through StrictFinding as a typed leaf code" {
+	if (!with_jxl) return error.SkipZigTest;
+	for (std.enums.values(JxlLeafFindingCode)) |leaf| {
+		const raw: i32 = @intFromEnum(leaf);
+		const finding = translateJxlFinding(.{
+			.raw_verdict = 1, .raw_code = raw, .raw_severity = 2,
+			.offset = 0, .host_offset = 0, .exact = false,
+		}, 20, 0);
+		try std.testing.expectEqual(@as(u32, @bitCast(raw)), finding.leaf_code);
+		try std.testing.expectEqual(@as(?JxlLeafFindingCode, leaf), jxlLeafCode(finding));
+		// A repin that adds a leaf code fails here until jpegz maps it.
+		if (raw != 0) try std.testing.expect(jxlCode(raw) != null);
+	}
+	// Controls: codes outside the pinned enum keep their raw leaf_code but
+	// have no typed value, and another leaf's in-range code is not a libjxlz code.
+	for ([_]i32{ -1, 999, std.math.maxInt(i32) }) |raw| {
+		const finding = translateJxlFinding(.{
+			.raw_verdict = 1, .raw_code = raw, .raw_severity = 2,
+			.offset = 0, .host_offset = 0, .exact = false,
+		}, 20, 0);
+		try std.testing.expectEqual(@as(u32, @bitCast(raw)), finding.leaf_code);
+		try std.testing.expectEqual(@as(?JxlLeafFindingCode, null), jxlLeafCode(finding));
+	}
+	var other = translateJxlFinding(.{
+		.raw_verdict = 1, .raw_code = 3, .raw_severity = 2,
+		.offset = 0, .host_offset = 0, .exact = false,
+	}, 20, 0);
+	other.source = .jp2z;
+	try std.testing.expectEqual(@as(?JxlLeafFindingCode, null), jxlLeafCode(other));
 }

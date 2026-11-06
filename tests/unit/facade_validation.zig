@@ -1003,6 +1003,35 @@ test "strict facade rejects mandatory JPEG-family signature mutations" {
     try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, jxl_result.verdict);
 }
 
+test "JPEG XL findings expose their libjxlz leaf code as the re-exported enum" {
+	if (!jpegz.facade.with_jxl) return error.SkipZigTest;
+	const LeafCode = jpegz.jpegxl.FindingCode;
+	const jxl_bad = [_]u8{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+	var result = try jpegz.jpegxl.validate(std.testing.allocator, &jxl_bad, jpegz.jpegxl.default_options);
+	defer result.deinit(std.testing.allocator);
+	try std.testing.expect(result.findings.items.len > 0);
+	var saw_signature = false;
+	for (result.findings.items) |finding| {
+		try std.testing.expectEqual(jpegz.ValidatorSource.libjxlz, finding.source);
+		const leaf = jpegz.jpegxl.leafCode(finding) orelse return error.TestExpectedLeafCode;
+		try std.testing.expectEqual(finding.leaf_code, @as(u32, @bitCast(@as(i32, @intFromEnum(leaf)))));
+		// A consumer switches exhaustively, so a new leaf code is a compile error.
+		switch (leaf) {
+			.JXL_VALIDATION_FINDING_INVALID_SIGNATURE => saw_signature = true,
+			else => {},
+		}
+	}
+	try std.testing.expect(saw_signature);
+
+	// Control: a jpegz finding with an in-range number is not a libjxlz code.
+	var jpeg_result = try jpegz.validateAny(std.testing.allocator, @embedFile("fixtures/baseline_2x2_rgb.jpg")[0..10]);
+	defer jpeg_result.deinit(std.testing.allocator);
+	try std.testing.expect(jpeg_result.findings.items.len > 0);
+	for (jpeg_result.findings.items) |finding| {
+		try std.testing.expectEqual(@as(?LeafCode, null), jpegz.jpegxl.leafCode(finding));
+	}
+}
+
 test "JPEG XL formerly unsupported corpus now validates completely" {
     const Case = struct {
         label: []const u8,
