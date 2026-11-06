@@ -423,6 +423,39 @@ pub fn build(b: *std.Build) void {
     );
     b.getInstallStep().dependOn(&installed_errno.step);
 
+    // docs/FINDING_CODES.md: owner, approval basis and introducing commit for
+    // every FindingCode, generated from src/core/finding_provenance.zig.
+    // `zig build finding-codes` rewrites it; `zig build test` fails when the
+    // committed copy is stale.
+    const provenance_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/finding_provenance.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    });
+    const gen_codes_mod = b.createModule(.{
+        .root_source_file = b.path("tools/gen_finding_codes.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    });
+    gen_codes_mod.addImport("provenance", provenance_mod);
+    const gen_codes_exe = b.addExecutable(.{
+        .name = "jpegz-gen-finding-codes",
+        .root_module = gen_codes_mod,
+    });
+    const run_gen_codes = b.addRunArtifact(gen_codes_exe);
+    const generated_codes_md = run_gen_codes.addOutputFileArg("FINDING_CODES.md");
+    const update_codes = b.addUpdateSourceFiles();
+    update_codes.addCopyFileToSource(generated_codes_md, "docs/FINDING_CODES.md");
+    b.step("finding-codes", "Regenerate docs/FINDING_CODES.md from the provenance table")
+        .dependOn(&update_codes.step);
+    const check_codes = b.addRunArtifact(gen_codes_exe);
+    check_codes.addArg("--check");
+    check_codes.addFileArg(b.path("docs/FINDING_CODES.md"));
+    const provenance_tests = b.addTest(.{
+        .name = "finding_provenance",
+        .root_module = provenance_mod,
+    });
+
     // ============================================================
     // Test runner — three sources of tests:
     //   1. tests/unit/smoke.zig   — public-API wiring
@@ -452,6 +485,8 @@ pub fn build(b: *std.Build) void {
     // Benchmarks and the packaged lib stay ReleaseFast.
     const test_step = b.step("test", "Run unit tests (ReleaseSafe by default; -Dtest-optimize overrides)");
     const test_build_step = b.step("test-build", "Compile all tests without running, for cross-target link verification");
+    test_step.dependOn(&check_codes.step);
+    test_step.dependOn(&b.addRunArtifact(provenance_tests).step);
 
     // (1) Public smoke suite — imports `jpegz` like any consumer.
     const smoke_mod = b.createModule(.{

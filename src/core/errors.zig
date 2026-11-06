@@ -58,6 +58,10 @@ pub const Variant = enum(u8) {
 /// Symbolic codes for a `Finding` in a `ValidationReport`. The numeric
 /// `enum(u32)` value is the wire format used by the C ABI; see the
 /// `JPEGZ_FINDING_*` enum in the auto-generated `jpegz_errno.h`.
+///
+/// Append only, and only with the coordinator's approval. Each new value
+/// also needs a row in `finding_provenance.zig` (a compile error otherwise);
+/// then run `zig build finding-codes` to regenerate docs/FINDING_CODES.md.
 pub const FindingCode = enum(u32) {
     // ── Structural (1..49) ───────────────────────────────────────
     missing_soi = 1,

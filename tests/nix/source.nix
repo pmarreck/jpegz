@@ -19,7 +19,7 @@ let
 	expected = lib.sort builtins.lessThan [
 		".future-config" "COPYING.md" "LICENSE" "LICENSE.md" "LICENSING_NOTES.md"
 		"NOTICE.md" "THIRD_PARTY_NOTICES.md" "build.zig" "build.zig.zon"
-		"data.md/keep.bin" "deps/vendor.c" "flake.lock" "flake.nix" "include/api.h" "scratch/check.zig"
+		"data.md/keep.bin" "deps/vendor.c" "docs/FINDING_CODES.md" "flake.lock" "flake.nix" "include/api.h" "scratch/check.zig"
 		"src/alias.zig" "src/docs/nested.md" "src/main.zig" "tests/cli/check"
 		"tests/unit/fixtures/image.bin" "tests/unit/fixtures/readme.md" "tools/tool"
 	];
@@ -39,5 +39,5 @@ let
 			(builtins.readFile ((toString (source "baseline")) + "/src/alias.zig") == "original\n"))
 	] ++ lib.genList (index:
 		row ("required input edit " + toString index) (baseline != identity ("required-" + toString index))
-	) 11;
+	) 12;
 in rows

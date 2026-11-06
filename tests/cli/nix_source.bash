@@ -16,14 +16,14 @@ trap cleanup EXIT
 base=$work/fixtures/baseline
 mkdir -p "$base/src/docs" "$base/tests/unit/fixtures" "$base/tests/cli" \
 	"$base/include" "$base/tools" "$base/deps" "$base/scratch" \
-	"$base/docs" "$base/.mechatron-prime" "$base/.git" "$base/data.md" || exit 1
+	"$base/docs/sub" "$base/.mechatron-prime" "$base/.git" "$base/data.md" || exit 1
 retained=(
 	.future-config COPYING.md LICENSE LICENSE.md LICENSING_NOTES.md NOTICE.md THIRD_PARTY_NOTICES.md
-	build.zig build.zig.zon data.md/keep.bin deps/vendor.c flake.lock flake.nix include/api.h scratch/check.zig
+	build.zig build.zig.zon data.md/keep.bin deps/vendor.c docs/FINDING_CODES.md flake.lock flake.nix include/api.h scratch/check.zig
 	src/docs/nested.md src/main.zig tests/cli/check tests/unit/fixtures/image.bin
 	tests/unit/fixtures/readme.md tools/tool
 )
-for path in "${retained[@]}" README.md AGENTS.md PLAN.md docs/note.md .dirtree-state .mechatron-prime/targets .git/config; do
+for path in "${retained[@]}" README.md AGENTS.md PLAN.md docs/note.md docs/FINDING_CODES.md.orig docs/sub/FINDING_CODES.md .dirtree-state .mechatron-prime/targets .git/config; do
 	printf 'original\n' > "$base/$path" || exit 1
 done
 ln -s main.zig "$base/src/alias.zig" || exit 1
@@ -41,7 +41,7 @@ done
 mkdir -p "$work/fixtures/future/future-component" || exit 1
 printf 'future input\n' > "$work/fixtures/future/future-component/data" || exit 1
 required=(src/main.zig build.zig build.zig.zon tests/unit/fixtures/image.bin tests/unit/fixtures/readme.md
-	include/api.h tools/tool deps/vendor.c scratch/check.zig flake.nix LICENSE.md)
+	include/api.h tools/tool deps/vendor.c scratch/check.zig flake.nix LICENSE.md docs/FINDING_CODES.md)
 index=0
 for path in "${required[@]}"; do
 	copy_case "required-$index" || exit 1
@@ -58,4 +58,4 @@ JPEGZ_SOURCE_FIXTURE_ROOT=$work/fixtures JPEGZ_SOURCE_MODULE=$repo/nix/source.ni
 status=$?
 if [[ $status -ne 0 ]]; then cat "$work/err" >&2; exit 1; fi
 jq -r '.[] | (if .passed then "ok " else "FAIL " end) + .name' "$work/result.json"
-jq -e 'length == 18 and all(.[]; .passed == true)' "$work/result.json" >/dev/null
+jq -e 'length == 19 and all(.[]; .passed == true)' "$work/result.json" >/dev/null
