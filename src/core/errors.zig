@@ -155,6 +155,8 @@ pub const FindingCode = enum(u32) {
 	sof_sampling_invalid = 66,
 	// Registry-approved 2026-10-28: a complete recognized JFIF header
 	// declares a future version whose metadata semantics are unchecked.
+	// Emitted at known_defect for exactly 02 01 in an otherwise sound APP0,
+	// FFmpeg/Libav's byte-swapped 1.02 (A2, owner admission 2026-11-06).
 	jfif_version_unchecked = 67,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────

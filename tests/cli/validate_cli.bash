@@ -309,6 +309,14 @@ out=; err=; rc=
 capture "$jpegz_cli" --simple "$known_defect"
 assert_contains "$out" 'known_defect' "text classifies the known defect"
 
+# Known defect A2 (owner admission 2026-11-06): FFmpeg/Libav's byte-swapped
+# JFIF version 02 01. Near matches are covered by the unit tests.
+capture "$jpegz_cli" --json "$fixtures/historic_a2_ffmpeg_jfif_0201.jpg"
+[ "$rc" -eq 4 ] && pass "JFIF 02 01 exits 4 (known defect)" || fail "JFIF 02 01 exits 4 (known defect)" "rc=$rc"
+assert_contains "$out" '"verdict":"known_defect"' "JFIF 02 01 is classified as a known defect"
+assert_contains "$out" '"severity":"KNOWN_DEFECT","code":"jfif_version_unchecked"' "JFIF 02 01 keeps code 67 at known-defect severity"
+assert_contains "$out" '"offset":11,"host_offset":11,"offset_is_exact":true' "JFIF 02 01 retains the version-byte location"
+
 # Mutations are streamed from read-only fixtures; offsets are zero-based.
 for minor in 01 02; do
 	capture bash -c '{ head -c 12 "$2"; printf "%b" "\\x$3\\x03"; tail -c +15 "$2"; } | "$1" --json -' _ \
@@ -334,14 +342,15 @@ for version in '01 03' '02 00' 'fe 01'; do
 	assert_contains "$out" "$observed: not in the claimed spec version" "future JFIF $version detail names the unchecked version"
 done
 
-capture bash -c '{ head -c 11 "$2"; printf "\002"; tail -c +13 "$2"; } | "$1" --json -' _ "$jpegz_cli" "$known_defect"
+# Version 02 00, not 02 01: the latter is admitted known defect A2 (below).
+capture bash -c '{ head -c 11 "$2"; printf "\002\000"; tail -c +14 "$2"; } | "$1" --json -' _ "$jpegz_cli" "$known_defect"
 [ "$rc" -eq 4 ] && pass "known padding outranks a future-version warning" || fail "known padding outranks a future-version warning" "rc=$rc"
 assert_contains "$out" '"code":"entropy_padding_zero_bits"' "future metadata retains the known-defect cause"
 assert_contains "$out" '"severity":"WARN","code":"jfif_version_unchecked"' "known padding retains the version warning"
 
 for reverse in 0 1; do
 	capture bash -c '
-		future() { head -c 11 "$2"; printf "\002"; dd if="$2" bs=1 skip=12 count=8 status=none; }
+		future() { head -c 11 "$2"; printf "\002\000"; dd if="$2" bs=1 skip=13 count=7 status=none; }
 		invalid() { printf "\377\340\000\020JFIF\000\001\002\377\000\001\000\001\000\000"; }
 		{ head -c 2 "$2"; if [ "$3" -eq 0 ]; then future "$@" | tail -c +3; invalid; else invalid; future "$@" | tail -c +3; fi; tail -c +21 "$2"; } | "$1" --json -
 	' _ "$jpegz_cli" "$fixtures/baseline_2x2_rgb.jpg" "$reverse"
@@ -397,8 +406,8 @@ assert_contains "$out" '"severity":"INFO","code":"entropy_fill_bytes"' "legal ma
 ordinary_warning="$TMPDIR/jpegz-cli-warn-$$.jpg"
 {
 	head -c 11 "$fixtures/baseline_2x2_rgb.jpg"
-	printf '\002'
-	tail -c +13 "$fixtures/baseline_2x2_rgb.jpg"
+	printf '\002\000'
+	tail -c +14 "$fixtures/baseline_2x2_rgb.jpg"
 } > "$ordinary_warning"
 out=; err=; rc=
 capture "$jpegz_cli" --json "$ordinary_warning"

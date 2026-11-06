@@ -118,6 +118,21 @@ fn reportSeverity(code: FindingCode, emitted: Severity) Severity {
 	};
 }
 
+/// Known defect A2 (owner admission 2026-11-06, documented-producer path):
+/// FFmpeg/Libav mjpegenc before commit b19313218c, and rtpdec_jpeg, wrote the
+/// JFIF 1.02 version as the bytes 02 01. The match is exact: a JFIF APP0 with
+/// those version bytes and nothing else wrong in it, meaning units 0..2,
+/// nonzero densities (T.871) and a thumbnail that fills the segment exactly.
+/// Any near match stays the ordinary WARN 67.
+fn isFfmpegJfifVersion(body: []const u8) bool {
+	const header_bytes: usize = 14;
+	if (body.len < header_bytes or !std.mem.eql(u8, body[0..5], "JFIF\x00")) return false;
+	if (body[5] != 2 or body[6] != 1 or body[7] > 2) return false;
+	if (std.mem.readInt(u16, body[8..10], .big) == 0 or std.mem.readInt(u16, body[10..12], .big) == 0) return false;
+	const rgb_bytes: usize = 3;
+	return body.len == header_bytes + rgb_bytes * @as(usize, body[12]) * body[13];
+}
+
 fn checkSequentialScanField(report: *ValidationReport, allocator: Allocator, offset: usize,
 	name: []const u8, observed: u8, required: u8) Allocator.Error!void
 {
@@ -281,11 +296,16 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 					(body[5] > 1 or (body[5] == 1 and body[6] > 2)))
 				{
 					// WARN class (validate, 2026-11-05): a deviation with no
-					// proven violation; JFIF 1.02 is the latest version.
-					const detail = try std.fmt.allocPrint(allocator,
-						"JFIF version {d}.{d:0>2}: not in the claimed spec version (latest is 1.02); metadata semantics are unchecked", .{ body[5], body[6] });
+					// proven violation; JFIF 1.02 is the latest version. The
+					// exact FFmpeg/Libav pattern is an admitted known defect.
+					const known = isFfmpegJfifVersion(body);
+					const detail = if (known)
+						try allocator.dupe(u8, "JFIF version bytes 02 01: the byte-swapped 1.02 that FFmpeg/Libav mjpegenc (before b19313218c) and rtpdec_jpeg write; admitted known defect")
+					else
+						try std.fmt.allocPrint(allocator,
+							"JFIF version {d}.{d:0>2}: not in the claimed spec version (latest is 1.02); metadata semantics are unchecked", .{ body[5], body[6] });
 					defer allocator.free(detail);
-					try addFinding(&report, allocator, .warn, .jfif_version_unchecked,
+					try addFinding(&report, allocator, if (known) .known_defect else .warn, .jfif_version_unchecked,
 						seg_body_start + (if (body[5] > 1) @as(usize, 5) else 6), detail);
 					report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
 				}

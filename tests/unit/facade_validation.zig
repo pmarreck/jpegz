@@ -363,20 +363,22 @@ test "future JFIF version bytes classify coverage without asserting corruption" 
 			defer allocator.free(data);
 			data[field] = @intCast(value);
 			const future = if (field == 11) value > 1 else value > 2;
+			const ffmpeg = data[11] == 2 and data[12] == 1;
 			var result = try jpegz.validateAny(allocator, data);
 			defer result.deinit(allocator);
 			var notices: usize = 0;
 			for (result.findings.items) |finding| {
 				if (finding.code != .jfif_version_unchecked) continue;
 				notices += 1;
-				try std.testing.expectEqual(jpegz.Severity.warn, finding.severity);
+				// 02 01 is admitted known defect A2, tested on its own below.
+				try std.testing.expectEqual(if (ffmpeg) jpegz.Severity.known_defect else .warn, finding.severity);
 				try std.testing.expectEqual(@as(?u64, field), finding.offset);
 				try std.testing.expectEqual(finding.offset, finding.host_offset);
 				try std.testing.expect(finding.offset_is_exact);
 			}
 			if (future) {
 				// validate, 2026-11-05: a WARN-class deviation, not inconclusive.
-				try std.testing.expectEqual(jpegz.StrictVerdict.valid, result.verdict);
+				try std.testing.expectEqual(if (ffmpeg) jpegz.StrictVerdict.known_defect else .valid, result.verdict);
 				try std.testing.expectEqual(@as(usize, 1), notices);
 			} else {
 				try std.testing.expectEqual(@as(usize, 0), notices);
@@ -398,6 +400,84 @@ test "future JFIF version bytes classify coverage without asserting corruption" 
 		try std.testing.expectEqual(jpegz.StrictVerdict.valid, result.verdict);
 		for (result.findings.items) |finding|
 			try std.testing.expect(finding.code != .jfif_metadata_invalid);
+	}
+}
+
+test "JFIF version bytes 02 01 are admitted known defect A2 only as an exact match" {
+	const allocator = std.testing.allocator;
+	const exemplar = @embedFile("fixtures/historic_a2_ffmpeg_jfif_0201.jpg");
+	const pristine = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	// The exemplar is the pristine fixture with only the version bytes changed.
+	try std.testing.expectEqualSlices(u8, pristine[0..11], exemplar[0..11]);
+	try std.testing.expectEqualSlices(u8, pristine[13..], exemplar[13..]);
+	const Case = struct { name: []const u8, data: []u8, severity: ?jpegz.Severity, verdict: jpegz.StrictVerdict };
+	var cases: std.ArrayList(Case) = .empty;
+	defer {
+		for (cases.items) |case| allocator.free(case.data);
+		cases.deinit(allocator);
+	}
+	// Each near match changes one byte of the exemplar's APP0 (body at 6..20).
+	const Patch = struct { name: []const u8, at: ?usize, value: u8 = 0, severity: ?jpegz.Severity, verdict: jpegz.StrictVerdict };
+	const patches = [_]Patch{
+		.{ .name = "exemplar", .at = null, .severity = .known_defect, .verdict = .known_defect },
+		.{ .name = "units 2", .at = 13, .value = 2, .severity = .known_defect, .verdict = .known_defect },
+		.{ .name = "version 02 00", .at = 12, .value = 0, .severity = .warn, .verdict = .valid },
+		.{ .name = "version 02 02", .at = 12, .value = 2, .severity = .warn, .verdict = .valid },
+		.{ .name = "version 03 01", .at = 11, .value = 3, .severity = .warn, .verdict = .valid },
+		.{ .name = "version 01 01", .at = 11, .value = 1, .severity = null, .verdict = .valid },
+		.{ .name = "units 3", .at = 13, .value = 3, .severity = .warn, .verdict = .valid },
+		.{ .name = "Xdensity 0", .at = 15, .value = 0, .severity = .warn, .verdict = .valid },
+		.{ .name = "Ydensity 0", .at = 17, .value = 0, .severity = .warn, .verdict = .valid },
+		.{ .name = "JFXX identifier", .at = 9, .value = 'X', .severity = null, .verdict = .valid },
+	};
+	for (patches) |patch| {
+		const data = try allocator.dupe(u8, exemplar);
+		errdefer allocator.free(data);
+		if (patch.at) |at| data[at] = patch.value;
+		try cases.append(allocator, .{ .name = patch.name, .data = data, .severity = patch.severity, .verdict = patch.verdict });
+	}
+	// A 1x1 thumbnail that fills the segment exactly keeps the signature;
+	// a missing thumbnail or two extra bytes do not.
+	for ([_]usize{ 0, 3, 5 }) |extra| {
+		var header = exemplar[2..20].*;
+		header[3] = @intCast(16 + extra);
+		header[16] = 1;
+		header[17] = 1;
+		const filler = [_]u8{0} ** 5;
+		const data = try std.mem.concat(allocator, u8, &.{ exemplar[0..2], &header, filler[0..extra], exemplar[20..] });
+		errdefer allocator.free(data);
+		try cases.append(allocator, .{
+			.name = switch (extra) { 0 => "thumbnail without data", 3 => "exact thumbnail", else => "thumbnail with extra bytes" },
+			.data = data,
+			.severity = if (extra == 3) .known_defect else .warn,
+			.verdict = if (extra == 3) .known_defect else .valid,
+		});
+	}
+	// An incomplete APP0 does not establish JFIF at all.
+	{
+		var header = exemplar[2..20].*;
+		header[3] = 15;
+		const data = try std.mem.concat(allocator, u8, &.{ exemplar[0..2], header[0..17], exemplar[20..] });
+		errdefer allocator.free(data);
+		try cases.append(allocator, .{ .name = "13-byte body", .data = data, .severity = null, .verdict = .valid });
+	}
+	for (cases.items) |case| {
+		var result = try jpegz.validateAny(allocator, case.data);
+		defer result.deinit(allocator);
+		var seen: ?jpegz.Severity = null;
+		for (result.findings.items) |finding| {
+			if (finding.code != .jfif_version_unchecked) continue;
+			try std.testing.expect(seen == null);
+			seen = finding.severity;
+			try std.testing.expectEqual(@as(?u64, if (case.data[11] == 1) 12 else 11), finding.offset);
+			try std.testing.expect(finding.offset_is_exact);
+			const named = std.mem.indexOf(u8, finding.detail.?, "FFmpeg/Libav") != null;
+			try std.testing.expectEqual(finding.severity == .known_defect, named);
+		}
+		if (seen != case.severity or result.verdict != case.verdict) {
+			std.debug.print("A2 case {s}: severity {?} verdict {s}\n", .{ case.name, seen, @tagName(result.verdict) });
+			return error.TestUnexpectedResult;
+		}
 	}
 }
 
