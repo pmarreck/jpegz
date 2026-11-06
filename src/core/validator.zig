@@ -91,7 +91,7 @@ fn addFinding(
     });
 
     // Promote `overall` if this finding is more severe.
-    if (@intFromEnum(severity) > @intFromEnum(report.overall)) {
+    if (severity.rank() > report.overall.rank()) {
         report.overall = severity;
     }
 }

@@ -156,7 +156,10 @@ pub const ValidationReport = struct {
     findings: std.ArrayList(Finding),
 
     pub fn isValid(self: ValidationReport) bool {
-        return self.overall == .pass or self.overall == .info or self.overall == .warn;
+        // A known defect is not damage; this legacy boolean stays true for it,
+        // as it did when its findings were WARN. `validateAny` separates it.
+        return self.overall == .pass or self.overall == .info or self.overall == .warn or
+            self.overall == .known_defect;
     }
 
     pub fn deinit(self: *ValidationReport, allocator: Allocator) void {
@@ -521,7 +524,7 @@ test {
 /// `classifyClassicFindings` for the precedence `validateAny` applies.
 pub fn classicFindingVerdict(code: FindingCode, severity: Severity) StrictVerdict {
 	if (severity == .fail) return .corrupt;
-	return switch (code) {
+	const by_code: StrictVerdict = switch (code) {
 		.missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => .corrupt,
 		.entropy_padding_zero_bits => .known_defect,
 		.unknown_marker, .unrecognized_container, .jxl_validator_unavailable => .indeterminate,
@@ -547,6 +550,10 @@ pub fn classicFindingVerdict(code: FindingCode, severity: Severity) StrictVerdic
 		.reversible_exponent_mismatch, .cblk_contribution_ends_ff,
 		=> .valid,
 	};
+	// A finding emitted as part of an admitted known defect classifies by its
+	// severity unless its code is corrupt class (validate ruling 2026-11-06).
+	if (severity == .known_defect and by_code != .corrupt) return .known_defect;
+	return by_code;
 }
 
 /// Translate the severity-rated T.81 / T.87 report into the family-wide
@@ -1062,7 +1069,7 @@ test "classic per-finding verdict covers every code and severity" {
 	// A future JFIF version is a WARN-class deviation (validate, 2026-11-05),
 	// so it no longer leaves the file inconclusive.
 	const indeterminate_codes = [_]FindingCode{ .unknown_marker, .unrecognized_container, .jxl_validator_unavailable };
-	const severities = [_]Severity{ .pass, .info, .warn, .fail };
+	const severities = [_]Severity{ .pass, .info, .warn, .fail, .known_defect };
 	inline for (@typeInfo(FindingCode).@"enum".fields) |field| {
 		const code: FindingCode = @enumFromInt(field.value);
 		const listed_corrupt = std.mem.indexOfScalar(FindingCode, &corrupt_codes, code) != null;
@@ -1070,7 +1077,7 @@ test "classic per-finding verdict covers every code and severity" {
 		for (severities) |severity| {
 			const expected: StrictVerdict = if (severity == .fail or listed_corrupt)
 				.corrupt
-			else if (code == .entropy_padding_zero_bits)
+			else if (severity == .known_defect or code == .entropy_padding_zero_bits)
 				.known_defect
 			else if (listed_indeterminate)
 				.indeterminate

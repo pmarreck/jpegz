@@ -58,10 +58,11 @@ jpegz_strict_result_free(&r);
 ```
 
 The verdict separates `known_defect` from validity and corruption. jpegz
-identifies the encoder defect; warning severity describes its treatment.
+identifies the encoder defect, and its findings carry their own severity,
+`known_defect`, never WARN or FAIL.
 The CLI exits 4 for known defects, 0 for valid input, 1 for corruption, 2 for
-usage/I/O errors and 3 for inconclusive validation. Damage and incomplete
-validation take precedence over a known defect.
+usage/I/O errors and 3 for inconclusive validation. Damage takes precedence
+over a known defect, and a known defect over inconclusive validation.
 
 `unsupported` (well-formed, uses a feature
 the validator does not cover) and `indeterminate` (no conclusion reached) are

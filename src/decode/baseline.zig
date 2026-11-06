@@ -61,7 +61,7 @@ fn emitFinding(
 /// Classify a Huffman segment ending (T.81 §F.1.2.3) and report it at its
 /// absolute offset. All-zero pad bits are a known encoder defect (Intel JPEG
 /// Library 1.51, Olympus camera firmware) that mainstream readers open with
-/// correct pixels: WARN `entropy_padding_zero_bits`. Mixed bits look like
+/// correct pixels: `entropy_padding_zero_bits` at severity `known_defect`. Mixed bits look like
 /// damage: FAIL `entropy_padding_not_ones`. A whole extra entropy byte stays
 /// `huffman_table_corrupt`. `base` is the file offset of `br.data[0]`.
 fn reportEntropyBoundary(

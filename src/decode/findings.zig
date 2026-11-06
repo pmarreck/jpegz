@@ -61,7 +61,7 @@ pub const FindingsSink = struct {
         const detail = std.fmt.bufPrint(&buf,
             "{d} pad bits before the marker are all 0 (T.81 F.1.2.3; known encoder defect)",
             .{pad_bits}) catch unreachable;
-        return self.emitExact(.warn, .entropy_padding_zero_bits, offset, detail);
+        return self.emitExact(.known_defect, .entropy_padding_zero_bits, offset, detail);
     }
 
     /// Like `emit`, for an offset that names the exact in-buffer defect byte.

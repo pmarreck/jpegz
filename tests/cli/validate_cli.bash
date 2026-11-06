@@ -298,7 +298,12 @@ out=; err=; rc=
 capture "$jpegz_cli" --json "$known_defect"
 [ "$rc" -eq 4 ] && pass "known defect exits 4" || fail "known defect exits 4" "rc=$rc"
 assert_contains "$out" '"verdict":"known_defect"' "JSON classifies the known defect"
-assert_contains "$out" '"severity":"WARN","code":"entropy_padding_zero_bits"' "known defect retains its treatment and typed cause"
+assert_contains "$out" '"severity":"KNOWN_DEFECT","code":"entropy_padding_zero_bits"' "known defect finding carries its own severity and typed cause"
+case $out in *'"severity":"WARN"'*|*'"severity":"FAIL"'*) fail "known defect finding is never WARN or FAIL" "$out" ;; *) pass "known defect finding is never WARN or FAIL" ;; esac
+out=; err=; rc=
+capture "$jpegz_cli" "$known_defect"
+assert_contains "$out" 'KNOWN_DEFECT' "human output labels the known-defect finding"
+case $out in *WARN*|*FAIL*) fail "human known-defect output has no WARN or FAIL tag" "$out" ;; *) pass "human known-defect output has no WARN or FAIL tag" ;; esac
 out=; err=; rc=
 capture "$jpegz_cli" --simple "$known_defect"
 assert_contains "$out" 'known_defect' "text classifies the known defect"

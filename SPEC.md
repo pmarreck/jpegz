@@ -116,8 +116,11 @@ or lossless, Huffman or arithmetic, differential or not, and baseline (SOF0
 only); 4, 8 and 12 are not frames.
 
 jpegz owns recognition of known JPEG encoder defects. All-zero Huffman padding
-is `known_defect` (appended verdict value 4), with typed finding 63 and WARN
-treatment. Ordinary warnings remain distinct. Corruption retains precedence;
+is `known_defect` (appended verdict value 4), with typed finding 63 at its own
+severity, `known_defect` (appended severity value 4). A known defect is
+independent of WARN and FAIL and never reads as either (validate, 2026-11-06).
+A report's overall severity ranks FAIL > KNOWN_DEFECT > WARN > INFO > PASS, so
+any FAIL still wins. Ordinary warnings remain distinct. Corruption retains precedence;
 a known defect outranks an unsupported or inconclusive check, which describes
 the tool's reach rather than the file (validate, 2026-11-05). Decoding still
 accepts the recognized padding defect. The CLI reports `known_defect` in

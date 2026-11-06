@@ -285,6 +285,10 @@ typedef enum {
     JPEGZ_SEVERITY_INFO = 1,
     JPEGZ_SEVERITY_WARN = 2,
     JPEGZ_SEVERITY_FAIL = 3,
+    /* Part of an admitted known defect: never WARN or FAIL. Appended, so
+     * order findings by meaning (FAIL > KNOWN_DEFECT > WARN > INFO > PASS),
+     * not by this number. */
+    JPEGZ_SEVERITY_KNOWN_DEFECT = 4,
 } jpegz_severity_t;
 
 typedef enum {

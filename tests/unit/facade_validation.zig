@@ -89,7 +89,7 @@ test "known encoder defects have their own verdict without hiding corruption" {
 		for (result.findings.items) |finding| {
 			if (finding.code != .entropy_padding_zero_bits) continue;
 			found = true;
-			try std.testing.expectEqual(jpegz.Severity.warn, finding.severity);
+			try std.testing.expectEqual(jpegz.Severity.known_defect, finding.severity);
 			try std.testing.expect(finding.offset_is_exact);
 			try std.testing.expectEqual(@as(?u64, case.pad_offset), finding.offset);
 		}
@@ -1429,7 +1429,7 @@ test "JPEG facade warns on zero padding from a known encoder and still decodes" 
 	var warned: usize = 0;
 	for (result.findings.items) |finding| {
 		try std.testing.expect(finding.severity != .fail);
-		if (finding.code == .entropy_padding_zero_bits and finding.severity == .warn and
+		if (finding.code == .entropy_padding_zero_bits and finding.severity == .known_defect and
 			finding.offset == 293 and finding.offset_is_exact) warned += 1;
 	}
 	try std.testing.expectEqual(@as(usize, 1), warned);

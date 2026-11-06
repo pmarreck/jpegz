@@ -120,6 +120,15 @@ int main(void) {
 		       "known defect has its own appended verdict");
 		ASSERT(strcmp(jpegz_verdict_name(defect.verdict), "known_defect") == 0,
 		       "C API names the known-defect classification");
+		/* The padding finding crosses the ABI as its own severity, which also
+		 * holds the curated C enum to the Zig value. */
+		int padding_severity_ok = 0;
+		for (size_t i = 0; i < defect.findings_len; i++) {
+			if (defect.findings[i].code != JPEGZ_FINDING_ENTROPY_PADDING_ZERO_BITS) continue;
+			padding_severity_ok = defect.findings[i].severity == JPEGZ_SEVERITY_KNOWN_DEFECT;
+		}
+		ASSERT(JPEGZ_SEVERITY_KNOWN_DEFECT == 4 && padding_severity_ok,
+		       "known-defect finding has its own severity, never WARN");
 		jpegz_strict_result_free(&defect);
 	}
     /* Version is non-empty. */

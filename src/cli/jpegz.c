@@ -77,6 +77,7 @@ static const char *sev_label(jpegz_severity_t s) {
     case JPEGZ_SEVERITY_INFO: return "INFO";
     case JPEGZ_SEVERITY_WARN: return "WARN";
     case JPEGZ_SEVERITY_FAIL: return "FAIL";
+    case JPEGZ_SEVERITY_KNOWN_DEFECT: return "KNOWN_DEFECT";
     }
     return "????";
 }
@@ -89,6 +90,7 @@ static const char *sev_color(jpegz_severity_t s, const options_t *o) {
     case JPEGZ_SEVERITY_INFO: return "\033[36m";
     case JPEGZ_SEVERITY_WARN: return "\033[33m";
     case JPEGZ_SEVERITY_FAIL: return "\033[31m";
+    case JPEGZ_SEVERITY_KNOWN_DEFECT: return "\033[38;5;208m"; /* orange */
     }
     return "";
 }
@@ -222,7 +224,7 @@ static const char *verdict_color(int verdict, const options_t *o) {
     case JPEGZ_VERDICT_CORRUPT:       return "\033[31m"; /* red    */
     case JPEGZ_VERDICT_UNSUPPORTED:   return "\033[36m"; /* cyan   */
     case JPEGZ_VERDICT_INDETERMINATE: return "\033[33m"; /* yellow */
-    case JPEGZ_VERDICT_KNOWN_DEFECT:  return "\033[33m"; /* yellow */
+    case JPEGZ_VERDICT_KNOWN_DEFECT:  return "\033[38;5;208m"; /* orange, as in validate */
     default:                          return "";
     }
 }

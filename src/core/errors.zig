@@ -35,6 +35,22 @@ pub const Severity = enum(u8) {
     warn = 2,
     /// Cannot decode or structurally broken.
     fail = 3,
+    /// Part of an admitted known defect: a producer pattern recognized as
+    /// written that way, not damage. Independent of WARN and FAIL (validate
+    /// ruling 2026-11-06), so it never reads as either. Appended; compare
+    /// severities with `rank`, never with the numeric value.
+    known_defect = 4,
+
+    /// Report-level ordering: fail > known_defect > warn > info > pass.
+    pub fn rank(self: Severity) u8 {
+        return switch (self) {
+            .pass => 0,
+            .info => 1,
+            .warn => 2,
+            .known_defect => 3,
+            .fail => 4,
+        };
+    }
 };
 
 /// JPEG storage variant detected during validation. Useful even when
