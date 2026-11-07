@@ -57,6 +57,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Deferred
 
-- [ ] Implement JPEG-LS restart validation and test dormant run-mode/context findings.
+- [ ] Implement JPEG-LS restart validation and test dormant run-mode/context findings; checked 2026-11-07: the vendored CharLS 3.0 encoder has no restart-interval API, so an independent restart oracle needs another T.87 encoder (for example HP's LOCO-I reference) or a stream hand-built from T.87's restart rules with the spec text at hand; the decoder currently skips DRI.
 - [ ] Inventory remaining T.81/T.87 gaps including DNL, multiscan lossless, differential/hierarchical modes and uncommon component layouts.
 - [ ] Consider DRI parallelism and SIMD after correctness coverage; measure pixel divergence before proposing spec-derived IDCT/color replacement.
