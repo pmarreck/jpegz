@@ -90,7 +90,9 @@ missing/misordered restart markers as corrupt. Under validate's 2026-11-05 rule
 (FAIL is likely damage, WARN a writer's spec violation; see
 `docs/plan_context/severity-audit-2026-11-05.md`) the report gives recovered
 truncation and restart findings FAIL severity, so the legacy `isValid()` rejects
-them too; the decoders still report them as recovered. Legal 0xFF fill is an
+them too; the decoders still report them as recovered. A missing EOI is FAIL
+as well (2026-11-06: no severity rests on whether readers decode the file);
+it does not stop the codec check. Legal 0xFF fill is an
 INFO observation, and metadata warnings remain valid. A codec check
 that returns `NotImplemented` maps to unsupported; a skipped check maps to
 indeterminate. Known corruption takes precedence. The Zig legacy report's

@@ -842,17 +842,26 @@ test "classic facade requires EOI even after a complete progressive scan" {
 		}
 		try std.testing.expectEqual(if (case.valid) jpegz.StrictVerdict.valid else .corrupt, result.verdict);
 	}
-	// Preserve legacy recovery and the original finding's severity/location.
-	var legacy = try jpegz.validate(allocator, progressive[0..441]);
-	defer legacy.deinit(allocator);
-	try std.testing.expect(legacy.isValid());
-	var strict = try jpegz.validateAny(allocator, progressive[0..441]);
-	defer strict.deinit(allocator);
-	var found = false;
-	for (strict.findings.items) |finding| {
-		if (finding.code == .missing_eoi and finding.severity == .warn and finding.offset == 441) found = true;
+	// A missing EOI is FAIL class (owner 2026-11-06: severity never rests on
+	// readers decoding the pixels anyway). It does not block the codec check,
+	// so the decoder still reports whatever else it finds. (The other cut
+	// streams above end inside entropy data, an earlier blocking FAIL.)
+	for ([_][]const u8{progressive[0..441]}) |truncated| {
+		var legacy = try jpegz.validate(allocator, truncated);
+		defer legacy.deinit(allocator);
+		try std.testing.expect(!legacy.isValid());
+		try std.testing.expectEqual(.decoded, legacy.codec_check);
+		var strict = try jpegz.validateAny(allocator, truncated);
+		defer strict.deinit(allocator);
+		var found: usize = 0;
+		for (strict.findings.items) |finding| {
+			if (finding.code != .missing_eoi) continue;
+			found += 1;
+			try std.testing.expectEqual(jpegz.Severity.fail, finding.severity);
+			try std.testing.expectEqual(@as(?u64, truncated.len), finding.offset);
+		}
+		try std.testing.expectEqual(@as(usize, 1), found);
 	}
-	try std.testing.expect(found);
 }
 
 test "classic facade distinguishes unchecked and unsupported codecs from validity" {

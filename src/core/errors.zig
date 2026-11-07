@@ -30,8 +30,8 @@ pub const Severity = enum(u8) {
     /// detected", "arithmetic coding used"). Surfaces info validate
     /// may want to annotate.
     info = 1,
-    /// Tolerated deviation; image decodes but violates a non-critical
-    /// spec requirement (e.g., missing optional APPn marker).
+    /// A spec violation most likely made by the writer. Whether other
+    /// readers decode the file is not a criterion (owner, 2026-11-06).
     warn = 2,
     /// Cannot decode or structurally broken.
     fail = 3,
@@ -120,8 +120,9 @@ pub const FindingCode = enum(u32) {
     progressive_scan_invalid = 59,
     // Both APP0 JFIF and APP14 Adobe present with conflicting color-
     // space implications (JFIF implies YCbCr for 3-component; APP14
-    // ColorTransform != 1 disagrees). Decoder honors APP14 (libjpeg
-    // parity) but surfaces the conflict for strict validators.
+    // ColorTransform != 1 disagrees). WARN: two well-formed segments that
+    // contradict each other are a writer's violation. For pixels the decoder
+    // honors APP14, as libjpeg does; that choice does not set the severity.
     adobe_app14_conflicts_jfif = 60,
     // SOF declares X (width) = 0 or Y (height) = 0. T.81 §B.2.2: X must
     // be > 0; Y = 0 is defined only alongside a DNL segment, which this
@@ -135,9 +136,9 @@ pub const FindingCode = enum(u32) {
     // padding. Registry sign-off 2026-10-20; narrowed to mixed bits 2026-10-23.
     entropy_padding_not_ones = 62,
     // T.81 §F.1.2.3 again, for 1 to 7 pad bits that are all 0 at a Huffman
-    // segment boundary followed by a marker. Some encoders write this (Intel
-    // JPEG Library 1.51, Olympus camera firmware) and mainstream readers
-    // decode it with correct pixels, so it is a WARN and never stops decoding.
+    // segment boundary followed by a marker. Encoders write this (Intel JPEG
+    // Library 1.51, Olympus camera firmware), so it is an admitted known
+    // defect, emitted at known_defect severity, and never stops decoding.
     // Offset is the pad byte; the detail gives the bit count. Registry
     // sign-off 2026-10-23.
     entropy_padding_zero_bits = 63,

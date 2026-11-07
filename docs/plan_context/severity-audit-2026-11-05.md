@@ -106,3 +106,27 @@ There is a real producer.
 - **Effect:** libjpeg-turbo warns, then decodes identical pixels.
 
 Following validate's rule, this is a KNOWN_DEFECT registry candidate for exactly that signature, not a softer default for row 64. Every other sequential SOS field violation stays FAIL.
+
+## Re-grade without reader evidence (owner, 2026-11-06)
+
+The owner ruled that no severity rests on what other readers decode: WARN is
+a spec violation most likely made by the writer. The "Decodes anyway?" column
+above is therefore no longer a criterion. Each row was re-read using only the
+specification and the damage and producer columns.
+
+- **Changed: row 2 `missing_eoi`, WARN to FAIL severity.** Its only support
+  for WARN was that djpeg decodes the pixels. There is no producer, and
+  truncation is the likely cause. The verdict was already corrupt, so only
+  the label changes, along with the legacy `isValid()`, which now rejects it.
+  The FAIL does not stop the codec check.
+- **Unchanged, now on spec and producer grounds alone:**
+  - row 8 `extraneous_bytes_before_marker` stays WARN (webcam MJPEG writers);
+  - row 60 `adobe_app14_conflicts_jfif` stays WARN (two well-formed segments that contradict each other);
+  - row 67 stays WARN, except the admitted A2 bytes `02 01`, which are KNOWN_DEFECT;
+  - row 63 stays KNOWN_DEFECT on producer evidence.
+- **FAIL rows that cited reader failure** (5 reserved markers, 6 repeated SOF):
+  each is also unspecified in T.81 and produced by damage, with no known writer.
+  They stay FAIL.
+- **Rows 64 and 65:** "identical pixels" no longer argues for WARN. Without
+  producer evidence they stay FAIL. Row 64's Go signature is a separate
+  known-defect entry (68).

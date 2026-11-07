@@ -610,8 +610,12 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             "no SOS marker found before stream end");
     }
     if (!seen_eoi and !blockingFail(&report, nonblocking_fails)) {
-        try addFinding(&report, allocator, .warn, .missing_eoi, data.len,
+		// FAIL class: an interrupted transfer, with no known writer. It was
+		// WARN because readers decode the pixels anyway, which no longer
+		// counts (owner, 2026-11-06). The codec check still runs.
+        try addFinding(&report, allocator, .fail, .missing_eoi, data.len,
             "stream lacks EOI marker (0xFF 0xD9)");
+		nonblocking_fails += 1;
     }
 
     // Progressive frames decode in multiple scans; surface the count as an
