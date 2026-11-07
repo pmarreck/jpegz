@@ -402,3 +402,7 @@ test "buildFromDht: standard luma AC table — long-code val_offset/max_code tra
     // 0xFFFE.
     try std.testing.expectEqual(@as(i32, 0xFFFE), t.max_code[16]);
 }
+
+test {
+	_ = @import("k3_tables.zig");
+}

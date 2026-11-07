@@ -166,8 +166,14 @@ pub const FindingCode = enum(u32) {
 	// offset at the Se byte. Any other sequential SOS field violation, or the
 	// same bytes in a file with more than one scan, stays 64.
 	sequential_scan_zero_se = 68,
-	// validate-approved 2026-11-06 (69 is reserved for a finding not yet
-	// implemented). A SOF that gives two components the same ID Ci
+	// validate-approved 2026-11-06. Missing Huffman tables. With no DHT
+	// segment anywhere in a sequential Huffman frame, the Motion-JPEG pattern
+	// (libjpeg-turbo 1.4 ChangeLog): known defect when every scan decodes
+	// completely with the T.81 Annex K.3 tables, FAIL otherwise, at the first
+	// SOS. With DHT present, a scan naming an undefined table is FAIL at its
+	// Td/Ta byte.
+	huffman_tables_missing = 69,
+	// validate-approved 2026-11-06. A SOF that gives two components the same ID Ci
 	// (T.81 B.2.2 requires distinct IDs), at the repeated Ci byte. WARN for
 	// exactly four components with IDs (1, 2, 3, 1), CMYK/YCCK writers that
 	// gave K the ID 1 (libjpeg-turbo 1.2.0 ChangeLog); an interleaved scan

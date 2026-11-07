@@ -2606,3 +2606,98 @@ test "Go 1.0's Se=0 in the only sequential scan is known defect 68; near misses 
 	}
 	try std.testing.expect(at_first);
 }
+
+/// Copy `data` without its DHT segments (Tc/Th filter: null removes all).
+/// Walks the marker chain and copies each scan's entropy data unchanged.
+fn withoutDht(allocator: std.mem.Allocator, data: []const u8, only_tcth: ?u8) ![]u8 {
+	var out: std.ArrayList(u8) = .empty;
+	errdefer out.deinit(allocator);
+	try out.appendSlice(allocator, data[0..2]);
+	var pos: usize = 2;
+	while (pos + 4 <= data.len) {
+		const marker = data[pos + 1];
+		if (marker == 0xd9) break;
+		const len = std.mem.readInt(u16, data[pos + 2 ..][0..2], .big);
+		var end = pos + 2 + len;
+		if (marker == 0xda) {
+			while (end + 1 < data.len and !(data[end] == 0xff and data[end + 1] != 0 and (data[end + 1] < 0xd0 or data[end + 1] > 0xd7))) end += 1;
+		}
+		const drop = marker == 0xc4 and (only_tcth == null or data[pos + 4] == only_tcth.?);
+		if (!drop) try out.appendSlice(allocator, data[pos..end]);
+		pos = end;
+	}
+	try out.appendSlice(allocator, data[pos..]);
+	return out.toOwnedSlice(allocator);
+}
+
+test "no DHT anywhere is known defect 69 when the K.3 tables decode every scan" {
+	const allocator = std.testing.allocator;
+	// A3: libjpeg-turbo cjpeg output with every DHT removed; its tables were
+	// the K.3 tables (HISTORIC_ENCODER_PROVENANCE.md).
+	const exemplar = @embedFile("fixtures/historic_a3_mjpeg_no_dht.jpg");
+	const control = @embedFile("fixtures/historic_a3_control_with_dht.jpg");
+	const stripped = try withoutDht(allocator, control, null);
+	defer allocator.free(stripped);
+	try std.testing.expectEqualSlices(u8, exemplar, stripped);
+	const first_sos = std.mem.indexOf(u8, exemplar, &.{ 0xff, 0xda }).?;
+
+	var report = try jpegz.validate(allocator, exemplar);
+	defer report.deinit(allocator);
+	try expectOnlyTyped(report, .known_defect, .huffman_tables_missing, first_sos);
+	try std.testing.expectEqual(jpegz.Severity.known_defect, report.overall);
+	var expected = try jpegz.decode(allocator, control);
+	defer expected.deinit(allocator);
+	var actual = try jpegz.decode(allocator, exemplar);
+	defer actual.deinit(allocator);
+	try std.testing.expectEqualSlices(u8, expected.pixels, actual.pixels);
+	var control_report = try jpegz.validate(allocator, control);
+	defer control_report.deinit(allocator);
+	for (control_report.findings.items) |f| try std.testing.expect(f.code != .huffman_tables_missing);
+
+	// Cut short: half the entropy data, then EOI. K.3 cannot decode it all.
+	const half = first_sos + (exemplar.len - first_sos) / 2;
+	const cut = try std.mem.concat(allocator, u8, &.{ exemplar[0..half], &.{ 0xff, 0xd9 } });
+	defer allocator.free(cut);
+	var cut_report = try jpegz.validate(allocator, cut);
+	defer cut_report.deinit(allocator);
+	try std.testing.expectEqual(jpegz.Severity.fail, cut_report.overall);
+	var cut_fail = false;
+	for (cut_report.findings.items) |f| {
+		if (f.code == .huffman_tables_missing) {
+			try std.testing.expectEqual(jpegz.Severity.fail, f.severity);
+			cut_fail = true;
+		}
+	}
+	try std.testing.expect(cut_fail);
+
+	// Only the chrominance AC table missing: FAIL 69 at the first scan
+	// component whose Ta names destination 1.
+	const partial = try withoutDht(allocator, control, 0x11);
+	defer allocator.free(partial);
+	const sos = std.mem.indexOf(u8, partial, &.{ 0xff, 0xda }).?;
+	var tdta_at: usize = 0;
+	for (0..partial[sos + 4]) |k| {
+		if (partial[sos + 6 + 2 * k] & 0x0f == 1) {
+			tdta_at = sos + 6 + 2 * k;
+			break;
+		}
+	}
+	try std.testing.expect(tdta_at != 0);
+	var partial_report = try jpegz.validate(allocator, partial);
+	defer partial_report.deinit(allocator);
+	try std.testing.expectEqual(jpegz.Severity.fail, partial_report.overall);
+	var exact = false;
+	for (partial_report.findings.items) |f| {
+		if (f.code == .huffman_tables_missing and f.severity == .fail and f.offset == tdta_at and f.offset_is_exact) exact = true;
+	}
+	try std.testing.expect(exact);
+
+	// A progressive file without DHT is not the Motion-JPEG pattern.
+	const progressive = @embedFile("fixtures/progressive_32x32_gray_dri.jpg");
+	const bare = try withoutDht(allocator, progressive, null);
+	defer allocator.free(bare);
+	var p_report = try jpegz.validate(allocator, bare);
+	defer p_report.deinit(allocator);
+	try std.testing.expectEqual(jpegz.Severity.fail, p_report.overall);
+	for (p_report.findings.items) |f| try std.testing.expect(f.code != .huffman_tables_missing);
+}

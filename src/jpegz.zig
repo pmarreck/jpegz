@@ -528,7 +528,7 @@ pub fn classicFindingVerdict(code: FindingCode, severity: Severity) StrictVerdic
 		.missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => .corrupt,
 		.entropy_padding_zero_bits, .huffman_table_full_all_ones, .sequential_scan_zero_se => .known_defect,
 		.unknown_marker, .unrecognized_container, .jxl_validator_unavailable => .indeterminate,
-		.jfif_version_unchecked, .sof_component_id_duplicate, .missing_soi, .truncated_stream, .bad_marker_length, .duplicate_sof, .extraneous_bytes_before_marker,
+		.jfif_version_unchecked, .sof_component_id_duplicate, .huffman_tables_missing, .missing_soi, .truncated_stream, .bad_marker_length, .duplicate_sof, .extraneous_bytes_before_marker,
 		.entropy_fill_bytes, .invalid_sof_precision, .huffman_table_corrupt, .quantization_table_corrupt,
 		.arithmetic_table_corrupt, .sof_component_count_invalid, .sos_component_mismatch,
 		.dct_coefficient_overflow, .progressive_scan_invalid, .adobe_app14_conflicts_jfif, .invalid_dimensions,

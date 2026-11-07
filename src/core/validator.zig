@@ -187,6 +187,12 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 	// Se byte of a sequential scan matching finding 68's Go signature; judged
 	// after the walk, when the number of scans is known.
 	var go_zero_se: ?usize = null;
+	// Finding 69: Huffman table destinations defined so far ([Tc][Th]), the
+	// first scan, and the first Td/Ta byte naming a table not yet defined.
+	var dht_defined = [2][4]bool{ .{ false, false, false, false }, .{ false, false, false, false } };
+	var seen_dht = false;
+	var first_sos_offset: ?usize = null;
+	var first_missing_table: ?usize = null;
     var sos_count: u32 = 0; // number of SOS (scan) markers seen
 	// T.81 Annex J: a DHP before the first frame makes the stream hierarchical,
 	// where several frames are legal and later ones are differential.
@@ -337,9 +343,11 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 		// deterministically. Malformed or oversubscribed tables are left to
 		// the decode-through, which reports them as 51.
 		if (marker_byte == Marker.DHT) {
+			seen_dht = true;
 			const bits_bytes: usize = 16;
 			var hp: usize = seg_body_start;
 			while (hp + 1 + bits_bytes <= seg_end) {
+				if (data[hp] >> 4 <= 1 and data[hp] & 0x0F <= 3) dht_defined[data[hp] >> 4][data[hp] & 0x0F] = true;
 				const bits = data[hp + 1 ..][0..bits_bytes].*;
 				var total: usize = 0;
 				for (bits) |count| total += count;
@@ -513,6 +521,26 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         } else if (marker_byte == Marker.SOS) {
             seen_sos = true;
             sos_count += 1;
+			if (first_sos_offset == null) first_sos_offset = marker_offset;
+			// Finding 69: a sequential scan naming a Huffman table no DHT has
+			// defined yet. Judged after the walk (see below).
+			if (seen_sof and (report.variant == .baseline_huffman or report.variant == .extended_huffman) and
+				seg_body_start < seg_end and first_missing_table == null)
+			{
+				const scan_ns = data[seg_body_start];
+				// Only a complete selector list; Ss, Se and Ah/Al are not Td/Ta.
+				const complete_list = seg_len == 6 + @as(usize, scan_ns) * 2;
+				var sj: usize = 0;
+				while (complete_list and sj < scan_ns) : (sj += 1) {
+					const tdta = data[seg_body_start + 2 + 2 * sj];
+					const td = tdta >> 4;
+					const ta = tdta & 0x0F;
+					if ((td <= 3 and !dht_defined[0][td]) or (ta <= 3 and !dht_defined[1][ta])) {
+						first_missing_table = seg_body_start + 2 + 2 * sj;
+						break;
+					}
+				}
+			}
 			// T.81 B.2.3: diagnose sequential SOS shape before decoding can
 			// mislabel a header fault as damaged Huffman entropy.
 			const sequential_huffman = report.variant == .baseline_huffman or report.variant == .extended_huffman;
@@ -768,6 +796,28 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             },
         }
     }
+
+	// Finding 69 (A3, validate approved 2026-11-06). A sequential Huffman
+	// frame with no DHT anywhere is the Motion-JPEG pattern: known defect
+	// when every scan decodes completely with the T.81 K.3 tables (the
+	// decoders install them), FAIL otherwise. With some DHT present, a scan
+	// naming an undefined table is FAIL at that Td/Ta byte.
+	const sequential_huffman_frame = report.variant == .baseline_huffman or report.variant == .extended_huffman;
+	if (sequential_huffman_frame and first_sos_offset != null) {
+		if (!seen_dht) {
+			const complete = report.codec_check == .decoded and report.overall.rank() < Severity.fail.rank();
+			if (complete) {
+				try addFinding(&report, allocator, .known_defect, .huffman_tables_missing, first_sos_offset,
+					"no DHT segment; every scan decodes completely with the T.81 Annex K.3 tables (Motion-JPEG); admitted known defect");
+			} else {
+				try addFinding(&report, allocator, .fail, .huffman_tables_missing, first_sos_offset,
+					"no DHT segment, and the scans do not decode completely with the T.81 Annex K.3 tables");
+			}
+		} else if (first_missing_table) |offset| {
+			try addExactFinding(&report, allocator, .huffman_tables_missing, offset,
+				"scan names a Huffman table that no DHT segment defines");
+		}
+	}
 
     return report;
 }

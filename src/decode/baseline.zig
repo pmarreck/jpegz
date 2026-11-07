@@ -332,6 +332,9 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
             },
             0xDA => { // SOS — entropy data follows
                 if (frame == null) return fail("sos_before_sof", error.InvalidMarker);
+                // No DHT before the first scan: Motion-JPEG relies on the
+                // T.81 K.3 tables, as libjpeg-turbo does (finding 69).
+                if (noTablesDefined(&dc_tables, &ac_tables)) installK3Tables(&dc_tables, &ac_tables);
                 const scan = try parseSos(data, pos, &frame.?);
                 pos += parseSegmentLength(data, pos);
                 // 12-bit grayscale (A1 Part A) and 12-bit RGB (A1 Part B) take
@@ -597,6 +600,23 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanSelec
     }
     // Ss/Se/Ah/Al in the last 3 bytes — for baseline they're 0/63/0/0.
     return scan;
+}
+
+fn noTablesDefined(dc: *const [4]?huffman.HuffmanTable, ac: *const [4]?huffman.HuffmanTable) bool {
+    for (dc, ac) |d, a| if (d != null or a != null) return false;
+    return true;
+}
+
+/// Load the T.81 Annex K.3 tables into destinations 0 (luminance) and 1
+/// (chrominance), the Motion-JPEG convention.
+fn installK3Tables(dc: *[4]?huffman.HuffmanTable, ac: *[4]?huffman.HuffmanTable) void {
+    const k3 = @import("k3_tables.zig");
+    const build = huffman.HuffmanTable.buildFromDht;
+    // The K.3 tables are valid by construction (tested in k3_tables.zig).
+    dc[0] = build(k3.dc_luminance.bits, k3.dc_luminance.values) catch unreachable;
+    dc[1] = build(k3.dc_chrominance.bits, k3.dc_chrominance.values) catch unreachable;
+    ac[0] = build(k3.ac_luminance.bits, k3.ac_luminance.values) catch unreachable;
+    ac[1] = build(k3.ac_chrominance.bits, k3.ac_chrominance.values) catch unreachable;
 }
 
 /// Finding 70's WARN signature (validate 2026-11-06): a four-component frame
