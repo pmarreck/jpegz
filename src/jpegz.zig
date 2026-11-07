@@ -526,7 +526,7 @@ pub fn classicFindingVerdict(code: FindingCode, severity: Severity) StrictVerdic
 	if (severity == .fail) return .corrupt;
 	const by_code: StrictVerdict = switch (code) {
 		.missing_eoi, .insufficient_data, .restart_marker_missing, .restart_marker_unexpected => .corrupt,
-		.entropy_padding_zero_bits => .known_defect,
+		.entropy_padding_zero_bits, .huffman_table_full_all_ones => .known_defect,
 		.unknown_marker, .unrecognized_container, .jxl_validator_unavailable => .indeterminate,
 		.jfif_version_unchecked, .missing_soi, .truncated_stream, .bad_marker_length, .duplicate_sof, .extraneous_bytes_before_marker,
 		.entropy_fill_bytes, .invalid_sof_precision, .huffman_table_corrupt, .quantization_table_corrupt,
@@ -1083,7 +1083,7 @@ test "classic per-finding verdict covers every code and severity" {
 		for (severities) |severity| {
 			const expected: StrictVerdict = if (severity == .fail or listed_corrupt)
 				.corrupt
-			else if (severity == .known_defect or code == .entropy_padding_zero_bits)
+			else if (severity == .known_defect or code == .entropy_padding_zero_bits or code == .huffman_table_full_all_ones)
 				.known_defect
 			else if (listed_indeterminate)
 				.indeterminate

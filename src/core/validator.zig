@@ -13,6 +13,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const errors = @import("errors.zig");
+const huffman = @import("../decode/huffman.zig");
 const types = @import("../jpegz.zig");
 
 const Severity = errors.Severity;
@@ -325,6 +326,33 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         // nibble, table destination) must be 0..3. A permissive decoder may
         // limp on a malformed table; a validator flags it so the spec
         // deviation is not silently swallowed.
+		// ── DHT: an exactly full code space (finding 71, an admitted known defect) ──
+		// The decoders accept the table; T.81 F.2.2.3 decodes it
+		// deterministically. Malformed or oversubscribed tables are left to
+		// the decode-through, which reports them as 51.
+		if (marker_byte == Marker.DHT) {
+			const bits_bytes: usize = 16;
+			var hp: usize = seg_body_start;
+			while (hp + 1 + bits_bytes <= seg_end) {
+				const bits = data[hp + 1 ..][0..bits_bytes].*;
+				var total: usize = 0;
+				for (bits) |count| total += count;
+				switch (huffman.codeSpace(bits)) {
+					.full_all_ones => |length| {
+						const detail = try std.fmt.allocPrint(allocator,
+							"DHT Tc={d} Th={d}: code space exactly full at length {d}, so its last code is the reserved all-ones codeword (Pentax, Ricoh and DJI DNG encoders); admitted known defect",
+							.{ data[hp] >> 4, data[hp] & 0x0F, length });
+						defer allocator.free(detail);
+						// Exact: the BITS count for the length that fills the space.
+						try addFinding(&report, allocator, .known_defect, .huffman_table_full_all_ones, hp + length, detail);
+						report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
+					},
+					.valid, .invalid => {},
+				}
+				hp += 1 + bits_bytes + total;
+			}
+		}
+
         if (marker_byte == Marker.DQT) {
             var qp: usize = seg_body_start;
             while (qp < seg_end) {

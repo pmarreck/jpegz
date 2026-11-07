@@ -6,7 +6,8 @@ Every `FindingCode` jpegz can report, with its provenance. Numbers are
 stable forever: the registry is append-only, and a value is never reused
 or renumbered. The enum in `src/core/errors.zig` is the source of truth
 for numbers and names; this table adds who owns each code and why its
-number was assigned. A new code needs the coordinator's approval first.
+number was assigned. A new code needs validate's approval first (the
+coordinator approved codes before 2026-11-06).
 
 - **Owner** is the project whose validator emits the condition. jp2z
   and libjxlz codes keep the leaf's own number in `leaf_code` as well.
@@ -42,6 +43,7 @@ number was assigned. A new code needs the coordinator's approval first.
 | 65 | `jfif_metadata_invalid` | jpegz | Coordinator approval, 2026-10-28 | 6b038ec (2026-10-28) |
 | 66 | `sof_sampling_invalid` | jpegz | Coordinator approval, 2026-10-28 | faf0c92 (2026-10-28) |
 | 67 | `jfif_version_unchecked` | jpegz | Coordinator approval, 2026-10-28 | a7ddd65 (2026-10-29) |
+| 71 | `huffman_table_full_all_ones` | jpegz | validate approval, 2026-11-06 | this commit (2026-11-06) |
 | 100 | `lossless_predictor_invalid` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 101 | `lossless_pointtransform_invalid` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 120 | `jpegls_invalid_run_mode` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |

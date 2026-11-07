@@ -203,7 +203,7 @@ test "SOF3 header constraints preserve lossless precision and bound parser indic
 	}
 }
 
-test "SOF3 rejects complete DHT bodies with oversubscribed or all-one codes" {
+test "SOF3 DHT bodies: a full table is known defect 71, oversubscribed is corrupt" {
 	const allocator = std.testing.allocator;
 	for ([_]u8{ 1, 2, 3 }) |count| {
 		var header = sof3_pair[0..40].*;
@@ -214,7 +214,22 @@ test "SOF3 rejects complete DHT bodies with oversubscribed or all-one codes" {
 		defer allocator.free(data);
 		var result = try jpegz.validateAny(allocator, data);
 		defer result.deinit(allocator);
-		try std.testing.expectEqual(if (count == 1) jpegz.StrictVerdict.valid else .corrupt, result.verdict);
+		// Two one-bit codes fill the space: the second is the all-ones code.
+		const expected: jpegz.StrictVerdict = switch (count) {
+			1 => .valid,
+			2 => .known_defect,
+			else => .corrupt,
+		};
+		try std.testing.expectEqual(expected, result.verdict);
+		var full: usize = 0;
+		for (result.findings.items) |finding| {
+			if (finding.code != .huffman_table_full_all_ones) continue;
+			full += 1;
+			try std.testing.expectEqual(jpegz.Severity.known_defect, finding.severity);
+			try std.testing.expectEqual(@as(?u64, 23), finding.offset);
+			try std.testing.expect(finding.offset_is_exact);
+		}
+		try std.testing.expectEqual(@as(usize, @intFromBool(count == 2)), full);
 	}
 }
 

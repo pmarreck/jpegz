@@ -2338,3 +2338,137 @@ test "lossless scans name whole bytes after valid padding instead of a generic d
 	defer clean.deinit(allocator);
 	try std.testing.expect(clean.isValid());
 }
+
+/// A minimal one-component 8-bit lossless (SOF3, predictor 1) stream whose
+/// entropy data is coded with `bits`/`values`, the DNG pattern of finding 71.
+/// Category SSSS for each difference is coded, then its SSSS extra bits.
+fn losslessWithTable(allocator: std.mem.Allocator, width: u8, samples: []const u8, bits: [16]u8, values: []const u8) ![]u8 {
+	const height: u8 = @intCast(samples.len / width);
+	// Canonical codes (T.81 Annex C), allowing an exactly full table.
+	var codes: [16]u16 = undefined;
+	var lengths: [16]u5 = undefined;
+	var code: u32 = 0;
+	var k: usize = 0;
+	for (bits, 1..) |count, len| {
+		for (0..count) |_| {
+			codes[values[k]] = @intCast(code);
+			lengths[values[k]] = @intCast(len);
+			code += 1;
+			k += 1;
+		}
+		code <<= 1;
+	}
+	var out: std.ArrayList(u8) = .empty;
+	errdefer out.deinit(allocator);
+	try out.appendSlice(allocator, &.{ 0xff, 0xd8, 0xff, 0xc3, 0, 11, 8, 0, height, 0, width, 1, 1, 0x11, 0 });
+	try out.appendSlice(allocator, &.{ 0xff, 0xc4, 0, @intCast(2 + 1 + 16 + values.len), 0x00 });
+	try out.appendSlice(allocator, &bits);
+	try out.appendSlice(allocator, values);
+	try out.appendSlice(allocator, &.{ 0xff, 0xda, 0, 8, 1, 1, 0x00, 1, 0, 0 });
+	var acc: u32 = 0;
+	var nbits: u5 = 0;
+	const Writer = struct {
+		fn put(o: *std.ArrayList(u8), a: std.mem.Allocator, accp: *u32, np: *u5, value: u32, n: u5) !void {
+			var i: u5 = n;
+			while (i > 0) {
+				i -= 1;
+				accp.* = (accp.* << 1) | ((value >> i) & 1);
+				np.* += 1;
+				if (np.* == 8) {
+					const byte: u8 = @intCast(accp.* & 0xff);
+					try o.append(a, byte);
+					if (byte == 0xff) try o.append(a, 0x00);
+					accp.* = 0;
+					np.* = 0;
+				}
+			}
+		}
+	};
+	for (samples, 0..) |sample, index| {
+		const x = index % width;
+		const predicted: i32 = if (index == 0) 128 else if (x == 0) samples[index - width] else samples[index - 1];
+		const diff: i32 = @as(i32, sample) - predicted;
+		const magnitude: u32 = @abs(diff);
+		const category: u5 = if (magnitude == 0) 0 else @intCast(32 - @clz(magnitude));
+		try Writer.put(&out, allocator, &acc, &nbits, codes[category], lengths[category]);
+		if (category != 0) {
+			const extra: u32 = if (diff > 0) @intCast(diff) else @intCast(diff + (@as(i32, 1) << category) - 1);
+			try Writer.put(&out, allocator, &acc, &nbits, extra, category);
+		}
+	}
+	if (nbits != 0) try Writer.put(&out, allocator, &acc, &nbits, 0xff, 8 - nbits); // 1-bit padding
+	try out.appendSlice(allocator, &.{ 0xff, 0xd9 });
+	return out.toOwnedSlice(allocator);
+}
+
+test "an exactly full DHT is known defect 71 and decodes with its all-ones code" {
+	const allocator = std.testing.allocator;
+	// Differences in categories 0..3; codes 0, 10, 110 and the all-ones 111.
+	const samples = [_]u8{ 128, 129, 127, 132, 135, 135, 131, 133 };
+	const full = [_]u8{ 1, 1, 2 } ++ [_]u8{0} ** 13;
+	const data = try losslessWithTable(allocator, 4, &samples, full, &.{ 0, 1, 2, 3 });
+	defer allocator.free(data);
+
+	var image = try jpegz.decode(allocator, data);
+	defer image.deinit(allocator);
+	try std.testing.expectEqualSlices(u8, &samples, image.pixels);
+
+	var report = try jpegz.validate(allocator, data);
+	defer report.deinit(allocator);
+	// The BITS count for length 3 is at DHT body offset 1 + 2.
+	const dht_body = 15 + 4;
+	try expectOnlyTyped(report, .known_defect, .huffman_table_full_all_ones, dht_body + 3);
+	try std.testing.expectEqual(jpegz.Severity.known_defect, report.overall);
+	try std.testing.expect(report.isValid());
+	try std.testing.expectEqual(.decoded, report.codec_check);
+
+	// Control: the same samples with a table one code short of full (length 4
+	// for category 3) carry no finding and decode identically.
+	const spare = [_]u8{ 1, 1, 1, 1 } ++ [_]u8{0} ** 12;
+	const control = try losslessWithTable(allocator, 4, &samples, spare, &.{ 0, 1, 2, 3 });
+	defer allocator.free(control);
+	var control_report = try jpegz.validate(allocator, control);
+	defer control_report.deinit(allocator);
+	try std.testing.expectEqual(jpegz.Severity.pass, control_report.overall);
+
+	// Near miss: one codeword oversubscribed (three codes at length 3, a
+	// fifth HUFFVAL byte, DHT length + 1) stays FAIL 51, not 71.
+	const values_end = dht_body + 1 + 16 + 4;
+	const over = try std.mem.concat(allocator, u8, &.{ data[0 .. dht_body + 3], &.{3}, data[dht_body + 4 .. values_end], &.{4}, data[values_end..] });
+	defer allocator.free(over);
+	over[dht_body - 1] += 1;
+	var over_report = try jpegz.validate(allocator, over);
+	defer over_report.deinit(allocator);
+	try std.testing.expectEqual(jpegz.Severity.fail, over_report.overall);
+	var generic = false;
+	for (over_report.findings.items) |finding| {
+		try std.testing.expect(finding.code != .huffman_table_full_all_ones);
+		if (finding.code == .huffman_table_corrupt) generic = true;
+	}
+	try std.testing.expect(generic);
+}
+
+test "a full DHT in a baseline file is 71 and leaves the pixels unchanged" {
+	const allocator = std.testing.allocator;
+	// libjpeg-turbo's standard luma DC table (T.81 K.3) has Kraft sum 511/512;
+	// one more code at length 9 fills it exactly. The image never uses it.
+	const original = @embedFile("fixtures/historic_a3_control_with_dht.jpg");
+	const k3_dc_bits = [_]u8{ 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 };
+	const at = std.mem.indexOf(u8, original, &([_]u8{0x00} ++ k3_dc_bits)).?;
+	const length_at = std.mem.lastIndexOf(u8, original[0..at], &.{ 0xff, 0xc4 }).? + 2;
+	const values_end = at + 1 + 16 + 12;
+	const data = try std.mem.concat(allocator, u8, &.{ original[0 .. at + 9], &.{2}, original[at + 10 .. values_end], &.{12}, original[values_end..] });
+	defer allocator.free(data);
+	const old_length = std.mem.readInt(u16, original[length_at..][0..2], .big);
+	std.mem.writeInt(u16, data[length_at..][0..2], old_length + 1, .big);
+
+	var report = try jpegz.validate(allocator, data);
+	defer report.deinit(allocator);
+	try expectOnlyTyped(report, .known_defect, .huffman_table_full_all_ones, at + 9);
+	try std.testing.expectEqual(jpegz.Severity.known_defect, report.overall);
+	var expected = try jpegz.decode(allocator, original);
+	defer expected.deinit(allocator);
+	var actual = try jpegz.decode(allocator, data);
+	defer actual.deinit(allocator);
+	try std.testing.expectEqualSlices(u8, expected.pixels, actual.pixels);
+}

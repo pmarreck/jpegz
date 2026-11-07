@@ -7,8 +7,9 @@
 //! names themselves live only in `errors.zig`. This file never repeats them,
 //! and `std.EnumArray.init` makes a missing or extra code a compile error.
 //!
-//! The registry is append-only and coordinator-owned. A new code needs the
-//! coordinator's approval before it is used, and its row cites that date.
+//! The registry is append-only. Since 2026-11-06 validate owns it (owner
+//! ruling); before that the coordinator did. A new code needs approval before
+//! it is used, and its row cites that date.
 
 const std = @import("std");
 pub const errors = @import("errors.zig");
@@ -22,6 +23,8 @@ pub const Basis = union(enum) {
 	pre_registry,
 	/// Approved by the coordinator on this date (YYYY-MM-DD).
 	coordinator: []const u8,
+	/// Approved by validate, the registry owner since 2026-11-06, on this date.
+	validate: []const u8,
 	/// Inside the JPEG XL band 180..199 the coordinator reserved on 2026-08-05.
 	jxl_band,
 	/// Assigned in jp2z's leaf registry and mirrored here by number.
@@ -33,8 +36,10 @@ pub const Basis = union(enum) {
 pub const Entry = struct {
 	owner: Owner,
 	basis: Basis,
-	/// Short hash of the jpegz commit that added the value.
-	commit: []const u8,
+	/// Short hash of the jpegz commit that added the value. Null only in
+	/// the commit that adds a code, whose hash cannot be known yet; the next
+	/// commit fills it in.
+	commit: ?[]const u8,
 	/// That commit's date, YYYY-MM-DD.
 	date: []const u8,
 };
@@ -68,6 +73,7 @@ pub const table = std.EnumArray(FindingCode, Entry).init(.{
 	.jfif_metadata_invalid = .{ .owner = .jpegz, .basis = .{ .coordinator = "2026-10-28" }, .commit = "6b038ec", .date = "2026-10-28" },
 	.sof_sampling_invalid = .{ .owner = .jpegz, .basis = .{ .coordinator = "2026-10-28" }, .commit = "faf0c92", .date = "2026-10-28" },
 	.jfif_version_unchecked = .{ .owner = .jpegz, .basis = .{ .coordinator = "2026-10-28" }, .commit = "a7ddd65", .date = "2026-10-29" },
+	.huffman_table_full_all_ones = .{ .owner = .jpegz, .basis = .{ .validate = "2026-11-06" }, .commit = null, .date = "2026-11-06" },
 	.lossless_predictor_invalid = .{ .owner = .jpegz, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },
 	.lossless_pointtransform_invalid = .{ .owner = .jpegz, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },
 	.jpegls_invalid_run_mode = .{ .owner = .jpegz, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },
@@ -135,7 +141,8 @@ pub fn render(w: *std.Io.Writer) std.Io.Writer.Error!void {
 		\\stable forever: the registry is append-only, and a value is never reused
 		\\or renumbered. The enum in `src/core/errors.zig` is the source of truth
 		\\for numbers and names; this table adds who owns each code and why its
-		\\number was assigned. A new code needs the coordinator's approval first.
+		\\number was assigned. A new code needs validate's approval first (the
+		\\coordinator approved codes before 2026-11-06).
 		\\
 		\\- **Owner** is the project whose validator emits the condition. jp2z
 		\\  and libjxlz codes keep the leaf's own number in `leaf_code` as well.
@@ -157,11 +164,12 @@ pub fn render(w: *std.Io.Writer) std.Io.Writer.Error!void {
 		switch (entry.basis) {
 			.pre_registry => try w.writeAll("Assigned by jpegz before the shared registry"),
 			.coordinator => |date| try w.print("Coordinator approval, {s}", .{date}),
+			.validate => |date| try w.print("validate approval, {s}", .{date}),
 			.jxl_band => try w.writeAll("Coordinator's JPEG XL band 180..199, reserved 2026-08-05"),
 			.leaf_registry => try w.writeAll("Assigned in jp2z's leaf registry"),
 			.no_record => try w.writeAll("No approval record found"),
 		}
-		try w.print(" | {s} ({s}) |\n", .{ entry.commit, entry.date });
+		try w.print(" | {s} ({s}) |\n", .{ entry.commit orelse "this commit", entry.date });
 	}
 }
 
@@ -177,11 +185,13 @@ fn isDate(text: []const u8) bool {
 test "every provenance row has a short commit hash and real dates" {
 	for (std.enums.values(FindingCode)) |code| {
 		const entry = table.get(code);
-		try std.testing.expectEqual(@as(usize, 7), entry.commit.len);
-		for (entry.commit) |c| try std.testing.expect(std.ascii.isDigit(c) or (c >= 'a' and c <= 'f'));
+		if (entry.commit) |commit| {
+			try std.testing.expectEqual(@as(usize, 7), commit.len);
+			for (commit) |c| try std.testing.expect(std.ascii.isDigit(c) or (c >= 'a' and c <= 'f'));
+		}
 		try std.testing.expect(isDate(entry.date));
 		switch (entry.basis) {
-			.coordinator => |date| {
+			.coordinator, .validate => |date| {
 				try std.testing.expect(isDate(date));
 				// An approval cannot postdate the commit that used the number.
 				try std.testing.expect(std.mem.order(u8, date, entry.date) != .gt);

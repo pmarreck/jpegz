@@ -19,11 +19,42 @@ const bitstream = @import("bitstream.zig");
 
 pub const Error = error{
     /// DHT segment body is malformed (length mismatch, > 256 codes,
-    /// invalid HUFFVAL count, oversubscribed or reserved all-ones codes).
+    /// invalid HUFFVAL count, oversubscribed code space, or the reserved
+    /// all-ones code anywhere but the end of an exactly full table).
     InvalidHuffmanTable,
     /// Decoded code didn't match any entry in the table — file is corrupt.
     HuffmanDecodeError,
 } || bitstream.Error;
+
+/// How a DHT's BITS counts fill the canonical code space (T.81 Annex C).
+pub const CodeSpace = union(enum) {
+    /// Every code fits and the all-ones code at each length stays unused.
+    valid,
+    /// Kraft sum exactly 1: the last code, at `length`, is the reserved
+    /// all-ones codeword, and that is the only violation. Decoding stays
+    /// deterministic (T.81 F.2.2.3). Pentax K-x and K-r, Ricoh GR and DJI
+    /// FC4382 DNGs write this: finding 71, an admitted known defect.
+    full_all_ones: u5,
+    /// Oversubscribed, or the all-ones code followed by longer codes.
+    invalid,
+};
+
+pub fn codeSpace(bits: [16]u8) CodeSpace {
+    var code: u32 = 0;
+    for (bits, 1..) |count, len_plus_1| {
+        const len: u5 = @intCast(len_plus_1);
+        const limit = @as(u32, 1) << len;
+        code += count;
+        if (code > limit) return .invalid;
+        if (code == limit) {
+            // Full at this length: valid only if nothing longer follows.
+            for (bits[len_plus_1..]) |later| if (later != 0) return .invalid;
+            return .{ .full_all_ones = len };
+        }
+        code <<= 1;
+    }
+    return .valid;
+}
 
 /// One Huffman table — DC class or AC class, identified by Th index
 /// inside a DHT segment. JPEG allows up to 4 of each class.
@@ -65,15 +96,17 @@ pub const HuffmanTable = struct {
         @memset(&t.values, 0);
         @memcpy(t.values[0..total], values[0..total]);
 
+        // T.81 Annex C reserves the all-ones code at every length. Check the
+        // whole range before narrowing codes or filling lookup tables. An
+        // exactly full table (finding 71) is decodable and accepted; callers
+        // that report findings classify it with `codeSpace`.
+        if (codeSpace(bits) == .invalid) return error.InvalidHuffmanTable;
+
         // Generate canonical Huffman codes (T.81 Annex C, Figure C.2).
         var code: u32 = 0;
         var idx: usize = 0;
         for (bits, 1..) |count, len_plus_1| {
             const len: u8 = @intCast(len_plus_1);
-            // T.81 Annex C reserves the all-ones code at every length.
-            // Check the whole range before narrowing codes or filling lookup tables.
-            if (code + count >= (@as(u32, 1) << @as(u5, @intCast(len))))
-                return error.InvalidHuffmanTable;
             var i: u8 = 0;
             while (i < count) : (i += 1) {
                 if (idx >= 256) return error.InvalidHuffmanTable;
@@ -217,14 +250,44 @@ test "buildFromDht rejects oversubscribed sixteen-bit codes before narrowing" {
 	try std.testing.expectError(error.InvalidHuffmanTable, HuffmanTable.buildFromDht(bits, &values));
 }
 
-test "buildFromDht rejects all-ones codes at every length" {
-	const values = [_]u8{0} ** 17;
+test "an exactly full table is accepted at every length; one more code is not" {
+	var values: [18]u8 = undefined;
+	for (&values, 0..) |*v, i| v.* = @intCast(i);
 	for (0..16) |last| {
 		var bits = [_]u8{0} ** 16;
 		@memset(bits[0..last], 1);
 		bits[last] = 2;
-		try std.testing.expectError(error.InvalidHuffmanTable, HuffmanTable.buildFromDht(bits, &values));
+		// Finding 71: the last code is the all-ones codeword at length last+1.
+		try std.testing.expectEqual(CodeSpace{ .full_all_ones = @intCast(last + 1) }, codeSpace(bits));
+		const table = try HuffmanTable.buildFromDht(bits, &values);
+		const all_ones: u16 = @intCast((@as(u32, 1) << @intCast(last + 1)) - 1);
+		try std.testing.expectEqual(all_ones, table.codes[table.total - 1]);
+		// One codeword oversubscribed stays rejected (FAIL 51).
+		var over = bits;
+		over[last] = 3;
+		try std.testing.expectEqual(CodeSpace.invalid, codeSpace(over));
+		try std.testing.expectError(error.InvalidHuffmanTable, HuffmanTable.buildFromDht(over, &values));
+		// The all-ones code followed by a longer code is not the signature.
+		if (last < 15) {
+			var longer = bits;
+			longer[last + 1] = 1;
+			try std.testing.expectEqual(CodeSpace.invalid, codeSpace(longer));
+			try std.testing.expectError(error.InvalidHuffmanTable, HuffmanTable.buildFromDht(longer, &values));
+		}
 	}
+	// A table one code short of full keeps the all-ones code unused.
+	try std.testing.expectEqual(CodeSpace.valid, codeSpace(.{ 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }));
+}
+
+test "the all-ones codeword of a full table decodes to its symbol" {
+	// Codes 0, 10, 110, 111 for symbols 5, 6, 7, 8; the stream is
+	// 111 110 10 0 | 111, so the all-ones code appears at both ends.
+	const bits = [_]u8{ 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+	const table = try HuffmanTable.buildFromDht(bits, &.{ 5, 6, 7, 8 });
+	const stream = [_]u8{ 0b11111010, 0b01110000 };
+	var br = bitstream.BitReader.init(&stream);
+	const expected = [_]u8{ 8, 7, 6, 5, 8 };
+	for (expected) |symbol| try std.testing.expectEqual(symbol, try table.decode(&br));
 }
 
 test "buildFromDht accepts reported near-full tables and maximum symbol count" {

@@ -159,6 +159,14 @@ pub const FindingCode = enum(u32) {
 	// Emitted at known_defect for exactly 02 01 in an otherwise sound APP0,
 	// FFmpeg/Libav's byte-swapped 1.02 (A2, owner admission 2026-11-06).
 	jfif_version_unchecked = 67,
+	// validate-approved 2026-11-06 (68..70 are reserved for findings not yet
+	// implemented). A DHT whose code space is exactly full, so its last code
+	// is the all-ones codeword T.81 Annex C reserves, with no other violation.
+	// Pentax K-x and K-r, Ricoh GR and DJI FC4382 DNGs write it; owner
+	// admitted it as a known defect. Decoding with the table is deterministic
+	// (T.81 F.2.2.3). Exact offset: the BITS count for the full length. An
+	// oversubscribed table stays 51.
+	huffman_table_full_all_ones = 71,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────
     lossless_predictor_invalid = 100,

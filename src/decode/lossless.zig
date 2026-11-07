@@ -456,14 +456,10 @@ fn parseDht(
         off += 16;
         if (off + total > seg_end) return error.TruncatedStream;
         const values = data[off .. off + total];
-        // T.81 C.2: canonical codes may neither overflow their width nor
-        // use the all-one code (reserved for padding). Check before indexing.
-        var code: u32 = 0;
-        for (bits, 1..) |count, width| {
-            code += count;
-            if (code >= @as(u32, 1) << @intCast(width)) return error.InvalidMarker;
-            code <<= 1;
-        }
+        // T.81 C.2: canonical codes may not overflow their width, and the
+        // all-ones code is reserved; an exactly full table (finding 71, which
+        // the validator reports) still decodes. Check before indexing.
+        if (huffman.codeSpace(bits) == .invalid) return error.InvalidMarker;
         const t = huffman.HuffmanTable.buildFromDht(bits, values) catch
             return error.InvalidMarker;
         dc_tables[th] = t;
