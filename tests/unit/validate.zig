@@ -924,14 +924,15 @@ test "validate surfaces EXIF presence (APP1 'Exif\\0\\0') as INFO" {
     try std.testing.expect(found_exif);
 }
 
-test "validate surfaces trailing-data-after-EOI as INFO" {
+test "validate surfaces trailing-data-after-EOI as WARN other" {
     const allocator = std.testing.allocator;
     var report = try jpegz.validate(allocator, fixture_baseline_4x4_with_trailing);
     defer report.deinit(allocator);
 
-    // Trailing data is INFO (the file is decodable; this is just a
-    // notable observation), so overall stays at .info or .pass-derived.
+    // A trailer that is neither MPF nor PAR2 is a writer's violation: WARN
+    // (owner ruling 2026-11-06), still a valid verdict.
     try std.testing.expect(report.isValid());
+    try std.testing.expectEqual(jpegz.Severity.warn, report.overall);
     var found = false;
     var offset_seen: ?u64 = null;
     for (report.findings.items) |f| {
@@ -2700,4 +2701,114 @@ test "no DHT anywhere is known defect 69 when the K.3 tables decode every scan" 
 	defer p_report.deinit(allocator);
 	try std.testing.expectEqual(jpegz.Severity.fail, p_report.overall);
 	for (p_report.findings.items) |f| try std.testing.expect(f.code != .huffman_tables_missing);
+}
+
+/// A Multi-Picture Format file (CIPA DC-007): `primary` with an MPF APP2
+/// after SOI whose Index IFD lists `second`, appended after the primary's EOI.
+/// `size_delta` and `offset_delta` skew the second entry for near misses.
+fn mpfFile(allocator: std.mem.Allocator, primary: []const u8, second: []const u8, size_delta: i32, offset_delta: i32, tail: []const u8) ![]u8 {
+	const app2_len: usize = 2 + 4 + 8 + 42 + 32; // length field onward
+	const base: usize = 2 + 2 + 2 + 4; // SOI, marker, length, "MPF\0"
+	const second_at = 2 + 2 + app2_len + (primary.len - 2);
+	var app2: [2 + app2_len]u8 = undefined;
+	var w: usize = 0;
+	const put = struct {
+		fn b(buf: []u8, at: *usize, bytes: []const u8) void {
+			@memcpy(buf[at.* .. at.* + bytes.len], bytes);
+			at.* += bytes.len;
+		}
+		fn be32(buf: []u8, at: *usize, v: u32) void {
+			std.mem.writeInt(u32, buf[at.*..][0..4], v, .big);
+			at.* += 4;
+		}
+		fn be16(buf: []u8, at: *usize, v: u16) void {
+			std.mem.writeInt(u16, buf[at.*..][0..2], v, .big);
+			at.* += 2;
+		}
+	};
+	put.b(&app2, &w, &.{ 0xff, 0xe2 });
+	put.be16(&app2, &w, @intCast(app2_len));
+	put.b(&app2, &w, "MPF\x00");
+	put.b(&app2, &w, &.{ 'M', 'M', 0, 0x2a, 0, 0, 0, 8 }); // TIFF header, IFD at 8
+	put.be16(&app2, &w, 3);
+	put.be16(&app2, &w, 0xb000); put.be16(&app2, &w, 7); put.be32(&app2, &w, 4); put.b(&app2, &w, "0100");
+	put.be16(&app2, &w, 0xb001); put.be16(&app2, &w, 4); put.be32(&app2, &w, 1); put.be32(&app2, &w, 2);
+	put.be16(&app2, &w, 0xb002); put.be16(&app2, &w, 7); put.be32(&app2, &w, 32); put.be32(&app2, &w, 50);
+	put.be32(&app2, &w, 0); // no next IFD
+	// MP entries: the primary (offset 0), then the second image.
+	put.be32(&app2, &w, 0x20030000); put.be32(&app2, &w, @intCast(second_at)); put.be32(&app2, &w, 0); put.be32(&app2, &w, 0);
+	put.be32(&app2, &w, 0);
+	put.be32(&app2, &w, @intCast(@as(i64, @intCast(second.len)) + size_delta));
+	put.be32(&app2, &w, @intCast(@as(i64, @intCast(second_at - base)) + offset_delta));
+	put.be32(&app2, &w, 0);
+	std.debug.assert(w == app2.len);
+	return std.mem.concat(allocator, u8, &.{ primary[0..2], &app2, primary[2..], second, tail });
+}
+
+const TrailingSeen = struct { severity: jpegz.Severity, offset: ?u64, detail: []const u8 };
+
+fn trailingFindings(report: jpegz.ValidationReport, out: *[4]TrailingSeen) usize {
+	var n: usize = 0;
+	for (report.findings.items) |f| {
+		if (f.code != .trailing_data_after_eoi) continue;
+		if (n < out.len) out[n] = .{ .severity = f.severity, .offset = f.offset, .detail = f.detail orelse "" };
+		n += 1;
+	}
+	return n;
+}
+
+test "trailing data after EOI: MPF images and PAR2 are INFO, anything else WARN" {
+	const allocator = std.testing.allocator;
+	const primary = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	const second = primary;
+	const par2 = "PAR2\x00PKT" ++ [_]u8{0} ** 56;
+	const Expect = struct { severity: jpegz.Severity, at: usize, detail: []const u8 };
+	const Case = struct { name: []const u8, size_delta: i32 = 0, offset_delta: i32 = 0, tail: []const u8 = "", mpf: bool = true, expect: []const Expect };
+	const app2_total: usize = 2 + 2 + 4 + 8 + 42 + 32;
+	const second_at = 2 + app2_total + (primary.len - 2);
+	const second_end = second_at + second.len;
+	const cases = [_]Case{
+		.{ .name = "MPF covers the second image", .expect = &.{.{ .severity = .info, .at = second_at, .detail = "mpf" }} },
+		.{ .name = "MPF then PAR2", .tail = par2, .expect = &.{ .{ .severity = .info, .at = second_at, .detail = "mpf" }, .{ .severity = .info, .at = second_end, .detail = "par2" } } },
+		.{ .name = "MPF then CRLF", .tail = "\r\n", .expect = &.{ .{ .severity = .info, .at = second_at, .detail = "mpf" }, .{ .severity = .warn, .at = second_end, .detail = "other" } } },
+		.{ .name = "MPF size one short", .size_delta = -1, .expect = &.{ .{ .severity = .info, .at = second_at, .detail = "mpf" }, .{ .severity = .warn, .at = second_end - 1, .detail = "other" } } },
+		.{ .name = "MPF offset one short", .offset_delta = -1, .expect = &.{.{ .severity = .warn, .at = second_at, .detail = "other" }} },
+	};
+	for (cases) |case| {
+		const data = try mpfFile(allocator, primary, second, case.size_delta, case.offset_delta, case.tail);
+		defer allocator.free(data);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		var got: [4]TrailingSeen = undefined;
+		const n = trailingFindings(report, &got);
+		var ok = n == case.expect.len;
+		if (ok) for (case.expect, got[0..n]) |e, g| {
+			if (e.severity != g.severity or g.offset != e.at or !std.mem.eql(u8, e.detail, g.detail)) ok = false;
+		};
+		if (!ok) {
+			std.debug.print("trailing case '{s}': {d} findings\n", .{ case.name, n });
+			for (got[0..@min(n, 4)]) |g| std.debug.print("  {s} @{?d} {s}\n", .{ @tagName(g.severity), g.offset, g.detail });
+			return error.TestUnexpectedResult;
+		}
+		try std.testing.expect(report.isValid());
+	}
+
+	// Without MPF: PAR2 is INFO, a cut PAR2 magic and a CRLF are WARN.
+	const Plain = struct { tail: []const u8, severity: jpegz.Severity, detail: []const u8 };
+	for ([_]Plain{
+		.{ .tail = par2, .severity = .info, .detail = "par2" },
+		.{ .tail = "PAR2\x00PKX" ++ [_]u8{0} ** 8, .severity = .warn, .detail = "other" },
+		.{ .tail = "\r\n", .severity = .warn, .detail = "other" },
+		.{ .tail = &([_]u8{0} ** 32), .severity = .warn, .detail = "other" },
+	}) |plain| {
+		const data = try std.mem.concat(allocator, u8, &.{ primary, plain.tail });
+		defer allocator.free(data);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		var got: [4]TrailingSeen = undefined;
+		try std.testing.expectEqual(@as(usize, 1), trailingFindings(report, &got));
+		try std.testing.expectEqual(plain.severity, got[0].severity);
+		try std.testing.expectEqual(@as(?u64, primary.len), got[0].offset);
+		try std.testing.expectEqualStrings(plain.detail, got[0].detail);
+	}
 }

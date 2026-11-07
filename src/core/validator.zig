@@ -120,6 +120,78 @@ fn reportSeverity(code: FindingCode, emitted: Severity) Severity {
 	};
 }
 
+const MpfTiff = struct { start: usize, end: usize };
+
+/// Bytes after the first EOI (finding 212; owner ruling 2026-11-06 and
+/// validate rules 2026-11-07). Images the MPF Index IFD places there are
+/// consumed in order, as long as each starts where the previous ended: INFO
+/// `mpf`. A remainder starting `PAR2\0PKT` is the owner's PAR2 trailer: INFO
+/// `par2` at its start, for validate to verify. Anything else is a writer's
+/// trailer, junk or fill: WARN `other` at the first uncovered byte.
+fn reportTrailingData(report: *ValidationReport, allocator: Allocator, data: []const u8, start: usize, mpf: ?MpfTiff) Allocator.Error!void {
+	var cur = start;
+	if (mpf) |m| {
+		var ranges: [16][2]usize = undefined;
+		const n = mpfImageRanges(data, m, &ranges);
+		std.mem.sortUnstable([2]usize, ranges[0..n], {}, struct {
+			fn lessThan(_: void, a: [2]usize, b: [2]usize) bool {
+				return a[0] < b[0];
+			}
+		}.lessThan);
+		for (ranges[0..n]) |r| {
+			if (r[0] == cur and r[1] > cur and r[1] <= data.len) cur = r[1];
+		}
+	}
+	if (cur > start) {
+		try addFinding(report, allocator, .info, .trailing_data_after_eoi, start, "mpf");
+		report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
+	}
+	if (cur == data.len) return;
+	const par2 = std.mem.startsWith(u8, data[cur..], "PAR2\x00PKT");
+	try addFinding(report, allocator, if (par2) .info else .warn, .trailing_data_after_eoi, cur, if (par2) "par2" else "other");
+	report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
+}
+
+/// The file ranges of the images an MPF Index IFD lists after the first
+/// (CIPA DC-007 5.2.3: MP Entry tag 0xB002, 16 bytes per image, offsets from
+/// the TIFF header; offset 0 is the file's own first image). Malformed or
+/// out-of-range structures yield fewer ranges, never a read past `data`.
+fn mpfImageRanges(data: []const u8, m: MpfTiff, out: *[16][2]usize) usize {
+	const base = m.start;
+	if (m.end < base + 8 or m.end > data.len) return 0;
+	const tiff = data[base..m.end];
+	const little = std.mem.eql(u8, tiff[0..2], "II");
+	if (!little and !std.mem.eql(u8, tiff[0..2], "MM")) return 0;
+	const endian: std.builtin.Endian = if (little) .little else .big;
+	const ifd = std.mem.readInt(u32, tiff[4..8], endian);
+	if (ifd > tiff.len or tiff.len - ifd < 2) return 0;
+	const count = std.mem.readInt(u16, tiff[ifd..][0..2], endian);
+	var entries_at: ?usize = null;
+	var entries_len: usize = 0;
+	for (0..count) |k| {
+		const e = ifd + 2 + 12 * k;
+		if (e + 12 > tiff.len) break;
+		if (std.mem.readInt(u16, tiff[e..][0..2], endian) != 0xB002) continue;
+		entries_len = std.mem.readInt(u32, tiff[e + 4 ..][0..4], endian);
+		entries_at = std.mem.readInt(u32, tiff[e + 8 ..][0..4], endian);
+	}
+	const at = entries_at orelse return 0;
+	var n: usize = 0;
+	var k: usize = 0;
+	while (n < out.len and k < entries_len / 16) : (k += 1) {
+		const q = at + 16 * k;
+		if (q > tiff.len or tiff.len - q < 16) break;
+		const size = std.mem.readInt(u32, tiff[q + 4 ..][0..4], endian);
+		const offset = std.mem.readInt(u32, tiff[q + 8 ..][0..4], endian);
+		if (offset == 0) continue;
+		const first = std.math.add(usize, base, offset) catch continue;
+		const last = std.math.add(usize, first, size) catch continue;
+		out[n] = .{ first, last };
+		n += 1;
+	}
+	return n;
+}
+
 /// Known defect A2 (owner admission 2026-11-06, documented-producer path):
 /// FFmpeg/Libav mjpegenc before commit b19313218c, and rtpdec_jpeg, wrote the
 /// JFIF 1.02 version as the bytes 02 01. The match is exact: a JFIF APP0 with
@@ -187,6 +259,8 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 	// Se byte of a sequential scan matching finding 68's Go signature; judged
 	// after the walk, when the number of scans is known.
 	var go_zero_se: ?usize = null;
+	// The first MPF APP2's TIFF header and segment end (finding 212).
+	var mpf_tiff: ?MpfTiff = null;
 	// Finding 69: Huffman table destinations defined so far ([Tc][Th]), the
 	// first scan, and the first Td/Ta byte naming a table not yet defined.
 	var dht_defined = [2][4]bool{ .{ false, false, false, false }, .{ false, false, false, false } };
@@ -246,10 +320,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                 seen_eoi = true;
                 // pos already moved past the 0xFF and marker byte;
                 // anything beyond pos is "trailing" data.
-                if (pos < data.len) {
-                    try addFinding(&report, allocator, .info, .trailing_data_after_eoi,
-                        pos, null);
-                }
+                if (pos < data.len) try reportTrailingData(&report, allocator, data, pos, mpf_tiff);
                 break;
             }
             // SOI inside the stream (after position 0) is suspicious but
@@ -285,6 +356,13 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         // INFO findings so validate / metadata pipelines don't have
         // to walk markers a second time. Body bounds are seg_body_start
         // to seg_end; the segment-length check above guarantees safety.
+		// CIPA DC-007 Multi-Picture Format: remember the first MPF APP2's TIFF
+		// header, whose Index IFD locates images stored after the first EOI.
+		if (marker_byte == 0xE2 and mpf_tiff == null and seg_end >= seg_body_start + 4 and
+			std.mem.eql(u8, data[seg_body_start .. seg_body_start + 4], "MPF\x00"))
+		{
+			mpf_tiff = .{ .start = seg_body_start + 4, .end = seg_end };
+		}
         if (marker_byte >= 0xE0 and marker_byte <= 0xEF) {
             if (classifyAppSignature(marker_byte, data[seg_body_start..seg_end])) |code| {
                 try addFinding(&report, allocator, .info, code, marker_offset, null);

@@ -264,7 +264,9 @@ restart intervals and the marker chain through EOI without constructing
 pixels. DNL, separated component scans and frames with more than four
 components remain unsupported. Pixel decoding retains its narrower layouts.
 Entropy finding offsets are payload-relative detection cursors, not exact
-mutation locations. Trailing bytes after EOI remain an informational finding.
+mutation locations. Bytes after the first EOI are finding 212 at the first
+such byte. Images an MPF Index IFD places there are INFO `mpf`, a remainder
+starting `PAR2\0PKT` is INFO `par2`, and anything else is WARN `other`.
 See [Canon evidence and limits](docs/measurements/canon-sof3-2026-09-24.md).
 
 ## 4. Artifacts and dependencies
