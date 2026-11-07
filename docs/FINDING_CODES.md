@@ -43,7 +43,7 @@ coordinator approved codes before 2026-11-06).
 | 65 | `jfif_metadata_invalid` | jpegz | Coordinator approval, 2026-10-28 | 6b038ec (2026-10-28) |
 | 66 | `sof_sampling_invalid` | jpegz | Coordinator approval, 2026-10-28 | faf0c92 (2026-10-28) |
 | 67 | `jfif_version_unchecked` | jpegz | Coordinator approval, 2026-10-28 | a7ddd65 (2026-10-29) |
-| 71 | `huffman_table_full_all_ones` | jpegz | validate approval, 2026-11-06 | this commit (2026-11-06) |
+| 71 | `huffman_table_full_all_ones` | jpegz | validate approval, 2026-11-06 | fc1625c (2026-11-06) |
 | 100 | `lossless_predictor_invalid` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 101 | `lossless_pointtransform_invalid` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 120 | `jpegls_invalid_run_mode` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |

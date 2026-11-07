@@ -73,7 +73,7 @@ pub const table = std.EnumArray(FindingCode, Entry).init(.{
 	.jfif_metadata_invalid = .{ .owner = .jpegz, .basis = .{ .coordinator = "2026-10-28" }, .commit = "6b038ec", .date = "2026-10-28" },
 	.sof_sampling_invalid = .{ .owner = .jpegz, .basis = .{ .coordinator = "2026-10-28" }, .commit = "faf0c92", .date = "2026-10-28" },
 	.jfif_version_unchecked = .{ .owner = .jpegz, .basis = .{ .coordinator = "2026-10-28" }, .commit = "a7ddd65", .date = "2026-10-29" },
-	.huffman_table_full_all_ones = .{ .owner = .jpegz, .basis = .{ .validate = "2026-11-06" }, .commit = null, .date = "2026-11-06" },
+	.huffman_table_full_all_ones = .{ .owner = .jpegz, .basis = .{ .validate = "2026-11-06" }, .commit = "fc1625c", .date = "2026-11-06" },
 	.lossless_predictor_invalid = .{ .owner = .jpegz, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },
 	.lossless_pointtransform_invalid = .{ .owner = .jpegz, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },
 	.jpegls_invalid_run_mode = .{ .owner = .jpegz, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },
