@@ -74,7 +74,7 @@ pub const table = std.EnumArray(FindingCode, Entry).init(.{
 	.sof_sampling_invalid = .{ .owner = .jpegz, .basis = .{ .coordinator = "2026-10-28" }, .commit = "faf0c92", .date = "2026-10-28" },
 	.jfif_version_unchecked = .{ .owner = .jpegz, .basis = .{ .coordinator = "2026-10-28" }, .commit = "a7ddd65", .date = "2026-10-29" },
 	.sequential_scan_zero_se = .{ .owner = .jpegz, .basis = .{ .validate = "2026-11-06" }, .commit = "5dd12ae", .date = "2026-11-07" },
-	.huffman_tables_missing = .{ .owner = .jpegz, .basis = .{ .validate = "2026-11-06" }, .commit = null, .date = "2026-11-07" },
+	.huffman_tables_missing = .{ .owner = .jpegz, .basis = .{ .validate = "2026-11-06" }, .commit = "cc63e33", .date = "2026-11-07" },
 	.sof_component_id_duplicate = .{ .owner = .jpegz, .basis = .{ .validate = "2026-11-06" }, .commit = "f4f03ea", .date = "2026-11-07" },
 	.huffman_table_full_all_ones = .{ .owner = .jpegz, .basis = .{ .validate = "2026-11-06" }, .commit = "fc1625c", .date = "2026-11-06" },
 	.lossless_predictor_invalid = .{ .owner = .jpegz, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },
