@@ -14,6 +14,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const errors = @import("errors.zig");
 const huffman = @import("../decode/huffman.zig");
+const baseline = @import("../decode/baseline.zig");
 const types = @import("../jpegz.zig");
 
 const Severity = errors.Severity;
@@ -181,6 +182,8 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 	// Packed Hi/Vi sampling byte per declared component ID, for the MCU check.
 	var sof_comp_hv = [_]u8{0} ** 256;
     var sof_component_count: u8 = 0;
+	// Finding 70's WARN frame: four components with IDs exactly (1, 2, 3, 1).
+	var sof_k_id_one = false;
     var sos_count: u32 = 0; // number of SOS (scan) markers seen
 	// T.81 Annex J: a DHP before the first frame makes the stream hierarchical,
 	// where several frames are legal and later ones are differential.
@@ -447,11 +450,28 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                             seg_body_start + 5, "SOF Nf must be >= 1 and segment length must equal 8 + 3*Nf");
                     } else {
                         sof_component_count = nf;
+						const k_id_one = [_]u8{ 1, 2, 3, 1 };
+						sof_k_id_one = nf == 4 and variant != .jpegls and for (k_id_one, 0..) |id, k| {
+							if (data[seg_body_start + 6 + 3 * k] != id) break false;
+						} else true;
                         // Record each declared component ID (Ci) for the SOS cross-check.
                         var ci: usize = 0;
                         while (ci < nf) : (ci += 1) {
 							const component = data[seg_body_start + 6 + 3 * ci];
 							const offset = seg_body_start + 7 + 3 * ci;
+							// T.81 B.2.2: component IDs within a frame are distinct.
+							if (sof_comp_ids[component] and variant != .jpegls) {
+								const id_offset = seg_body_start + 6 + 3 * ci;
+								if (sof_k_id_one) {
+									try addFinding(&report, allocator, .warn, .sof_component_id_duplicate, id_offset,
+										"SOF gives the fourth component the ID 1 already used by the first: the CMYK/YCCK writer pattern (1, 2, 3, 1)");
+									report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
+								} else {
+									const detail = try std.fmt.allocPrint(allocator, "SOF repeats component ID {d}", .{component});
+									defer allocator.free(detail);
+									try addExactFinding(&report, allocator, .sof_component_id_duplicate, id_offset, detail);
+								}
+							}
                             sof_comp_ids[component] = true;
 							sof_comp_hv[component] = data[offset];
 							// T.81 Table B.2: every T.81 frame's Hi and Vi are 1..4.
@@ -524,7 +544,9 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 				// those trailing parameters into apparent component selectors.
                 while (cj < ns and seg_body_start + 5 + 2 * cj < seg_end) : (cj += 1) {
                     const cs = data[seg_body_start + 1 + 2 * cj];
-					if (check_duplicates and selected[cs]) {
+					// Finding 70's frame resolves its one exact scan by position.
+					const by_position = sof_k_id_one and baseline.isKIdOneScan(data[seg_body_start..seg_end]);
+					if (check_duplicates and selected[cs] and !by_position) {
 						try addExactFinding(&report, allocator, .sos_component_mismatch,
 							seg_body_start + 1 + 2 * cj, "SOS repeats a component selector Cs");
 					}

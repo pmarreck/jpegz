@@ -564,6 +564,7 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanSelec
     if (ns == 0 or ns > frame.num_components) return fail("sos_bad_ns", error.InvalidMarker);
     if (seg_len != 6 + @as(usize, ns) * 2) return fail("sos_bad_length", error.InvalidMarker);
     var scan: ScanSelection = .{ .count = ns, .comp = .{ 0, 0, 0, 0 }, .cs_pos = .{ 0, 0, 0, 0 } };
+    const by_position = isKIdOneFrame(frame) and isKIdOneScan(data[pos + 2 .. pos + seg_len]);
     var i: usize = 0;
     while (i < ns) : (i += 1) {
         const off = pos + 3 + i * 2;
@@ -584,6 +585,7 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanSelec
         while (j < frame.num_components) : (j += 1) {
             if (frame.components[j].id == cs) break;
         }
+        if (by_position) j = i;
         if (j == frame.num_components) return fail("sos_unknown_component", error.InvalidMarker);
         for (scan.comp[0..i]) |prior| {
             if (prior == j) return fail("sos_duplicate_component", error.InvalidMarker);
@@ -595,6 +597,25 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanSelec
     }
     // Ss/Se/Ah/Al in the last 3 bytes — for baseline they're 0/63/0/0.
     return scan;
+}
+
+/// Finding 70's WARN signature (validate 2026-11-06): a four-component frame
+/// with IDs exactly (1, 2, 3, 1), as CMYK/YCCK writers produced by giving K
+/// the ID 1. libjpeg-turbo 1.2.0 and later decode these files correctly.
+pub fn isKIdOneFrame(frame: *const FrameInfo) bool {
+    if (frame.num_components != 4) return false;
+    const ids = [_]u8{ 1, 2, 3, 1 };
+    for (frame.components, ids) |component, id| if (component.id != id) return false;
+    return true;
+}
+
+/// The one scan such a frame can name unambiguously: Ns = 4 selecting
+/// (1, 2, 3, 1) in order, resolved by position. `body` starts at Ns.
+pub fn isKIdOneScan(body: []const u8) bool {
+    if (body.len < 1 + 2 * 4 or body[0] != 4) return false;
+    const ids = [_]u8{ 1, 2, 3, 1 };
+    for (ids, 0..) |id, k| if (body[1 + 2 * k] != id) return false;
+    return true;
 }
 
 /// Decoder tables that segments between scans may redefine (T.81 §B.2.4).

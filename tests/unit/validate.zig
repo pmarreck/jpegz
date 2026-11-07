@@ -2472,3 +2472,72 @@ test "a full DHT in a baseline file is 71 and leaves the pixels unchanged" {
 	defer actual.deinit(allocator);
 	try std.testing.expectEqualSlices(u8, expected.pixels, actual.pixels);
 }
+
+test "SOF component IDs (1, 2, 3, 1) are WARN 70 and decode by position; other duplicates FAIL" {
+	const allocator = std.testing.allocator;
+	// A29: baseline_4x4_cmyk.jpg with K's ID set from 4 to 1 in the SOF (175)
+	// and the SOS selector (279) (HISTORIC_ENCODER_PROVENANCE.md).
+	const exemplar = @embedFile("fixtures/historic_a29_cmyk_k_id1.jpg");
+	const original = @embedFile("fixtures/baseline_4x4_cmyk.jpg");
+	const sof_ids = [_]usize{ 166, 169, 172, 175 };
+	const sos_ids = [_]usize{ 273, 275, 277, 279 };
+
+	var report = try jpegz.validate(allocator, exemplar);
+	defer report.deinit(allocator);
+	try std.testing.expectEqual(jpegz.Severity.warn, report.overall);
+	var warned = false;
+	for (report.findings.items) |f| {
+		try std.testing.expect(f.code != .sos_component_mismatch);
+		if (f.code == .sof_component_id_duplicate) {
+			try std.testing.expectEqual(jpegz.Severity.warn, f.severity);
+			try std.testing.expectEqual(@as(?u64, 175), f.offset);
+			try std.testing.expect(f.offset_is_exact);
+			warned = true;
+		}
+	}
+	try std.testing.expect(warned);
+	try std.testing.expectEqual(.decoded, report.codec_check);
+	var expected = try jpegz.decode(allocator, original);
+	defer expected.deinit(allocator);
+	var actual = try jpegz.decode(allocator, exemplar);
+	defer actual.deinit(allocator);
+	try std.testing.expectEqualSlices(u8, expected.pixels, actual.pixels);
+
+	// Near misses: SOF IDs and SOS selectors (written to both), then only the
+	// SOS order changed. Each must FAIL; 70 is FAIL unless the SOF is exact.
+	const Case = struct { sof: [4]u8, sos: [4]u8, sof_warn: bool };
+	const cases = [_]Case{
+		.{ .sof = .{ 1, 1, 3, 4 }, .sos = .{ 1, 1, 3, 4 }, .sof_warn = false },
+		.{ .sof = .{ 1, 2, 1, 4 }, .sos = .{ 1, 2, 1, 4 }, .sof_warn = false },
+		.{ .sof = .{ 2, 2, 3, 1 }, .sos = .{ 2, 2, 3, 1 }, .sof_warn = false },
+		.{ .sof = .{ 1, 2, 3, 1 }, .sos = .{ 1, 1, 2, 3 }, .sof_warn = true },
+	};
+	for (cases) |case| {
+		const data = try allocator.dupe(u8, original);
+		defer allocator.free(data);
+		for (sof_ids, case.sof) |at, id| data[at] = id;
+		for (sos_ids, case.sos) |at, id| data[at] = id;
+		var r = try jpegz.validate(allocator, data);
+		defer r.deinit(allocator);
+		try std.testing.expectEqual(jpegz.Severity.fail, r.overall);
+		var seventy: ?jpegz.Severity = null;
+		for (r.findings.items) |f| {
+			if (f.code == .sof_component_id_duplicate) seventy = f.severity;
+		}
+		try std.testing.expectEqual(@as(?jpegz.Severity, if (case.sof_warn) .warn else .fail), seventy);
+	}
+	// A three-component duplicate is never the writer pattern.
+	const rgb = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	const sof3 = std.mem.indexOf(u8, rgb, &.{ 0xff, 0xc0 }).?;
+	const three = try allocator.dupe(u8, rgb);
+	defer allocator.free(three);
+	three[sof3 + 4 + 6 + 3 * 2] = three[sof3 + 4 + 6];
+	var r3 = try jpegz.validate(allocator, three);
+	defer r3.deinit(allocator);
+	try std.testing.expectEqual(jpegz.Severity.fail, r3.overall);
+	var failed = false;
+	for (r3.findings.items) |f| {
+		if (f.code == .sof_component_id_duplicate and f.severity == .fail and f.offset == sof3 + 4 + 6 + 3 * 2) failed = true;
+	}
+	try std.testing.expect(failed);
+}

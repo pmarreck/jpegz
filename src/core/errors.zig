@@ -159,8 +159,14 @@ pub const FindingCode = enum(u32) {
 	// Emitted at known_defect for exactly 02 01 in an otherwise sound APP0,
 	// FFmpeg/Libav's byte-swapped 1.02 (A2, owner admission 2026-11-06).
 	jfif_version_unchecked = 67,
-	// validate-approved 2026-11-06 (68..70 are reserved for findings not yet
-	// implemented). A DHT whose code space is exactly full, so its last code
+	// validate-approved 2026-11-06 (68 and 69 are reserved for findings not
+	// yet implemented). A SOF that gives two components the same ID Ci
+	// (T.81 B.2.2 requires distinct IDs), at the repeated Ci byte. WARN for
+	// exactly four components with IDs (1, 2, 3, 1), CMYK/YCCK writers that
+	// gave K the ID 1 (libjpeg-turbo 1.2.0 ChangeLog); an interleaved scan
+	// naming (1, 2, 3, 1) in order then resolves by position. FAIL otherwise.
+	sof_component_id_duplicate = 70,
+	// validate-approved 2026-11-06. A DHT whose code space is exactly full, so its last code
 	// is the all-ones codeword T.81 Annex C reserves, with no other violation.
 	// Pentax K-x and K-r, Ricoh GR and DJI FC4382 DNGs write it; owner
 	// admitted it as a known defect. Decoding with the table is deterministic
