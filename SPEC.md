@@ -11,8 +11,12 @@ The original May design is available in Git history and
 jpegz owns the outward JPEG-family validation interface. Classic JPEG and
 JPEG-LS use jpegz's Zig code; JP2/J2K and JPEG XL validation use pinned jp2z
 and libjxlz modules. Pixel decoding supports a growing subset of T.81/T.87
-and uses OpenJPEG for T.800. JPEG XL pixel decoding is outside the current
-jpegz API.
+and uses OpenJPEG for T.800. `jpegxl.decode` returns the first frame of a
+JPEG XL image through libjxlz's decoder API, in stored orientation: color
+channels then alpha, u8 at 8 bits or fewer and host-order u16 above, scaled
+to the stored depth. Float samples return `UnsupportedPrecision`; builds
+without JPEG XL, or alpha at a different depth, return `NotImplemented`.
+`extra_channels_dropped` counts the extra channels the API cannot return.
 
 Classic decoding currently includes baseline/extended sequential, progressive,
 predictive lossless and arithmetic DCT modes. JPEG-LS decoding is also in Zig.

@@ -845,6 +845,12 @@ pub const jpegxl = struct {
     ) error{OutOfMemory}!StrictValidationResult {
         return facade.validateJxl(allocator, data, options);
     }
+
+    /// Pixel decode of the first frame through libjxlz; see `jxl_decode.zig`.
+    pub const DecodeError = jxl_decode.Error;
+    pub const Decoded = jxl_decode.Decoded;
+    pub const decode = jxl_decode.decode;
+    const jxl_decode = @import("jxl_decode.zig");
 };
 
 /// Force-link handle for the C ABI. Referencing this pulls every

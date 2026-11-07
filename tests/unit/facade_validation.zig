@@ -1526,3 +1526,62 @@ test "JPEG facade warns on zero padding from a known encoder and still decodes" 
 	defer image.deinit(std.testing.allocator);
 	try std.testing.expectEqual(@as(u32, 16), image.width);
 }
+
+test "JPEG XL decode returns every lossless sample at its stored depth" {
+	if (!jpegz.facade.with_jxl) return error.SkipZigTest;
+	const allocator = std.testing.allocator;
+	// cjxl 0.12.0 -d 0 from formula images (37x + 101y + 53c + 7xy) mod 2^bits;
+	// djxl reproduces each source exactly (tests/unit/fixtures/JXL_DECODE_PROVENANCE.md).
+	const cases = [_]struct { bytes: []const u8, color: u8, alpha: bool, bits: u8 }{
+		.{ .bytes = @embedFile("fixtures/jxl_lossless_9x7_gray8.jxl"), .color = 1, .alpha = false, .bits = 8 },
+		.{ .bytes = @embedFile("fixtures/jxl_lossless_9x7_graya8.jxl"), .color = 1, .alpha = true, .bits = 8 },
+		.{ .bytes = @embedFile("fixtures/jxl_lossless_9x7_rgb8.jxl"), .color = 3, .alpha = false, .bits = 8 },
+		.{ .bytes = @embedFile("fixtures/jxl_lossless_9x7_rgba8.jxl"), .color = 3, .alpha = true, .bits = 8 },
+		.{ .bytes = @embedFile("fixtures/jxl_lossless_9x7_gray12.jxl"), .color = 1, .alpha = false, .bits = 12 },
+		.{ .bytes = @embedFile("fixtures/jxl_lossless_9x7_rgb16.jxl"), .color = 3, .alpha = false, .bits = 16 },
+	};
+	for (cases) |case| {
+		var decoded = try jpegz.jpegxl.decode(allocator, case.bytes);
+		defer decoded.deinit(allocator);
+		const image = decoded.image;
+		const channels: u8 = case.color + @intFromBool(case.alpha);
+		try std.testing.expectEqual(@as(u32, 9), image.width);
+		try std.testing.expectEqual(@as(u32, 7), image.height);
+		try std.testing.expectEqual(channels, image.channels);
+		try std.testing.expectEqual(case.bits, image.bits_per_sample);
+		try std.testing.expectEqual(case.color, decoded.color_channels);
+		try std.testing.expectEqual(case.alpha, decoded.has_alpha);
+		try std.testing.expectEqual(@as(u32, 0), decoded.extra_channels_dropped);
+		try std.testing.expectEqual(if (case.color == 1) jpegz.ColorSpace.grayscale else .rgb, image.source_color_space);
+		try std.testing.expectEqual(if (case.alpha) jpegz.PixelLayout.components else if (case.color == 1) jpegz.PixelLayout.grayscale else .rgb, image.layout);
+		try std.testing.expectEqual(image.rowStride() * image.height, image.pixels.len);
+		const modulus: u32 = @as(u32, 1) << @intCast(case.bits);
+		var mismatches: usize = 0;
+		for (0..7) |y| for (0..9) |x| for (0..channels) |c| {
+			const expected: u32 = @intCast((37 * x + 101 * y + 53 * c + 7 * x * y) % modulus);
+			const index = (y * 9 + x) * channels + c;
+			const got: u32 = if (case.bits > 8) image.pixelsU16()[index] else image.pixels[index];
+			if (got != expected) mismatches += 1;
+		};
+		if (mismatches != 0) std.debug.print("JXL {d}-bit {d}+{} channels: {d} mismatched samples\n", .{ case.bits, case.color, case.alpha, mismatches });
+		try std.testing.expectEqual(@as(usize, 0), mismatches);
+	}
+}
+
+test "JPEG XL decode reports truncation and rejection as typed errors" {
+	if (!jpegz.facade.with_jxl) return error.SkipZigTest;
+	const allocator = std.testing.allocator;
+	const whole = @embedFile("fixtures/jxl_lossless_9x7_rgb8.jxl");
+	for ([_]usize{ 0, 1, 2, 12, whole.len / 2, whole.len - 1 }) |length| {
+		if (jpegz.jpegxl.decode(allocator, whole[0..length])) |decoded| {
+			var d = decoded;
+			d.deinit(allocator);
+			std.debug.print("JXL prefix {d} of {d} decoded\n", .{ length, whole.len });
+			return error.TestUnexpectedResult;
+		} else |err| switch (err) {
+			error.TruncatedStream, error.BackendError => {},
+			else => return err,
+		}
+	}
+	try std.testing.expectError(error.BackendError, jpegz.jpegxl.decode(allocator, "not a JPEG XL codestream"));
+}
