@@ -106,6 +106,8 @@ pub const table = std.EnumArray(FindingCode, Entry).init(.{
 	.jxl_invalid_hybrid_uint_config = .{ .owner = .libjxlz, .basis = .jxl_band, .commit = "8a92dbd", .date = "2026-09-18" },
 	.jxl_invalid_histogram = .{ .owner = .libjxlz, .basis = .jxl_band, .commit = "8a92dbd", .date = "2026-09-18" },
 	.jxl_invalid_icc_symbol = .{ .owner = .libjxlz, .basis = .{ .coordinator = "2026-10-29" }, .commit = "e8ef262", .date = "2026-10-29" },
+	.jxl_invalid_modular_transform = .{ .owner = .libjxlz, .basis = .{ .validate = "2026-11-06" }, .commit = null, .date = "2026-11-07" },
+	.jxl_trailing_data = .{ .owner = .libjxlz, .basis = .{ .validate = "2026-11-07" }, .commit = null, .date = "2026-11-07" },
 	.arithmetic_coding_used = .{ .owner = .jpegz, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },
 	.twelve_bit_precision = .{ .owner = .jpegz, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },
 	.sixteen_bit_lossless = .{ .owner = .jpegz, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },

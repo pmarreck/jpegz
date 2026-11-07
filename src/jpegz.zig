@@ -541,7 +541,7 @@ pub fn classicFindingVerdict(code: FindingCode, severity: Severity) StrictVerdic
 		.jxl_invalid_argument, .jxl_unclassified_decoder_error, .jxl_nonzero_padding,
 		.jxl_invalid_context_map, .jxl_invalid_ma_tree, .jxl_invalid_ans_state, .jxl_truncated_box_header,
 		.jxl_invalid_ac_nonzero_count, .jxl_invalid_hybrid_uint_config, .jxl_invalid_histogram,
-		.jxl_invalid_icc_symbol, .arithmetic_coding_used, .twelve_bit_precision, .sixteen_bit_lossless,
+		.jxl_invalid_icc_symbol, .jxl_invalid_modular_transform, .jxl_trailing_data, .arithmetic_coding_used, .twelve_bit_precision, .sixteen_bit_lossless,
 		.progressive_scan_count, .embedded_thumbnail_present, .exif_metadata_present, .icc_profile_present,
 		.jp2_uses_9x7_wavelet, .jp2_uses_5x3_wavelet, .jfif_metadata_present, .xmp_metadata_present,
 		.photoshop_irb_present, .trailing_data_after_eoi, .jp2_packets_under_read, .entropy_over_read,

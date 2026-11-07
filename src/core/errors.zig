@@ -244,6 +244,13 @@ pub const FindingCode = enum(u32) {
 	// Registry-approved 2026-10-29; raw libjxlz code 17. This does not
 	// change the provider pin or complete its unresolved severity assessment.
 	jxl_invalid_icc_symbol = 197,
+	// validate-approved 2026-11-06; raw libjxlz code 18, FAIL class
+	// (owner-chosen): an invalid modular transform.
+	jxl_invalid_modular_transform = 198,
+	// validate-assigned 2026-11-07; raw libjxlz code 19, at the first byte
+	// after the image. libjxlz's origin sets the class: WARN, INFO for a
+	// PAR2 trailer (detail par2). The JPEG XL band 180..199 is now full.
+	jxl_trailing_data = 199,
 
     // ── Informational (severity = .info) (200..249) ──────────────
     arithmetic_coding_used = 200,

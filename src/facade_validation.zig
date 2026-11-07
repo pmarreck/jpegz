@@ -209,38 +209,78 @@ fn jxlCode(raw: i32) ?FindingCode {
         15 => .jxl_invalid_hybrid_uint_config,
         16 => .jxl_invalid_histogram,
 		17 => .jxl_invalid_icc_symbol,
+		18 => .jxl_invalid_modular_transform,
+		19 => .jxl_trailing_data,
         else => null,
     };
 }
 
-/// Maps every libjxlz strict verdict/code pair; inconsistent or future pairs
-/// become indeterminate so version skew cannot manufacture a clean result.
+/// libjxlz's per-finding origin (validate TERMINOLOGY A2-A4), mirrored so a
+/// build without JPEG XL still compiles. The test below fails to compile when
+/// libjxlz appends an origin this mapping does not classify. (A top-level
+/// check would analyze libjxlz's exported C API in every consumer.)
+pub const JxlOrigin = enum(i32) { none = 0, fail = 1, warn = 2, info = 3, known_defect = 4 };
+
+test "JxlOrigin mirrors libjxlz's origin enum exactly" {
+	comptime if (with_jxl) {
+		const leaf_fields = @typeInfo(libjxlz.ffi.decode.JxlValidationOrigin).@"enum".fields;
+		if (leaf_fields.len != @typeInfo(JxlOrigin).@"enum".fields.len)
+			@compileError("libjxlz changed JxlValidationOrigin; classify the new origin in mapJxlFindingWithOrigin");
+		for (leaf_fields, @typeInfo(JxlOrigin).@"enum".fields) |leaf, mine| {
+			if (leaf.value != mine.value) @compileError("libjxlz renumbered JxlValidationOrigin");
+		}
+	};
+}
+
+/// Maps a libjxlz finding by its origin, the class libjxlz assigns each code
+/// and detail (since libjxlz 2cf83070). FAIL is corrupt, WARN and INFO are
+/// valid, NONE marks tool reach (unsupported or inconclusive). A pairing
+/// libjxlz's own rule cannot produce, or a verdict that disagrees with the
+/// origin, is indeterminate, so version skew cannot manufacture a clean result.
+pub fn mapJxlFindingWithOrigin(raw_verdict: i32, raw_code: i32, raw_origin: i32) MappedFinding {
+	if (raw_verdict == 0 and raw_code == 0) {
+		return .{ .verdict = .valid, .code = null, .severity = .pass };
+	}
+	const code = jxlCode(raw_code) orelse
+		return .{ .verdict = .indeterminate, .code = null, .severity = .warn };
+	const inconsistent = MappedFinding{ .verdict = .indeterminate, .code = code, .severity = .warn };
+	const origin = std.enums.fromInt(JxlOrigin, raw_origin) orelse return inconsistent;
+	const plausible = switch (raw_code) {
+		1, 2, 3, 9...18 => origin == .fail,
+		4...8 => origin == .none,
+		19 => origin == .warn or origin == .info,
+		else => false,
+	};
+	if (!plausible) return inconsistent;
+	const mapped: MappedFinding = switch (origin) {
+		.fail => .{ .verdict = .corrupt, .code = code, .severity = .fail },
+		.warn => .{ .verdict = .valid, .code = code, .severity = .warn },
+		.info => .{ .verdict = .valid, .code = code, .severity = .info },
+		.known_defect => .{ .verdict = .known_defect, .code = code, .severity = .known_defect },
+		.none => if (raw_code == 4)
+			.{ .verdict = .unsupported, .code = code, .severity = .warn }
+		else
+			.{ .verdict = .indeterminate, .code = code, .severity = .warn },
+	};
+	const expected_raw_verdict: i32 = switch (mapped.verdict) {
+		.valid, .known_defect => 0,
+		.corrupt => 1,
+		.unsupported => 2,
+		.indeterminate => 3,
+	};
+	if (raw_verdict != expected_raw_verdict) return inconsistent;
+	return mapped;
+}
+
+/// The same mapping for a record without an origin, using the origin
+/// libjxlz's rule assigns the code (trailing data is taken as WARN).
 pub fn mapJxlFinding(raw_verdict: i32, raw_code: i32) MappedFinding {
-    if (raw_verdict == 0 and raw_code == 0) {
-        return .{ .verdict = .valid, .code = null, .severity = .pass };
-    }
-    const code = jxlCode(raw_code) orelse
-        return .{ .verdict = .indeterminate, .code = null, .severity = .warn };
-    const expected_raw_verdict: i32 = switch (raw_code) {
-        1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 17 => 1,
-        4 => 2,
-        5, 6, 7, 8 => 3,
-        else => unreachable,
-    };
-    if (raw_verdict != expected_raw_verdict) {
-        return .{ .verdict = .indeterminate, .code = code, .severity = .warn };
-    }
-    const expected_verdict: StrictVerdict = switch (raw_code) {
-        1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 17 => .corrupt,
-        4 => .unsupported,
-        5, 6, 7, 8 => .indeterminate,
-        else => unreachable,
-    };
-    return .{
-        .verdict = expected_verdict,
-        .code = code,
-        .severity = if (expected_verdict == .corrupt) .fail else .warn,
-    };
+	const origin: JxlOrigin = switch (raw_code) {
+		1, 2, 3, 9...18 => .fail,
+		19 => .warn,
+		else => .none,
+	};
+	return mapJxlFindingWithOrigin(raw_verdict, raw_code, @intFromEnum(origin));
 }
 
 /// libjxlz's finding severity is a recoverability axis: WARNING means only
@@ -346,6 +386,8 @@ const JxlReportedFinding = struct {
 	raw_verdict: i32,
 	raw_code: i32,
 	raw_severity: i32,
+	/// libjxlz's origin; null for records that predate it.
+	raw_origin: ?i32 = null,
 	offset: u64,
 	host_offset: u64,
 	exact: bool,
@@ -371,7 +413,10 @@ const JxlVerdictState = struct {
 };
 
 fn translateJxlFinding(raw: JxlReportedFinding, input_size: usize, host_base: u64) StrictFinding {
-	const mapped = mapJxlFinding(raw.raw_verdict, raw.raw_code);
+	const mapped = if (raw.raw_origin) |origin|
+		mapJxlFindingWithOrigin(raw.raw_verdict, raw.raw_code, origin)
+	else
+		mapJxlFinding(raw.raw_verdict, raw.raw_code);
 	const offset: ?u64 = if (raw.offset <= input_size) raw.offset else null;
 	const host_offset: ?u64 = host: {
 		if (offset == null) break :host null;
@@ -382,10 +427,13 @@ fn translateJxlFinding(raw: JxlReportedFinding, input_size: usize, host_base: u6
 		.source = .libjxlz,
 		.leaf_code = @bitCast(raw.raw_code),
 		.code = mapped.code,
+		// A WARN or INFO origin sets the severity; recoverability does not.
 		.severity = if (mapped.verdict == .indeterminate)
 			.warn
 		else if (jxlFailsRegardlessOfRecovery(raw.raw_code))
 			.fail
+		else if (mapped.verdict == .valid or mapped.verdict == .known_defect)
+			mapped.severity
 		else switch (raw.raw_severity) {
 			1 => .warn,
 			2 => .fail,
@@ -420,12 +468,14 @@ fn validateJxlWithFindings(
             const raw_verdict: i32 = @intCast(@intFromEnum(finding.verdict));
             const raw_code: i32 = @intCast(@intFromEnum(finding.code));
             const raw_severity: i32 = @intCast(@intFromEnum(finding.severity));
-            const mapped = mapJxlFinding(raw_verdict, raw_code);
+            const raw_origin: i32 = @intCast(@intFromEnum(finding.origin));
+            const mapped = mapJxlFindingWithOrigin(raw_verdict, raw_code, raw_origin);
 			self.verdict_state.observe(mapped);
             self.findings.append(self.allocator, translateJxlFinding(.{
 				.raw_verdict = raw_verdict,
 				.raw_code = raw_code,
 				.raw_severity = raw_severity,
+				.raw_origin = raw_origin,
                 .offset = finding.byte_offset,
                 .host_offset = finding.host_byte_offset,
                 .exact = finding.offset_is_exact != 0,
@@ -460,7 +510,8 @@ fn validateJxlWithFindings(
 
     const raw_verdict: i32 = @intCast(@intFromEnum(leaf.verdict));
     const raw_code: i32 = @intCast(@intFromEnum(leaf.code));
-    const mapped = mapJxlFinding(raw_verdict, raw_code);
+    const raw_origin: i32 = @intCast(@intFromEnum(leaf.origin));
+    const mapped = mapJxlFindingWithOrigin(raw_verdict, raw_code, raw_origin);
     result.verdict = collector.verdict_state.finish(mapped);
     result.frames_validated = leaf.frames_validated;
     result.decode_complete = leaf.decode_complete != 0;
@@ -475,6 +526,7 @@ fn validateJxlWithFindings(
 			.raw_verdict = raw_verdict,
 			.raw_code = raw_code,
 			.raw_severity = raw_severity,
+			.raw_origin = raw_origin,
             .offset = leaf.byte_offset,
             .host_offset = leaf.host_byte_offset,
             .exact = leaf.offset_is_exact != 0,
@@ -512,7 +564,8 @@ pub fn validateJxl(
     const leaf = libjxlz.validation.validate(data, options);
     const raw_verdict: i32 = @intCast(@intFromEnum(leaf.verdict));
     const raw_code: i32 = @intCast(@intFromEnum(leaf.code));
-    const mapped = mapJxlFinding(raw_verdict, raw_code);
+    const raw_origin: i32 = @intCast(@intFromEnum(leaf.origin));
+    const mapped = mapJxlFindingWithOrigin(raw_verdict, raw_code, raw_origin);
     var result = StrictValidationResult{
         .verdict = mapped.verdict,
         .format = .jpeg_xl,
@@ -525,6 +578,7 @@ pub fn validateJxl(
 			.raw_verdict = raw_verdict,
 			.raw_code = raw_code,
 			.raw_severity = 0,
+			.raw_origin = raw_origin,
             .offset = leaf.byte_offset,
             .host_offset = leaf.host_byte_offset,
             .exact = leaf.offset_is_exact != 0,
@@ -699,4 +753,61 @@ test "every pinned libjxlz finding code round-trips through StrictFinding as a t
 	}, 20, 0);
 	other.source = .jp2z;
 	try std.testing.expectEqual(@as(?JxlLeafFindingCode, null), jxlLeafCode(other));
+}
+
+test "libjxlz's origin rule agrees with the facade for every code and detail" {
+	if (!with_jxl) return error.SkipZigTest;
+	const api = libjxlz.ffi.decode;
+	for (std.enums.values(api.JxlValidationFindingCode)) |leaf| {
+		const raw_code: i32 = @intFromEnum(leaf);
+		if (raw_code == 0) continue;
+		for (std.enums.values(api.JxlValidationDetail)) |detail| {
+			const origin = api.validationOrigin(leaf, detail);
+			const raw_origin: i32 = @intFromEnum(origin);
+			const raw_verdict: i32 = switch (origin) {
+				.JXL_VALIDATION_ORIGIN_FAIL => 1,
+				.JXL_VALIDATION_ORIGIN_WARN, .JXL_VALIDATION_ORIGIN_INFO, .JXL_VALIDATION_ORIGIN_KNOWN_DEFECT => 0,
+				.JXL_VALIDATION_ORIGIN_NONE => if (raw_code == 4) 2 else 3,
+			};
+			const mapped = mapJxlFindingWithOrigin(raw_verdict, raw_code, raw_origin);
+			try std.testing.expect(mapped.code != null);
+			const expected: StrictVerdict = switch (origin) {
+				.JXL_VALIDATION_ORIGIN_FAIL => .corrupt,
+				.JXL_VALIDATION_ORIGIN_WARN, .JXL_VALIDATION_ORIGIN_INFO => .valid,
+				.JXL_VALIDATION_ORIGIN_KNOWN_DEFECT => .known_defect,
+				.JXL_VALIDATION_ORIGIN_NONE => if (raw_code == 4) .unsupported else .indeterminate,
+			};
+			try std.testing.expectEqual(expected, mapped.verdict);
+		}
+	}
+	// The owner's FAIL overrides for 9 and 13 now agree with libjxlz's origin.
+	for ([_]api.JxlValidationFindingCode{ .JXL_VALIDATION_FINDING_NONZERO_PADDING, .JXL_VALIDATION_FINDING_TRUNCATED_BOX_HEADER }) |code| {
+		try std.testing.expectEqual(api.JxlValidationOrigin.JXL_VALIDATION_ORIGIN_FAIL, api.validationOrigin(code, .JXL_VALIDATION_DETAIL_NONE));
+	}
+}
+
+test "JXL origins the rule cannot produce fail closed" {
+	// Unknown origin value, FAIL with a valid verdict, trailing data as FAIL,
+	// a FAIL code reported as WARN, and a tool-reach code with an origin.
+	const cases = [_][3]i32{ .{ 1, 2, 99 }, .{ 0, 2, 1 }, .{ 1, 19, 1 }, .{ 0, 17, 2 }, .{ 3, 5, 1 } };
+	for (cases) |case| {
+		try std.testing.expectEqual(StrictVerdict.indeterminate, mapJxlFindingWithOrigin(case[0], case[1], case[2]).verdict);
+	}
+	const par2 = mapJxlFindingWithOrigin(0, 19, @intFromEnum(JxlOrigin.info));
+	try std.testing.expectEqual(StrictVerdict.valid, par2.verdict);
+	try std.testing.expectEqual(Severity.info, par2.severity);
+	try std.testing.expectEqual(FindingCode.jxl_trailing_data, par2.code.?);
+	const other = translateJxlFinding(.{
+		.raw_verdict = 0, .raw_code = 19, .raw_severity = 1, .raw_origin = @intFromEnum(JxlOrigin.warn),
+		.offset = 20, .host_offset = 20, .exact = true,
+	}, 20, 0);
+	try std.testing.expectEqual(Severity.warn, other.severity);
+	const info = translateJxlFinding(.{
+		.raw_verdict = 0, .raw_code = 19, .raw_severity = 1, .raw_origin = @intFromEnum(JxlOrigin.info),
+		.offset = 20, .host_offset = 20, .exact = true,
+	}, 20, 0);
+	try std.testing.expectEqual(Severity.info, info.severity);
+	const modular = mapJxlFindingWithOrigin(1, 18, @intFromEnum(JxlOrigin.fail));
+	try std.testing.expectEqual(FindingCode.jxl_invalid_modular_transform, modular.code.?);
+	try std.testing.expectEqual(StrictVerdict.corrupt, modular.verdict);
 }

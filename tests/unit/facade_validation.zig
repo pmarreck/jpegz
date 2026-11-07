@@ -1037,12 +1037,13 @@ test "JPEG XL entropy findings preserve names and reject inconsistent verdicts" 
 }
 
 test "JXL finding classifier separates every current pair from unknown and inconsistent pairs" {
-	const raw_codes = [_]i32{ -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 67, 197, std.math.maxInt(i32) };
+	const raw_codes = [_]i32{ -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 67, 197, std.math.maxInt(i32) };
 	for (raw_codes) |raw_code| {
 		for (0..6) |value| {
 			const raw_verdict: i32 = @as(i32, @intCast(value)) - 1;
-			const known = raw_code >= 1 and raw_code <= 17;
-			const expected_raw: i32 = if (raw_code == 4) 2 else if (raw_code >= 5 and raw_code <= 8) 3 else 1;
+			const known = raw_code >= 1 and raw_code <= 19;
+			// Trailing data (19) without an origin is taken as WARN: valid.
+			const expected_raw: i32 = if (raw_code == 4) 2 else if (raw_code >= 5 and raw_code <= 8) 3 else if (raw_code == 19) 0 else 1;
 			const expected: jpegz.StrictVerdict = if (raw_code == 0 and raw_verdict == 0)
 				.valid
 			else if (!known or raw_verdict != expected_raw)
@@ -1051,6 +1052,8 @@ test "JXL finding classifier separates every current pair from unknown and incon
 				.unsupported
 			else if (raw_code >= 5 and raw_code <= 8)
 				.indeterminate
+			else if (raw_code == 19)
+				.valid
 			else
 				.corrupt;
 			const mapped = jpegz.facade.mapJxlFinding(raw_verdict, raw_code);
@@ -1062,7 +1065,7 @@ test "JXL finding classifier separates every current pair from unknown and incon
 			}
 			// Owner, 2026-11-05: every corrupt pair, including nonzero padding (9)
 			// and a truncated box header (13), is FAIL class.
-			const severity: jpegz.Severity = if (expected == .valid) .pass else if (expected == .corrupt) .fail else .warn;
+			const severity: jpegz.Severity = if (expected == .valid) (if (raw_code == 19) .warn else .pass) else if (expected == .corrupt) .fail else .warn;
 			try std.testing.expectEqual(severity, mapped.severity);
 		}
 	}
@@ -1599,4 +1602,34 @@ test "JPEG XL decode reports truncation and rejection as typed errors" {
 		}
 	}
 	try std.testing.expectError(error.BackendError, jpegz.jpegxl.decode(allocator, "not a JPEG XL codestream"));
+}
+
+test "JPEG XL trailing data is WARN 199, or INFO for a PAR2 trailer, at the first byte after the image" {
+	if (!jpegz.facade.with_jxl) return error.SkipZigTest;
+	const allocator = std.testing.allocator;
+	const image = @embedFile("fixtures/jxl_lossless_9x7_rgb8.jxl");
+	const Case = struct { tail: []const u8, severity: jpegz.Severity };
+	for ([_]Case{
+		.{ .tail = "PAR2\x00PKT" ++ [_]u8{0x11} ** 56, .severity = .info },
+		.{ .tail = "trailing junk!", .severity = .warn },
+		.{ .tail = &([_]u8{0} ** 16), .severity = .warn },
+	}) |case| {
+		const data = try std.mem.concat(allocator, u8, &.{ image, case.tail });
+		defer allocator.free(data);
+		var result = try jpegz.jpegxl.validate(allocator, data, jpegz.jpegxl.default_options);
+		defer result.deinit(allocator);
+		try std.testing.expectEqual(jpegz.StrictVerdict.valid, result.verdict);
+		var seen = false;
+		for (result.findings.items) |finding| {
+			if (finding.code != .jxl_trailing_data) continue;
+			seen = true;
+			try std.testing.expectEqual(case.severity, finding.severity);
+			try std.testing.expectEqual(@as(?u64, image.len), finding.offset);
+			try std.testing.expectEqual(@as(u32, 19), finding.leaf_code);
+		}
+		try std.testing.expect(seen);
+	}
+	var clean = try jpegz.jpegxl.validate(allocator, image, jpegz.jpegxl.default_options);
+	defer clean.deinit(allocator);
+	for (clean.findings.items) |finding| try std.testing.expect(finding.code != .jxl_trailing_data);
 }

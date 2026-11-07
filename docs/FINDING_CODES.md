@@ -76,6 +76,8 @@ coordinator approved codes before 2026-11-06).
 | 195 | `jxl_invalid_hybrid_uint_config` | libjxlz | Coordinator's JPEG XL band 180..199, reserved 2026-08-05 | 8a92dbd (2026-09-18) |
 | 196 | `jxl_invalid_histogram` | libjxlz | Coordinator's JPEG XL band 180..199, reserved 2026-08-05 | 8a92dbd (2026-09-18) |
 | 197 | `jxl_invalid_icc_symbol` | libjxlz | Coordinator approval, 2026-10-29 | e8ef262 (2026-10-29) |
+| 198 | `jxl_invalid_modular_transform` | libjxlz | validate approval, 2026-11-06 | this commit (2026-11-07) |
+| 199 | `jxl_trailing_data` | libjxlz | validate approval, 2026-11-07 | this commit (2026-11-07) |
 | 200 | `arithmetic_coding_used` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 201 | `twelve_bit_precision` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 202 | `sixteen_bit_lossless` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
