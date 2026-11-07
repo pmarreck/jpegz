@@ -159,8 +159,15 @@ pub const FindingCode = enum(u32) {
 	// Emitted at known_defect for exactly 02 01 in an otherwise sound APP0,
 	// FFmpeg/Libav's byte-swapped 1.02 (A2, owner admission 2026-11-06).
 	jfif_version_unchecked = 67,
-	// validate-approved 2026-11-06 (68 and 69 are reserved for findings not
-	// yet implemented). A SOF that gives two components the same ID Ci
+	// validate-approved 2026-11-06. Go's image/jpeg encoder before commit
+	// 5f7bec69 (2012) wrote Ss=0, Se=0, Ah=Al=0 in its one sequential scan,
+	// which covers every component; Se must be 63 (T.81 Table B.3). Owner
+	// admitted it as a known defect on the documented-producer path. Exact
+	// offset at the Se byte. Any other sequential SOS field violation, or the
+	// same bytes in a file with more than one scan, stays 64.
+	sequential_scan_zero_se = 68,
+	// validate-approved 2026-11-06 (69 is reserved for a finding not yet
+	// implemented). A SOF that gives two components the same ID Ci
 	// (T.81 B.2.2 requires distinct IDs), at the repeated Ci byte. WARN for
 	// exactly four components with IDs (1, 2, 3, 1), CMYK/YCCK writers that
 	// gave K the ID 1 (libjpeg-turbo 1.2.0 ChangeLog); an interleaved scan

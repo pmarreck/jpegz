@@ -184,6 +184,9 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     var sof_component_count: u8 = 0;
 	// Finding 70's WARN frame: four components with IDs exactly (1, 2, 3, 1).
 	var sof_k_id_one = false;
+	// Se byte of a sequential scan matching finding 68's Go signature; judged
+	// after the walk, when the number of scans is known.
+	var go_zero_se: ?usize = null;
     var sos_count: u32 = 0; // number of SOS (scan) markers seen
 	// T.81 Annex J: a DHP before the first frame makes the stream hierarchical,
 	// where several frames are legal and later ones are differential.
@@ -592,7 +595,11 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                     const ah = ahal >> 4;
                     const al = ahal & 0x0F;
                     switch (report.variant) {
-						.baseline_huffman, .extended_huffman => {
+						.baseline_huffman, .extended_huffman => if (ss == 0 and se == 0 and ahal == 0 and
+							sos_count == 1 and ns2 == sof_component_count)
+						{
+							go_zero_se = spec_off + 1;
+						} else {
 							try checkSequentialScanField(&report, allocator, spec_off, "Ss", ss, 0);
 							try checkSequentialScanField(&report, allocator, spec_off + 1, "Se", se, 63);
 							try checkSequentialScanField(&report, allocator, spec_off + 2, "Ah (high nibble)", ah, 0);
@@ -651,6 +658,18 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     }
 
     // ── Step 3: After-loop sanity ──────────────────────────────
+	// Known defect 68 only when that scan was the frame's only scan; in a
+	// multi-scan file the same bytes are an ordinary FAIL 64.
+	if (go_zero_se) |se_offset| {
+		if (sos_count == 1) {
+			try addFinding(&report, allocator, .known_defect, .sequential_scan_zero_se, se_offset,
+				"sequential SOS Ss=0 Se=0 Ah=Al=0 in the only scan: Go image/jpeg before 5f7bec69; admitted known defect");
+			report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
+		} else {
+			try checkSequentialScanField(&report, allocator, se_offset, "Se", 0, 63);
+		}
+	}
+
     if (!seen_sof) {
         try addFinding(&report, allocator, .fail, .duplicate_sof, null,
             "no SOF marker found");

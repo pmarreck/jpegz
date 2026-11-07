@@ -1597,6 +1597,10 @@ test "sequential SOS fields classify every byte by the declared scan process" {
 					var oracle = try jpegz.internal.wrapperDecode(allocator, data);
 					defer oracle.deinit(allocator);
 					try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+				} else if (field.offset == 8 and raw == 0) {
+					// The only scan, covering every component: Go's known defect 68.
+					try expectOnlyTyped(report, .known_defect, .sequential_scan_zero_se, offset);
+					try std.testing.expectEqual(jpegz.Severity.known_defect, report.overall);
 				} else {
 					const expected: usize = if (field.offset == 9)
 						@as(usize, @intFromBool(raw >> 4 != 0)) + @intFromBool(raw & 15 != 0)
@@ -2540,4 +2544,65 @@ test "SOF component IDs (1, 2, 3, 1) are WARN 70 and decode by position; other d
 		if (f.code == .sof_component_id_duplicate and f.severity == .fail and f.offset == sof3 + 4 + 6 + 3 * 2) failed = true;
 	}
 	try std.testing.expect(failed);
+}
+
+test "Go 1.0's Se=0 in the only sequential scan is known defect 68; near misses stay 64" {
+	const allocator = std.testing.allocator;
+	// Go image/jpeg before 5f7bec69 wrote 00 00 00 where 00 3f 00 belongs, in
+	// one scan covering every component (golang/go issue 3916).
+	const original = @embedFile("fixtures/baseline_2x2_rgb.jpg");
+	const sos = std.mem.indexOf(u8, original, &.{ 0xff, 0xda }).?;
+	const ns = original[sos + 4];
+	try std.testing.expectEqual(@as(u8, 3), ns);
+	const spec = sos + 5 + 2 * @as(usize, ns);
+	try std.testing.expectEqualSlices(u8, &.{ 0, 63, 0 }, original[spec .. spec + 3]);
+
+	const exemplar = try allocator.dupe(u8, original);
+	defer allocator.free(exemplar);
+	exemplar[spec + 1] = 0;
+	var report = try jpegz.validate(allocator, exemplar);
+	defer report.deinit(allocator);
+	try expectOnlyTyped(report, .known_defect, .sequential_scan_zero_se, spec + 1);
+	try std.testing.expectEqual(jpegz.Severity.known_defect, report.overall);
+	try std.testing.expectEqual(.decoded, report.codec_check);
+	for (report.findings.items) |f| try std.testing.expect(f.code != .sequential_scan_invalid);
+	var expected = try jpegz.decode(allocator, original);
+	defer expected.deinit(allocator);
+	var actual = try jpegz.decode(allocator, exemplar);
+	defer actual.deinit(allocator);
+	try std.testing.expectEqualSlices(u8, expected.pixels, actual.pixels);
+
+	// Near misses: another Se, the Go tail plus Ah=1, Ss=1 with Se=0.
+	const Tail = struct { ss: u8, se: u8, ahal: u8 };
+	for ([_]Tail{ .{ .ss = 0, .se = 5, .ahal = 0 }, .{ .ss = 0, .se = 0, .ahal = 0x10 }, .{ .ss = 1, .se = 0, .ahal = 0 } }) |tail| {
+		const data = try allocator.dupe(u8, original);
+		defer allocator.free(data);
+		data[spec] = tail.ss;
+		data[spec + 1] = tail.se;
+		data[spec + 2] = tail.ahal;
+		var r = try jpegz.validate(allocator, data);
+		defer r.deinit(allocator);
+		try std.testing.expectEqual(jpegz.Severity.fail, r.overall);
+		var sixty_four = false;
+		for (r.findings.items) |f| {
+			try std.testing.expect(f.code != .sequential_scan_zero_se);
+			if (f.code == .sequential_scan_invalid) sixty_four = true;
+		}
+		try std.testing.expect(sixty_four);
+	}
+
+	// The same scan followed by a second scan is not the Go file: FAIL 64 at
+	// the first scan's Se byte.
+	const eoi = original.len - 2;
+	const two_scans = try std.mem.concat(allocator, u8, &.{ exemplar[0..eoi], exemplar[sos..eoi], exemplar[eoi..] });
+	defer allocator.free(two_scans);
+	var r2 = try jpegz.validate(allocator, two_scans);
+	defer r2.deinit(allocator);
+	try std.testing.expectEqual(jpegz.Severity.fail, r2.overall);
+	var at_first = false;
+	for (r2.findings.items) |f| {
+		try std.testing.expect(f.code != .sequential_scan_zero_se);
+		if (f.code == .sequential_scan_invalid and f.offset == spec + 1) at_first = true;
+	}
+	try std.testing.expect(at_first);
 }
