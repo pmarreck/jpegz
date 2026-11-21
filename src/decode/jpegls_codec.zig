@@ -11,9 +11,9 @@
 //!     (`computeK`, `decodeGolombRice`, `mapMErrvalToErrval`)
 //!   - Per-context state update (`updateState`, `updateBiasCorrection`)
 //!
-//! v1 scope: NEAR = 0 (lossless), 8 and 16-bit precision, 1- and
-//! 3-component. NEAR > 0 paths are stubbed in the appropriate
-//! functions and would be the natural follow-on for B2.2-v2.
+//! Scope: NEAR = 0 (lossless) and NEAR > 0 (near-lossless; tests/unit
+//! decodes a NEAR=2 fixture within tolerance), 8 and 16-bit precision,
+//! 1- and 3-component.
 
 const std = @import("std");
 const bitstream = @import("jpegls_bitstream");

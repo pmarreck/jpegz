@@ -263,6 +263,12 @@ components and non-1x1 sampling. It consumes differences, MCU edge padding,
 restart intervals and the marker chain through EOI without constructing
 pixels. DNL, separated component scans and frames with more than four
 components remain unsupported. Pixel decoding retains its narrower layouts.
+
+For the DCT processes (sequential, progressive and arithmetic), an SOF height
+of 0 takes its line count from a DNL segment immediately after the first scan
+(T.81 B.2.2, B.2.5). The decoders and the validator read that DNL before
+sizing anything; with no such DNL, or NL = 0, the frame is finding 61 FAIL.
+Lossless SOF3 with DNL remains unsupported.
 Entropy finding offsets are payload-relative detection cursors, not exact
 mutation locations. Bytes after the first EOI are finding 212 at the first
 such byte. Images an MPF Index IFD places there are INFO `mpf`, a remainder

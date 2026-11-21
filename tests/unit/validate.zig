@@ -2812,3 +2812,90 @@ test "trailing data after EOI: MPF images and PAR2 are INFO, anything else WARN"
 		try std.testing.expectEqualStrings(plain.detail, got[0].detail);
 	}
 }
+
+/// T.81 B.2.2/B.2.5 rewrite of a valid single-frame fixture: zero the SOF's Y
+/// and put a DNL segment right after the first scan. `lines` null keeps the
+/// original height; `dnl` false leaves the DNL out. The fixtures chain their
+/// segments without fill bytes.
+const DnlRewrite = struct { dnl: bool = true, lines: ?u16 = null };
+
+fn dnlVariant(allocator: std.mem.Allocator, data: []const u8, rewrite: DnlRewrite) ![]u8 {
+	var pos: usize = 2;
+	var sof_y: ?usize = null;
+	while (true) {
+		const marker = data[pos + 1];
+		const len = (@as(usize, data[pos + 2]) << 8) | data[pos + 3];
+		const sof = marker >= 0xc0 and marker <= 0xcf and marker != 0xc4 and marker != 0xc8 and marker != 0xcc;
+		if (sof) sof_y = pos + 5;
+		pos += 2 + len;
+		if (marker == 0xda) break;
+	}
+	// The first marker after the entropy data that is not a stuffed FF or RSTn.
+	while (!(data[pos] == 0xff and data[pos + 1] != 0 and !(data[pos + 1] >= 0xd0 and data[pos + 1] <= 0xd7))) pos += 1;
+	const y = sof_y.?;
+	const height = (@as(u16, data[y]) << 8) | data[y + 1];
+	const lines = rewrite.lines orelse height;
+	const dnl = [_]u8{ 0xff, 0xdc, 0, 4, @intCast(lines >> 8), @truncate(lines) };
+	return std.mem.concat(allocator, u8, &.{ data[0..y], &.{ 0, 0 }, data[y + 2 .. pos], if (rewrite.dnl) &dnl else &.{}, data[pos..] });
+}
+
+const dnl_fixtures = [_]struct { name: []const u8, data: []const u8 }{
+	.{ .name = "baseline 4:2:0", .data = @embedFile("fixtures/baseline_16x16_rgb_420.jpg") },
+	.{ .name = "baseline with restarts", .data = @embedFile("fixtures/baseline_128x128_dri4.jpg") },
+	.{ .name = "extended 12-bit", .data = @embedFile("fixtures/baseline_4x4_gray12_dct.jpg") },
+	.{ .name = "progressive", .data = fixture_progressive_8x8 },
+	.{ .name = "arithmetic baseline", .data = @embedFile("fixtures/arith_baseline_16x16_rgb_444.jpg") },
+};
+
+test "DNL after the first scan supplies the height a SOF Y of 0 leaves open" {
+	const allocator = std.testing.allocator;
+	for (dnl_fixtures) |case| {
+		const data = try dnlVariant(allocator, case.data, .{});
+		defer allocator.free(data);
+		var original = try jpegz.decode(allocator, case.data);
+		defer original.deinit(allocator);
+		var decoded = jpegz.decode(allocator, data) catch |err| {
+			std.debug.print("{s}: DNL variant rejected: {s}\n", .{ case.name, @errorName(err) });
+			return err;
+		};
+		defer decoded.deinit(allocator);
+		try std.testing.expectEqual(original.width, decoded.width);
+		try std.testing.expectEqual(original.height, decoded.height);
+		try std.testing.expectEqualSlices(u8, original.pixels, decoded.pixels);
+
+		var want = try jpegz.validate(allocator, case.data);
+		defer want.deinit(allocator);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		if (report.overall != want.overall or report.height != want.height or report.codec_check != .decoded) {
+			std.debug.print("{s}: overall {t} (want {t}), height {?d} (want {?d}), codec check {t}\n", .{ case.name, report.overall, want.overall, report.height, want.height, report.codec_check });
+			for (report.findings.items) |f| std.debug.print("  {t} {t} {?d} {?s}\n", .{ f.severity, f.code, f.offset, f.detail });
+			return error.TestUnexpectedResult;
+		}
+	}
+}
+
+test "SOF Y of 0 without a DNL giving a nonzero line count stays FAIL 61" {
+	const allocator = std.testing.allocator;
+	for (dnl_fixtures) |case| {
+		for ([_]DnlRewrite{ .{ .dnl = false }, .{ .lines = 0 } }) |rewrite| {
+			const data = try dnlVariant(allocator, case.data, rewrite);
+			defer allocator.free(data);
+			if (jpegz.decode(allocator, data)) |image| {
+				var decoded = image;
+				decoded.deinit(allocator);
+				std.debug.print("{s}: decoded with dnl={} lines={?d}\n", .{ case.name, rewrite.dnl, rewrite.lines });
+				return error.TestUnexpectedResult;
+			} else |_| {}
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			const flagged = for (report.findings.items) |f| {
+				if (f.code == .invalid_dimensions and f.severity == .fail) break true;
+			} else false;
+			if (!flagged) {
+				std.debug.print("{s}: no FAIL 61 with dnl={} lines={?d}\n", .{ case.name, rewrite.dnl, rewrite.lines });
+				return error.TestUnexpectedResult;
+			}
+		}
+	}
+}

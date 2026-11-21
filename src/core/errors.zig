@@ -124,10 +124,11 @@ pub const FindingCode = enum(u32) {
     // contradict each other are a writer's violation. For pixels the decoder
     // honors APP14, as libjpeg does; that choice does not set the severity.
     adobe_app14_conflicts_jfif = 60,
-    // SOF declares X (width) = 0 or Y (height) = 0. T.81 §B.2.2: X must
-    // be > 0; Y = 0 is defined only alongside a DNL segment, which this
-    // decoder (like libjpeg without DNL support) rejects. Fires at the
-    // marker walk for every variant, before the codec decode-through.
+    // SOF declares X (width) = 0, or Y (height) = 0 with no DNL segment
+    // after the first scan. T.81 §B.2.2: X must be > 0; Y = 0 defers the
+    // line count to that DNL (§B.2.5), which the DCT decoders resolve
+    // before sizing planes. Fires at the marker walk for every variant,
+    // before the codec decode-through.
     invalid_dimensions = 61,
     // T.81 §F.1.2.3: the bits that complete a Huffman-coded segment's final
     // byte before a marker shall be 1s. This code is for pad bits that mix 0s

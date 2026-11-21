@@ -15,6 +15,7 @@ const Allocator = std.mem.Allocator;
 const errors = @import("errors.zig");
 const huffman = @import("../decode/huffman.zig");
 const baseline = @import("../decode/baseline.zig");
+const jpeg_markers = @import("../decode/jpeg_markers.zig");
 const types = @import("../jpegz.zig");
 
 const Severity = errors.Severity;
@@ -515,8 +516,15 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                         seg_body_start, "SOF segment too short for header fields");
                 } else {
                     const precision = data[seg_body_start];
-                    const height = readU16BE(data, seg_body_start + 1);
+                    const declared_height = readU16BE(data, seg_body_start + 1);
                     const width = readU16BE(data, seg_body_start + 3);
+                    // T.81 B.2.5: Y = 0 defers the line count to a DNL right
+                    // after the first scan, as the DCT decoders resolve it.
+                    const dnl_height: ?u16 = if (declared_height == 0)
+                        jpeg_markers.dnlLines(data, seg_body_start - 2 + seg_len)
+                    else
+                        null;
+                    const height = dnl_height orelse declared_height;
                     report.width = @as(u32, width);
                     report.height = @as(u32, height);
 
@@ -525,7 +533,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                     // to prevent indexing empty planes.
                     if (width == 0 or (height == 0 and variant != .lossless_huffman)) {
                         try addFinding(&report, allocator, .fail, .invalid_dimensions,
-                            seg_body_start + 1, "SOF declares zero width or height");
+                            seg_body_start + 1, "SOF declares zero width, or zero height with no DNL after the first scan");
                     }
 
                     // Nf (component count) must be >= 1 and the segment length

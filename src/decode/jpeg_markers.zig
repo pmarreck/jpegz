@@ -48,6 +48,48 @@ pub const FrameInfo = struct {
     components: [4]ComponentInfo,
 };
 
+/// The line count NL from a DNL segment (T.81 §B.2.5) that immediately
+/// follows the first scan after `start`, the end of the SOF segment.
+/// Null when the first marker after that scan's entropy data is not a
+/// DNL with Ld = 4 and NL > 0, or the data ends first. Bytes between
+/// segments are skipped the way the decoders' marker walk skips them.
+pub fn dnlLines(data: []const u8, start: usize) ?u16 {
+    var pos = start;
+    while (true) {
+        while (pos < data.len and data[pos] != 0xFF) pos += 1;
+        while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
+        if (pos + 1 >= data.len) return null;
+        const marker = data[pos + 1];
+        pos += 2;
+        switch (marker) {
+            0x01, 0xD0...0xD7 => continue,
+            0x00, 0xD8, 0xD9 => return null,
+            0xC0...0xC3, 0xC5...0xC7, 0xC9...0xCB, 0xCD...0xCF => return null,
+            else => {},
+        }
+        if (pos + 1 >= data.len) return null;
+        const len = parseSegmentLength(data, pos);
+        if (len < 2) return null;
+        pos += len;
+        if (marker == 0xDA) break;
+    }
+    // Entropy data: stuffed FF 00, RSTn and fill FFs belong to the scan.
+    while (pos + 1 < data.len) : (pos += 1) {
+        if (data[pos] != 0xFF) continue;
+        const next = data[pos + 1];
+        if (next == 0x00 or (next >= 0xD0 and next <= 0xD7)) {
+            pos += 1;
+            continue;
+        }
+        if (next == 0xFF) continue;
+        if (next != 0xDC or pos + 5 >= data.len) return null;
+        if (parseSegmentLength(data, pos + 2) != 4) return null;
+        const lines = (@as(u16, data[pos + 4]) << 8) | data[pos + 5];
+        return if (lines == 0) null else lines;
+    }
+    return null;
+}
+
 /// Parse a SOFn frame header (T.81 §B.2.2). Shared by SOF0 (baseline)
 /// and SOF2 (progressive) — identical layout.
 pub fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
@@ -59,11 +101,13 @@ pub fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
     fi.width = (@as(u16, data[pos + 5]) << 8) | data[pos + 6];
     fi.num_components = data[pos + 7];
     if (fi.num_components == 0 or fi.num_components > 4) return fail("sof_bad_ncomp", error.InvalidMarker);
-    // T.81 §B.2.2: X (width) must be > 0; Y (height) = 0 is defined only
-    // alongside a DNL segment, which this decoder (like libjpeg without
-    // DNL support) does not accept. Reject zero dimensions here so no
-    // downstream allocation / MCU assembly / chroma upsampling ever runs
-    // over an empty component plane (was an OOB crash in color.fancyUpsample).
+    // T.81 §B.2.2: X (width) must be > 0; Y (height) = 0 defers the line
+    // count to the DNL segment after the first scan (§B.2.5). Resolve it
+    // here, before any plane is sized, and reject zero dimensions otherwise
+    // so no downstream allocation / MCU assembly / chroma upsampling ever
+    // runs over an empty component plane (was an OOB crash in
+    // color.fancyUpsample).
+    if (fi.height == 0) fi.height = dnlLines(data, pos + seg_len) orelse 0;
     if (fi.width == 0 or fi.height == 0) return fail("sof_zero_dimension", error.InvalidMarker);
     if (seg_len < 8 + @as(usize, fi.num_components) * 3) return error.TruncatedStream;
     var i: usize = 0;
