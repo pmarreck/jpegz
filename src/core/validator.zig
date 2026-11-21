@@ -273,6 +273,14 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 	// where several frames are legal and later ones are differential.
 	var hierarchical = false;
 	var frame_differential = false;
+	// Finding 72 (T.81 B.2.5): DNL placement, judged against the first frame.
+	// frame_lines is Y when nonzero, else the NL of the DNL right after the
+	// first scan; null while no count is declared.
+	var frame_declared_y: ?u16 = null;
+	var frame_lines: ?u16 = null;
+	var frame_scans: u32 = 0;
+	var frame_dnls: u32 = 0;
+	var at_first_scan_end = false;
 	// FAIL findings that do not stop the codec check or the EOI check. They
 	// were WARN before 2026-11-05; reclassifying them must not drop findings.
 	var nonblocking_fails: usize = 0;
@@ -296,6 +304,8 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         const marker_byte = data[pos];
         const marker_offset = pos - 1; // include the 0xFF
         pos += 1;
+		const right_after_first_scan = at_first_scan_end;
+		at_first_scan_end = false;
 		// T.81 B.1.1.2 excludes zero as a marker byte. Entropy stuffing
 		// and opaque APP payloads are consumed separately below.
 		if (marker_byte == 0) {
@@ -494,6 +504,12 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 				0xc5, 0xc6, 0xc7, 0xcd, 0xce, 0xcf => true,
 				else => false,
 			};
+			if (frame_differential and !hierarchical) {
+				// FAIL (validate, 2026-11-21): nothing to difference against.
+				try addExactFinding(&report, allocator, .differential_frame_without_dhp, marker_offset,
+					"differential SOF with no DHP before it; T.81 J.1 allows differential frames only in hierarchical mode");
+				nonblocking_fails += 1;
+			}
             if (seen_sof and !hierarchical) {
 				// FAIL class (validate, 2026-11-05): libjpeg refuses two SOF
 				// markers and damage produces them.
@@ -525,6 +541,8 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                     else
                         null;
                     const height = dnl_height orelse declared_height;
+					frame_declared_y = declared_height;
+					frame_lines = if (declared_height != 0) declared_height else dnl_height;
                     report.width = @as(u32, width);
                     report.height = @as(u32, height);
 
@@ -607,6 +625,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         } else if (marker_byte == Marker.SOS) {
             seen_sos = true;
             sos_count += 1;
+			frame_scans += 1;
 			if (first_sos_offset == null) first_sos_offset = marker_offset;
 			// Finding 69: a sequential scan naming a Huffman table no DHT has
 			// defined yet. Judged after the walk (see below).
@@ -765,8 +784,40 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                 return report;
             }
             pos = new_pos.?;
+			at_first_scan_end = frame_scans == 1;
             continue;
         }
+
+		// Finding 72 (validate, 2026-11-21). Hierarchical streams are left to
+		// their INFO "not checked": B.2.5 placement is judged for one frame.
+		if (marker_byte == 0xdc and !hierarchical) {
+			if (seg_len != 4) {
+				try addFinding(&report, allocator, .fail, .bad_marker_length, pos,
+					"DNL segment length must be 4");
+			} else {
+				const lines = readU16BE(data, seg_body_start);
+				const proper = frame_declared_y == @as(u16, 0) and right_after_first_scan and frame_dnls == 0;
+				if (!proper) {
+					const token: []const u8 = if ((frame_declared_y orelse 0) != 0)
+						"with_nonzero_y"
+					else if (frame_dnls > 0)
+						"repeated"
+					else if (frame_scans == 0)
+						"before_first_scan"
+					else
+						"after_later_scan";
+					// FAIL only when two declared line counts conflict.
+					const severity: Severity = if (frame_lines) |declared| (if (declared == lines) .warn else .fail) else .warn;
+					const detail = try std.fmt.allocPrint(allocator,
+						"{s}: DNL NL={d} outside the slot T.81 B.2.5 allows (right after the first scan of a Y=0 frame)", .{ token, lines });
+					defer allocator.free(detail);
+					try addFinding(&report, allocator, severity, .dnl_misplaced, marker_offset, detail);
+					report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
+					if (severity == .fail) nonblocking_fails += 1;
+				}
+				frame_dnls += 1;
+			}
+		}
 
         pos = seg_end;
     }

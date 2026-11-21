@@ -187,6 +187,17 @@ pub const FindingCode = enum(u32) {
 	// (T.81 F.2.2.3). Exact offset: the BITS count for the full length. An
 	// oversubscribed table stays 51.
 	huffman_table_full_all_ones = 71,
+	// validate-approved 2026-11-21. A DNL segment (T.81 B.2.5) anywhere but
+	// immediately after the first scan of a frame whose SOF has Y=0, at the
+	// DNL marker. Detail token: with_nonzero_y, repeated, before_first_scan or
+	// after_later_scan. WARN when its NL equals the frame line count (Y when
+	// nonzero, else the proper DNL's NL) or no count is declared; FAIL when
+	// the two declared counts conflict. A misplaced DNL never sizes the frame.
+	dnl_misplaced = 72,
+	// validate-approved 2026-11-21. A differential SOF (SOF5-7, SOF13-15) with
+	// no DHP before it, at the SOF marker. T.81 J.1 allows differential frames
+	// only in hierarchical mode. FAIL.
+	differential_frame_without_dhp = 73,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────
     lossless_predictor_invalid = 100,

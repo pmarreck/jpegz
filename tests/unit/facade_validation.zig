@@ -278,7 +278,14 @@ test "SOF3 keeps DNL unsupported and rejects reversed scan order" {
 			defer allocator.free(data);
 			var result = try jpegz.validateAny(allocator, data);
 			defer result.deinit(allocator);
-			try std.testing.expectEqual(jpegz.StrictVerdict.unsupported, result.verdict);
+			// Y=2 against NL=1 is two conflicting line counts: FAIL 72
+			// (validate, 2026-11-21). Y=1 agrees: WARN 72, codec unsupported.
+			const want: jpegz.StrictVerdict = if (height == 2) .corrupt else .unsupported;
+			try std.testing.expectEqual(want, result.verdict);
+			const misplaced = for (result.findings.items) |f| {
+				if (f.code == .dnl_misplaced) break true;
+			} else false;
+			try std.testing.expectEqual(height != 0, misplaced);
 		}
 	}
 }
@@ -881,25 +888,34 @@ test "classic facade requires EOI even after a complete progressive scan" {
 
 test "classic facade distinguishes unchecked and unsupported codecs from validity" {
 	const allocator = std.testing.allocator;
-	const cases = [_]struct { sof: u8, sampling: u8 = 0x11, width: u8 = 1, verdict: jpegz.StrictVerdict }{
+	const cases = [_]struct { sof: u8, sampling: u8 = 0x11, width: u8 = 1, dhp: bool = false, verdict: jpegz.StrictVerdict }{
 		.{ .sof = 0xc3, .verdict = .valid },
 		.{ .sof = 0xc3, .sampling = 0x21, .verdict = .valid },
 		.{ .sof = 0xc3, .sampling = 0x44, .verdict = .valid },
 		.{ .sof = 0xc3, .sampling = 0x21, .width = 0, .verdict = .corrupt },
-		.{ .sof = 0xc7, .verdict = .indeterminate },
-		.{ .sof = 0xc7, .width = 0, .verdict = .corrupt },
+		// Without a DHP a differential frame is FAIL 73 (validate, 2026-11-21).
+		.{ .sof = 0xc7, .verdict = .corrupt },
+		// After a DHP the stream is hierarchical, whose codec is not checked.
+		.{ .sof = 0xc7, .dhp = true, .verdict = .unsupported },
+		.{ .sof = 0xc7, .dhp = true, .width = 0, .verdict = .corrupt },
 	};
 	for (cases) |case| {
 		// Minimal lossless marker chain, DC code 0 => difference zero.
-		// Differential SOF7 exercises a skipped codec, not a claim that this
-		// synthetic chain proves a complete, valid hierarchical JPEG.
-		const data = [_]u8{ 0xff, 0xd8, 0xff, case.sof, 0, 11, 8, 0, 1, 0, case.width, 1, 1, case.sampling, 0 } ++
-			[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
-			[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, 0, 0, 0x7f, 0xff, 0xd9 };
-		var legacy = try jpegz.validate(allocator, &data);
+		// Differential SOF7 after a DHP exercises a skipped codec, not a claim
+		// that this synthetic chain proves a complete, valid hierarchical JPEG.
+		const dhp = [_]u8{ 0xff, 0xde, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0 };
+		const data = try std.mem.concat(allocator, u8, &.{
+			&.{ 0xff, 0xd8 },
+			if (case.dhp) &dhp else &.{},
+			&.{ 0xff, case.sof, 0, 11, 8, 0, 1, 0, case.width, 1, 1, case.sampling, 0 },
+			&([_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0}),
+			&.{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, 0, 0, 0x7f, 0xff, 0xd9 },
+		});
+		defer allocator.free(data);
+		var legacy = try jpegz.validate(allocator, data);
 		defer legacy.deinit(allocator);
 		try std.testing.expectEqual(case.verdict != .corrupt, legacy.isValid());
-		var strict = try jpegz.validateAny(allocator, &data);
+		var strict = try jpegz.validateAny(allocator, data);
 		defer strict.deinit(allocator);
 		try std.testing.expectEqual(case.verdict, strict.verdict);
 	}

@@ -47,6 +47,8 @@ coordinator approved codes before 2026-11-06).
 | 69 | `huffman_tables_missing` | jpegz | validate approval, 2026-11-06 | cc63e33 (2026-11-07) |
 | 70 | `sof_component_id_duplicate` | jpegz | validate approval, 2026-11-06 | f4f03ea (2026-11-07) |
 | 71 | `huffman_table_full_all_ones` | jpegz | validate approval, 2026-11-06 | fc1625c (2026-11-06) |
+| 72 | `dnl_misplaced` | jpegz | validate approval, 2026-11-21 | this commit (2026-11-21) |
+| 73 | `differential_frame_without_dhp` | jpegz | validate approval, 2026-11-21 | this commit (2026-11-21) |
 | 100 | `lossless_predictor_invalid` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 101 | `lossless_pointtransform_invalid` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 120 | `jpegls_invalid_run_mode` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |

@@ -21,7 +21,8 @@ parseable"), two kinds of gap matter differently:
 | JPEG-LS LSE ID 4 | jpegls.zig `parseLse` | Ignored, and an inline test calls ID 4 a mapping table. CharLS names ID 4 the oversize-image-dimension record; confirm against the T.87 text | T.87 C.2.4.1.4 (to confirm) |
 | JPEG-LS point transform (Al) | jpegls.zig `parseSos` | Field ignored (*code-read*) | T.87 C.2.3; confirm whether nonzero Pt is permitted |
 | JPEG-LS DNL | jpegls.zig | Segment skipped; Y=0 handling unverified (*code-read*) | T.87 C.2.5 |
-| Differential SOF (5-7, 13-15) without DHP | validator.zig `classifyVariant` → `.unknown` | No codec check and, as far as the code shows, no finding for the missing DHP (*code-read*) | T.81 J.1: differential frames occur only in hierarchical mode |
+| Differential SOF (5-7, 13-15) without DHP | validator.zig SOF branch | **Fixed 2026-11-21**: graded valid with no finding (confirmed by test); now FAIL 73 | T.81 J.1: differential frames occur only in hierarchical mode |
+| Misplaced DNL (Y≠0, repeated, before or after a later scan) | validator.zig DNL segment | **Fixed 2026-11-21**: skipped silently; now 72, WARN or FAIL by validate's rule | T.81 B.2.5 |
 
 ## Unchecked (INFO "not checked" or decode `NotImplemented`)
 

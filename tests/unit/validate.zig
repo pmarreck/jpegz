@@ -2899,3 +2899,129 @@ test "SOF Y of 0 without a DNL giving a nonzero line count stays FAIL 61" {
 		}
 	}
 }
+
+/// Offset of the first marker after the `n`th scan's entropy data (1-based)
+/// in a fixture whose segments chain without fill bytes.
+fn scanEnd(data: []const u8, n: usize) usize {
+	var pos: usize = 2;
+	var scans: usize = 0;
+	while (true) {
+		const marker = data[pos + 1];
+		const len = (@as(usize, data[pos + 2]) << 8) | data[pos + 3];
+		pos += 2 + len;
+		if (marker != 0xda) continue;
+		scans += 1;
+		while (!(data[pos] == 0xff and data[pos + 1] != 0 and !(data[pos + 1] >= 0xd0 and data[pos + 1] <= 0xd7))) pos += 1;
+		if (scans == n) return pos;
+	}
+}
+
+/// Offset of the first SOS marker.
+fn firstSos(data: []const u8) usize {
+	var pos: usize = 2;
+	while (data[pos + 1] != 0xda) pos += 2 + ((@as(usize, data[pos + 2]) << 8) | data[pos + 3]);
+	return pos;
+}
+
+const DnlPlacement = struct { at: usize, lines: u16 };
+
+/// Insert DNL segments at the given offsets of `data` (ascending), optionally
+/// after zeroing the SOF's Y with `dnlVariant`'s rule.
+fn withDnls(allocator: std.mem.Allocator, data: []const u8, placements: []const DnlPlacement) ![]u8 {
+	var out: std.ArrayList(u8) = .empty;
+	errdefer out.deinit(allocator);
+	var from: usize = 0;
+	for (placements) |p| {
+		try out.appendSlice(allocator, data[from..p.at]);
+		try out.appendSlice(allocator, &.{ 0xff, 0xdc, 0, 4, @intCast(p.lines >> 8), @truncate(p.lines) });
+		from = p.at;
+	}
+	try out.appendSlice(allocator, data[from..]);
+	return out.toOwnedSlice(allocator);
+}
+
+fn sofHeightOffset(data: []const u8) usize {
+	var pos: usize = 2;
+	while (true) {
+		const marker = data[pos + 1];
+		if (marker >= 0xc0 and marker <= 0xcf and marker != 0xc4 and marker != 0xc8 and marker != 0xcc) return pos + 5;
+		pos += 2 + ((@as(usize, data[pos + 2]) << 8) | data[pos + 3]);
+	}
+}
+
+test "a DNL anywhere but right after the first scan of a Y=0 frame is 72 at its marker" {
+	const allocator = std.testing.allocator;
+	const progressive = fixture_progressive_8x8; // Y = 8, several scans
+	// The same file with Y zeroed and a proper DNL after the first scan.
+	const proper = try dnlVariant(allocator, progressive, .{});
+	defer allocator.free(proper);
+	const y_zero = try dnlVariant(allocator, progressive, .{ .dnl = false });
+	defer allocator.free(y_zero);
+	const Case = struct { name: []const u8, base: []const u8, scan: usize, lines: u16, severity: jpegz.Severity, token: []const u8, before_sos: bool = false };
+	const cases = [_]Case{
+		.{ .name = "nonzero Y, agreeing", .base = progressive, .scan = 1, .lines = 8, .severity = .warn, .token = "with_nonzero_y" },
+		.{ .name = "nonzero Y, conflicting", .base = progressive, .scan = 1, .lines = 9, .severity = .fail, .token = "with_nonzero_y" },
+		.{ .name = "repeated, agreeing", .base = proper, .scan = 2, .lines = 8, .severity = .warn, .token = "repeated" },
+		.{ .name = "repeated, conflicting", .base = proper, .scan = 2, .lines = 7, .severity = .fail, .token = "repeated" },
+		.{ .name = "repeated with NL 0", .base = proper, .scan = 2, .lines = 0, .severity = .fail, .token = "repeated" },
+		.{ .name = "Y=0, only after a later scan", .base = y_zero, .scan = 2, .lines = 8, .severity = .warn, .token = "after_later_scan" },
+		.{ .name = "Y=0, only before the first scan", .base = y_zero, .scan = 0, .lines = 8, .severity = .warn, .token = "before_first_scan", .before_sos = true },
+	};
+	for (cases) |case| {
+		const at = if (case.before_sos) firstSos(case.base) else scanEnd(case.base, case.scan);
+		const data = try withDnls(allocator, case.base, &.{.{ .at = at, .lines = case.lines }});
+		defer allocator.free(data);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		var found: ?jpegz.Finding = null;
+		var count: usize = 0;
+		for (report.findings.items) |f| if (f.code == .dnl_misplaced) {
+			found = f;
+			count += 1;
+		};
+		const ok = if (found) |f| count == 1 and f.severity == case.severity and f.offset == at and f.offset_is_exact and
+			std.mem.indexOf(u8, f.detail orelse "", case.token) != null else false;
+		if (!ok) {
+			std.debug.print("{s}: want {t} {s} at {d}, got {d} finding(s)\n", .{ case.name, case.severity, case.token, at, count });
+			for (report.findings.items) |f| std.debug.print("  {t} {t} {?d} {?s}\n", .{ f.severity, f.code, f.offset, f.detail });
+			return error.TestUnexpectedResult;
+		}
+	}
+	// The proper DNL itself is not misplaced.
+	var report = try jpegz.validate(allocator, proper);
+	defer report.deinit(allocator);
+	for (report.findings.items) |f| try std.testing.expect(f.code != .dnl_misplaced);
+}
+
+test "a differential SOF with no DHP before it is FAIL 73 at the SOF marker" {
+	const allocator = std.testing.allocator;
+	for ([_]struct { base: []const u8, sof: u8 }{
+		.{ .base = @embedFile("fixtures/baseline_16x16_rgb_420.jpg"), .sof = 0xc5 },
+		.{ .base = fixture_progressive_8x8, .sof = 0xc6 },
+		.{ .base = fixture_lossless_4x4_gray8, .sof = 0xc7 },
+		.{ .base = fixture_arith_8x8_gray, .sof = 0xcd },
+		.{ .base = fixture_progressive_8x8, .sof = 0xce },
+		.{ .base = fixture_lossless_4x4_gray8, .sof = 0xcf },
+	}) |case| {
+		const data = try allocator.dupe(u8, case.base);
+		defer allocator.free(data);
+		const sof = sofHeightOffset(data) - 5;
+		data[sof + 1] = case.sof;
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		const flagged = for (report.findings.items) |f| {
+			if (f.code == .differential_frame_without_dhp and f.severity == .fail and f.offset == sof and f.offset_is_exact) break true;
+		} else false;
+		if (!flagged) {
+			std.debug.print("SOF{X:0>2}: no FAIL 73 at {d}\n", .{ case.sof, sof });
+			for (report.findings.items) |f| std.debug.print("  {t} {t} {?d} {?s}\n", .{ f.severity, f.code, f.offset, f.detail });
+			return error.TestUnexpectedResult;
+		}
+	}
+	// Each original stays free of 73.
+	for ([_][]const u8{ fixture_progressive_8x8, fixture_lossless_4x4_gray8, fixture_arith_8x8_gray }) |data| {
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		for (report.findings.items) |f| try std.testing.expect(f.code != .differential_frame_without_dhp);
+	}
+}

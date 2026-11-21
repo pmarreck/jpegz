@@ -268,7 +268,13 @@ For the DCT processes (sequential, progressive and arithmetic), an SOF height
 of 0 takes its line count from a DNL segment immediately after the first scan
 (T.81 B.2.2, B.2.5). The decoders and the validator read that DNL before
 sizing anything; with no such DNL, or NL = 0, the frame is finding 61 FAIL.
-Lossless SOF3 with DNL remains unsupported.
+Lossless SOF3 with DNL remains unsupported. Any other DNL is finding 72
+`dnl_misplaced` at its marker, with a detail token (`with_nonzero_y`,
+`repeated`, `before_first_scan`, `after_later_scan`): WARN when its NL equals
+the frame line count or no count is declared, FAIL when the two conflict. It
+never sizes the frame. Hierarchical streams are not judged for 72. A
+differential SOF (SOF5-7, SOF13-15) with no DHP before it is finding 73
+`differential_frame_without_dhp`, FAIL at the SOF marker (T.81 J.1).
 Entropy finding offsets are payload-relative detection cursors, not exact
 mutation locations. Bytes after the first EOI are finding 212 at the first
 such byte. Images an MPF Index IFD places there are INFO `mpf`, a remainder
