@@ -18,7 +18,7 @@ parseable"), two kinds of gap matter differently:
 |---|---|---|---|
 | DNL with SOF Y=0 (DCT modes) | validator.zig SOF check; jpeg_markers.zig `dnlLines` | **Fixed 2026-11-21**: was FAIL 61; the decoders and validator now read the DNL, and pixels match the Y≠0 original on five fixtures | T.81 B.2.2/B.2.5: Y=0 is valid when a DNL follows the first scan |
 | JPEG-LS LSE ID 2/3 mapping tables | jpegls.zig `parseLse` | Ignored; a palette image decodes to its indices, not its colors (*code-read*) | T.87 C.2.4.1.2-3, Annex D table mapping via Tdi |
-| JPEG-LS LSE ID 4 | jpegls.zig `parseLse` | Ignored, and an inline test calls ID 4 a mapping table. CharLS names ID 4 the oversize-image-dimension record; confirm against the T.87 text | T.87 C.2.4.1.4 (to confirm) |
+| JPEG-LS LSE ID 4 | jpegls.zig `parseLse` | Ignored, and an inline test calls ID 4 a mapping table. CharLS 3.0 defines ID 4 as the oversize-image-dimension record (C.2.4.1.4: Wxy, Ye, Xe) and its encoder writes it, with SOF X=Y=0, whenever a dimension exceeds 65535, so such files are FAIL 61 today | T.87 C.2.4.1.4 |
 | JPEG-LS point transform (Al) | jpegls.zig `parseSos` | Field ignored (*code-read*) | T.87 C.2.3; confirm whether nonzero Pt is permitted |
 | JPEG-LS DNL | jpegls.zig | Segment skipped; Y=0 handling unverified (*code-read*) | T.87 C.2.5 |
 | Differential SOF (5-7, 13-15) without DHP | validator.zig SOF branch | **Fixed 2026-11-21**: graded valid with no finding (confirmed by test); now FAIL 73 | T.81 J.1: differential frames occur only in hierarchical mode |
