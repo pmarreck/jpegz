@@ -19,7 +19,10 @@ without JPEG XL, or alpha at a different depth, return `NotImplemented`.
 `extra_channels_dropped` counts the extra channels the API cannot return.
 
 Classic decoding currently includes baseline/extended sequential, progressive,
-predictive lossless and arithmetic DCT modes. JPEG-LS decoding is also in Zig.
+predictive lossless and arithmetic DCT modes. JPEG-LS decoding is also in Zig;
+it applies LSE preset thresholds and RESET, is checked against the T.87
+Annex E conformance streams t8nde0/3 and t16e0/3, and returns `NotImplemented`
+for an LSE MAXVAL other than 2^P−1 until the RANGE derivation is settled.
 Consumers import jp2z and libjxlz through the facade, preserving one instance
 of each Zig module. Project purpose lives in [INTENT.md](INTENT.md).
 

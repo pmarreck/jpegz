@@ -122,9 +122,13 @@ pub const ScanState = struct {
             // panicked. Fix: compute in i32 (widen the refined @min result).
             const clamped_maxv: i32 = @min(maxv_i, 4095);
             const factor: i32 = (clamped_maxv + 128) >> 8;
+            // T.87 C.2.4.1.1 with BASIC_T1..3 = 3, 7, 21: each threshold
+            // subtracts and re-adds its own floor (2, 3, 4). With FACTOR 1
+            // (8-bit) a shared floor of 2 gives the same 3, 7, 21, which is
+            // how the old formula hid; FACTOR 16 (12/16-bit) gives 18, 67, 276.
             const t1_basic: i32 = factor * (3 - 2) + 2 + 3 * near_i;
-            const t2_basic: i32 = factor * (7 - 2) + 2 + 5 * near_i;
-            const t3_basic: i32 = factor * (21 - 2) + 2 + 7 * near_i;
+            const t2_basic: i32 = factor * (7 - 3) + 3 + 5 * near_i;
+            const t3_basic: i32 = factor * (21 - 4) + 4 + 7 * near_i;
             self.T1 = @intCast(clampI32(t1_basic, near_i + 1, maxv_i));
             self.T2 = @intCast(clampI32(t2_basic, @as(i32, @intCast(self.T1)), maxv_i));
             self.T3 = @intCast(clampI32(t3_basic, @as(i32, @intCast(self.T2)), maxv_i));
@@ -132,9 +136,10 @@ pub const ScanState = struct {
             // MAXVAL < 128. Inverse FACTOR rescales the canonical
             // {3, 7, 21} downward for narrow-range images.
             const factor_in: i32 = @divFloor(256, maxv_i + 1);
-            const t1_basic: i32 = @max(2, @divFloor(3, factor_in)) + 3 * near_i;
-            const t2_basic: i32 = @max(3, @divFloor(7, factor_in)) + 5 * near_i;
-            const t3_basic: i32 = @max(4, @divFloor(21, factor_in)) + 7 * near_i;
+            // The NEAR term sits inside the floor (CharLS and FFmpeg agree).
+            const t1_basic: i32 = @max(2, @divFloor(3, factor_in) + 3 * near_i);
+            const t2_basic: i32 = @max(3, @divFloor(7, factor_in) + 5 * near_i);
+            const t3_basic: i32 = @max(4, @divFloor(21, factor_in) + 7 * near_i);
             self.T1 = @intCast(clampI32(t1_basic, near_i + 1, maxv_i));
             self.T2 = @intCast(clampI32(t2_basic, @as(i32, @intCast(self.T1)), maxv_i));
             self.T3 = @intCast(clampI32(t3_basic, @as(i32, @intCast(self.T2)), maxv_i));
@@ -564,4 +569,27 @@ test "updateBiasCorrection: large negative bias decrements C" {
     updateBiasCorrection(&ctx, -5);
     try std.testing.expectEqual(@as(i8, -1), ctx.C);
     try std.testing.expectEqual(@as(i32, -1), ctx.B);
+}
+
+test "ScanState.reset: default thresholds follow T.87 C.2.4.1.1 at every precision" {
+    // Expected values from the same formula in CharLS (compute_default) and
+    // FFmpeg (ff_jpegls_reset_coding_parameters).
+    const cases = [_]struct { bpp: u8, near: u32, t: [3]u32 }{
+        .{ .bpp = 8, .near = 0, .t = .{ 3, 7, 21 } },
+        .{ .bpp = 8, .near = 3, .t = .{ 12, 22, 42 } },
+        .{ .bpp = 12, .near = 0, .t = .{ 18, 67, 276 } },
+        .{ .bpp = 12, .near = 3, .t = .{ 27, 82, 297 } },
+        .{ .bpp = 16, .near = 0, .t = .{ 18, 67, 276 } },
+        .{ .bpp = 4, .near = 0, .t = .{ 2, 3, 4 } },
+        .{ .bpp = 4, .near = 1, .t = .{ 3, 5, 8 } },
+    };
+    for (cases) |case| {
+        var s: ScanState = undefined;
+        s.reset(case.bpp, case.near);
+        const got = [3]u32{ s.T1, s.T2, s.T3 };
+        if (!std.mem.eql(u32, &case.t, &got)) {
+            std.debug.print("bpp {d} NEAR {d}: want {any}, got {any}\n", .{ case.bpp, case.near, case.t, got });
+            return error.TestUnexpectedResult;
+        }
+    }
 }

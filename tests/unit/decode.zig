@@ -814,6 +814,83 @@ test "B2: JPEG-LS 4x4 16-bit grayscale lossless round-trip" {
     }
 }
 
+const jpegls_conformance = @import("jpegls_conformance");
+
+/// Samples of a binary 8-bit PGM (P5, maxval < 256): the bytes after the
+/// third header line.
+fn pgmSamples(pgm: []const u8) []const u8 {
+    var lines: usize = 0;
+    var i: usize = 0;
+    while (lines < 3) : (i += 1) {
+        if (pgm[i] == '\n') lines += 1;
+    }
+    return pgm[i..];
+}
+
+test "JPEG-LS LSE (FF F8) thresholds and RESET: T.87 conformance t8nde0 and t8nde3" {
+    // ITU-T T.87 Annex E streams encoded by HP with T1=T2=T3=9 and RESET=31
+    // in an LSE segment; test8bs2.pgm is the source image. t8nde0 is
+    // lossless, t8nde3 is NEAR=3.
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const want = pgmSamples(jpegls_conformance.test8bs2);
+    for ([_]struct { data: []const u8, near: i32 }{
+        .{ .data = jpegls_conformance.t8nde0, .near = 0 },
+        .{ .data = jpegls_conformance.t8nde3, .near = 3 },
+    }) |case| {
+        var image = try jpegz.jpegls_cleanroom_decode(allocator, case.data);
+        defer image.deinit(allocator);
+        try std.testing.expectEqual(want.len, image.pixels.len);
+        var worst: i32 = 0;
+        for (image.pixels, want) |got, ref| worst = @max(worst, @as(i32, @intCast(@abs(@as(i32, got) - @as(i32, ref)))));
+        if (worst > case.near) {
+            std.debug.print("NEAR={d}: worst sample error {d}\n", .{ case.near, worst });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "JPEG-LS 12-bit T.87 conformance t16e0 and t16e3 with default parameters" {
+    // test16.pgm holds 12-bit samples as 16-bit big-endian PGM values.
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const want = pgmSamples(jpegls_conformance.test16);
+    for ([_]struct { data: []const u8, near: i32 }{
+        .{ .data = jpegls_conformance.t16e0, .near = 0 },
+        .{ .data = jpegls_conformance.t16e3, .near = 3 },
+    }) |case| {
+        var image = try jpegz.jpegls_cleanroom_decode(allocator, case.data);
+        defer image.deinit(allocator);
+        const got = image.pixelsU16();
+        try std.testing.expectEqual(want.len / 2, got.len);
+        var worst: i32 = 0;
+        var bad: usize = 0;
+        var first_bad: ?usize = null;
+        for (got, 0..) |sample, i| {
+            const ref: i32 = (@as(i32, want[2 * i]) << 8) | want[2 * i + 1];
+            const err: i32 = @intCast(@abs(@as(i32, sample) - ref));
+            worst = @max(worst, err);
+            if (err > case.near) {
+                bad += 1;
+                if (first_bad == null) first_bad = i;
+            }
+        }
+        if (worst > case.near) {
+            const i = first_bad.?;
+            std.debug.print("12-bit NEAR={d}: worst sample error {d}; {d} of {d} samples out of tolerance, first at {d} (got {d}, want {d})\n", .{ case.near, worst, bad, got.len, i, got[i], (@as(i32, want[2 * i]) << 8) | want[2 * i + 1] });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "JPEG-LS LSE MAXVAL other than 2^P-1 is NotImplemented, not guessed" {
+    // CharLS 3.0, MAXVAL 200 at P=8. CharLS derives RANGE from P; FFmpeg
+    // derives it from MAXVAL; the two disagree on this stream.
+    const allocator = std.testing.allocator;
+    const data = @embedFile("fixtures/jpegls_16x16_gray8_maxval200.jls");
+    try std.testing.expectError(error.NotImplemented, jpegz.jpegls_cleanroom_decode(allocator, data));
+}
+
 test "B2.2 NEAR=2: JPEG-LS 8x8 grayscale near-lossless cleanroom (direct entry)" {
     const allocator = std.testing.allocator;
     var image = try jpegz.jpegls_cleanroom_decode(allocator, fixture_jpegls_8x8_gray8_near2);

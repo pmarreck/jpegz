@@ -25,7 +25,7 @@ const native_endian = builtin.cpu.arch.endian();
 // T.87 marker bytes (those that differ from T.81 are noted).
 const M_SOI: u8 = 0xD8;
 const M_SOF55: u8 = 0xF7; // T.87 §C.2.2 — the only SOF used by JPEG-LS
-const M_LSE: u8 = 0xF2; // T.87 §C.2.4 — JPEG-LS-specific preset parameters
+const M_LSE: u8 = 0xF8; // T.87 Table C.1, §C.2.4 — JPEG-LS preset parameters (LSE)
 const M_SOS: u8 = 0xDA;
 const M_EOI: u8 = 0xD9;
 const M_DRI: u8 = 0xDD; // optional, T.81-compatible
@@ -143,6 +143,7 @@ pub fn decodeWithOptions(
                 const scan = try parseSos(data, pos, &frame.?);
                 pos += parseSegmentLength(data, pos);
                 if (scan.ILV > 2) return error.NotImplemented;
+                if (customMaxval(preset, frame.?.P)) return error.NotImplemented;
                 if (frame.?.num_components == 1) {
                     // ILV is irrelevant for single-component scans
                     // (T.87 §A.2 — line/sample/none all degenerate
@@ -208,9 +209,29 @@ fn parseSof55(data: []const u8, pos: usize) Error!FrameInfo {
 }
 
 /// LSE layout (T.87 §C.2.4). First byte after the length is the
-/// subtype `ID`. We only act on subtype 1 (preset coding parameters);
-/// subtypes 2-4 are mapping tables only used by transcoder apps —
-/// safe to ignore for decode.
+/// subtype `ID`. Only ID 1 (preset coding parameters) is applied. IDs 2
+/// and 3 (mapping table specification and continuation) and ID 4
+/// (oversize image dimensions) are not handled yet; see
+/// docs/plan_context/t81-t87-gap-inventory-2026-11-21.md.
+/// Scan state for frame precision `P`, with any LSE ID 1 threshold and
+/// RESET overrides; a zero field keeps its default (T.87 C.2.4.1.1). A
+/// custom MAXVAL is refused before this point (see `customMaxval`).
+fn initScanState(state: *codec.ScanState, P: u8, near: u32, preset: PresetParams) void {
+    state.reset(P, near);
+    if (preset.T1 != 0) state.T1 = preset.T1;
+    if (preset.T2 != 0) state.T2 = preset.T2;
+    if (preset.T3 != 0) state.T3 = preset.T3;
+    if (preset.RESET != 0) state.RESET = preset.RESET;
+}
+
+/// An LSE ID 1 MAXVAL other than 2^P - 1. CharLS 3.0 derives RANGE,
+/// qbpp and LIMIT from P regardless of it; FFmpeg derives them from the
+/// LSE MAXVAL. Until T.87 A.2.1 settles which a conforming decoder uses,
+/// such scans are NotImplemented rather than decoded by a guess.
+fn customMaxval(preset: PresetParams, P: u8) bool {
+    return preset.MAXVAL != 0 and preset.MAXVAL != (@as(u32, 1) << @intCast(P)) - 1;
+}
+
 fn parseLse(data: []const u8, pos: usize, out: *PresetParams) Error!void {
     const seg_len = parseSegmentLength(data, pos);
     if (seg_len < 3 or pos + seg_len > data.len) return error.TruncatedStream;
@@ -278,9 +299,9 @@ test "parseSof55: minimal grayscale 8-bit header" {
 }
 
 test "parseLse: subtype 1 preset coding parameters" {
-    // LSE: 0xFF 0xF2 [length=13] id=1 [MAXVAL] [T1] [T2] [T3] [RESET]
+    // LSE: 0xFF 0xF8 [length=13] id=1 [MAXVAL] [T1] [T2] [T3] [RESET]
     const data = [_]u8{
-        0xFF, 0xF2, 0x00, 0x0D, // marker + length=13
+        0xFF, 0xF8, 0x00, 0x0D, // marker + length=13
         1, // id = 1 (preset)
         0x00, 0xFF, // MAXVAL = 255
         0x00, 0x03, // T1 = 3
@@ -297,10 +318,10 @@ test "parseLse: subtype 1 preset coding parameters" {
     try std.testing.expectEqual(@as(u32, 64), preset.RESET);
 }
 
-test "parseLse: subtype 4 (mapping table) silently skipped" {
+test "parseLse: ID 2 (mapping table specification) leaves the preset alone" {
     const data = [_]u8{
-        0xFF, 0xF2, 0x00, 0x05, // marker + length=5
-        4, // id = 4 (mapping table — ignore)
+        0xFF, 0xF8, 0x00, 0x05, // marker + length=5
+        2, // id = 2 (mapping table specification)
         0x42, 0x42, // arbitrary payload
     };
     var preset: PresetParams = .{};
@@ -337,13 +358,7 @@ fn decodeScanMono(
     const bytes_per_sample: usize = if (P <= 8) 1 else 2;
 
     var state: codec.ScanState = undefined;
-    state.reset(P, scan.NEAR);
-    // Apply LSE preset overrides if present.
-    if (preset.MAXVAL != 0) state.MAXVAL = preset.MAXVAL;
-    if (preset.T1 != 0) state.T1 = preset.T1;
-    if (preset.T2 != 0) state.T2 = preset.T2;
-    if (preset.T3 != 0) state.T3 = preset.T3;
-    if (preset.RESET != 0) state.RESET = preset.RESET;
+    initScanState(&state, P, scan.NEAR, preset.*);
 
     var br = bitstream.BitReader.init(data);
     const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H) * bytes_per_sample);
@@ -402,7 +417,8 @@ fn decodeScanMono(
                 );
                 const merrval = codec.decodeGolombRice(&br, k, state.LIMIT, state.qbpp);
                 var errval = codec.mapMErrvalToErrval(merrval);
-                if (k == 0) {
+                // T.87 A.5.2: the k = 0 error correction applies only when NEAR = 0.
+                if (k == 0 and state.NEAR == 0) {
                     const b = state.contexts[0][ctx.q].B;
                     const n_i: i32 = @intCast(state.contexts[0][ctx.q].N);
                     if (2 * b + n_i - 1 < 0) errval = ~errval;
@@ -584,7 +600,8 @@ fn decodeLineForComponent(
             );
             const merrval = codec.decodeGolombRice(br, k, state.LIMIT, state.qbpp);
             var errval = codec.mapMErrvalToErrval(merrval);
-            if (k == 0) {
+            // T.87 A.5.2: the k = 0 error correction applies only when NEAR = 0.
+            if (k == 0 and state.NEAR == 0) {
                 const b = state.contexts[0][ctx.q].B;
                 const n_i: i32 = @intCast(state.contexts[0][ctx.q].N);
                 if (2 * b + n_i - 1 < 0) errval = ~errval;
@@ -623,12 +640,7 @@ fn decodeScanLine(
     const bytes_per_sample: usize = if (P <= 8) 1 else 2;
 
     var state: codec.ScanState = undefined;
-    state.reset(P, scan.NEAR);
-    if (preset.MAXVAL != 0) state.MAXVAL = preset.MAXVAL;
-    if (preset.T1 != 0) state.T1 = preset.T1;
-    if (preset.T2 != 0) state.T2 = preset.T2;
-    if (preset.T3 != 0) state.T3 = preset.T3;
-    if (preset.RESET != 0) state.RESET = preset.RESET;
+    initScanState(&state, P, scan.NEAR, preset.*);
 
     var br = bitstream.BitReader.init(data);
     const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H) * nc * bytes_per_sample);
@@ -719,12 +731,7 @@ fn decodeScanRgb(
     const bytes_per_sample: usize = if (P <= 8) 1 else 2;
 
     var state: codec.ScanState = undefined;
-    state.reset(P, scan.NEAR);
-    if (preset.MAXVAL != 0) state.MAXVAL = preset.MAXVAL;
-    if (preset.T1 != 0) state.T1 = preset.T1;
-    if (preset.T2 != 0) state.T2 = preset.T2;
-    if (preset.T3 != 0) state.T3 = preset.T3;
-    if (preset.RESET != 0) state.RESET = preset.RESET;
+    initScanState(&state, P, scan.NEAR, preset.*);
 
     var br = bitstream.BitReader.init(data);
     const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H) * 3 * bytes_per_sample);
@@ -798,7 +805,8 @@ fn decodeScanRgb(
                     const k = codec.computeK(cstate.N, cstate.A);
                     const merrval = codec.decodeGolombRice(&br, k, state.LIMIT, state.qbpp);
                     var errval = codec.mapMErrvalToErrval(merrval);
-                    if (k == 0) {
+                    // T.87 A.5.2: the k = 0 error correction applies only when NEAR = 0.
+                    if (k == 0 and state.NEAR == 0) {
                         const b = cstate.B;
                         const n_i: i32 = @intCast(cstate.N);
                         if (2 * b + n_i - 1 < 0) errval = ~errval;

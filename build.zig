@@ -617,6 +617,40 @@ pub fn build(b: *std.Build) void {
     });
     decode_mod.addImport("jpegz", jpegz_mod);
     linkJpegSystemDeps(decode_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
+    // ITU-T T.87 Annex E conformance streams and reference images (HP,
+    // BSD-3-Clause per CharLS REUSE.toml), staged from the declared charls
+    // source input rather than copied into the repository. Without charls
+    // (cross-target builds) the module says so and the tests skip.
+    const conformance_files = b.addWriteFiles();
+    if (with_charls) {
+        const dir = b.fmt("{s}/test/data/conformance", .{charls_src_path.?});
+        const names = [_][]const u8{ "t8nde0.jls", "t8nde3.jls", "test8bs2.pgm", "t16e0.jls", "t16e3.jls", "test16.pgm" };
+        for (names) |name| _ = conformance_files.addCopyFile(.{ .cwd_relative = b.fmt("{s}/{s}", .{ dir, name }) }, name);
+        _ = conformance_files.add("conformance.zig",
+            \\pub const available = true;
+            \\pub const t8nde0 = @embedFile("t8nde0.jls");
+            \\pub const t8nde3 = @embedFile("t8nde3.jls");
+            \\pub const test8bs2 = @embedFile("test8bs2.pgm");
+            \\pub const t16e0 = @embedFile("t16e0.jls");
+            \\pub const t16e3 = @embedFile("t16e3.jls");
+            \\pub const test16 = @embedFile("test16.pgm");
+            \\
+        );
+    } else {
+        _ = conformance_files.add("conformance.zig",
+            \\pub const available = false;
+            \\pub const t8nde0 = "";
+            \\pub const t8nde3 = "";
+            \\pub const test8bs2 = "";
+            \\pub const t16e0 = "";
+            \\pub const t16e3 = "";
+            \\pub const test16 = "";
+            \\
+        );
+    }
+    decode_mod.addImport("jpegls_conformance", b.createModule(.{
+        .root_source_file = conformance_files.getDirectory().path(b, "conformance.zig"),
+    }));
     const decode_tests = b.addTest(.{
         .name = "decode",
         .root_module = decode_mod,
