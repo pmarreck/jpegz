@@ -505,8 +505,16 @@ pub const FrameCoding = frame_header.FrameCoding;
 pub const frameHeader = frame_header.frameHeader;
 pub const frameKind = frame_header.frameKind;
 
+// Zig collects tests only from files a test block references. Every source
+// file with inline tests and no test module of its own is listed here.
 test {
 	_ = frame_header;
+	_ = facade;
+	_ = @import("decode/jpegls.zig");
+	_ = @import("decode/jpegls_codec.zig");
+	_ = @import("decode/color.zig");
+	_ = @import("decode/cmyk.zig");
+	_ = @import("decode/findings.zig");
 }
 
 /// Classify one finding from the legacy `validate` report the way

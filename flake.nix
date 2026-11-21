@@ -337,6 +337,16 @@
 			printf 'fuzz result contract passed\n' > "$out/result"
 		'';
 
+		# Every src/ file with inline tests must reach a test binary; Zig skips
+		# tests in files no test block references.
+		testReachabilityCheck = pkgs.runCommand "jpegz-test-reachability" {
+			nativeBuildInputs = [ pkgs.bash pkgs.coreutils pkgs.gawk pkgs.gnugrep pkgs.gnused pkgs.findutils ];
+		} ''
+			bash ${buildSource}/tools/check-test-reachability ${buildSource}
+			mkdir -p "$out"
+			printf 'test reachability passed\n' > "$out/result"
+		'';
+
 		# The replay check keeps the fixed default seed. ./fuzz --fuzz passes a
 		# fresh random seed per run; each seed is its own derivation, so a
 		# failing seed is never cached and reruns reproduce it.
@@ -475,6 +485,7 @@
           test = jpegzTestCheck;
 		  fuzz-seeds = mkFuzzCheck {};
 		  fuzz-result = fuzzResultCheck;
+		  test-reachability = testReachabilityCheck;
           cross-windows = mkCrossLinkCheck "x86_64-windows-gnu";
           cross-aarch64-linux = mkCrossLinkCheck "aarch64-linux-musl";
           cross-aarch64-macos = mkCrossLinkCheck "aarch64-macos";

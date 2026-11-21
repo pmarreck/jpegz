@@ -47,6 +47,9 @@ run_check "coverage statistics Nix artifact" coverage_stats_artifact
 run_check "fixed fuzz seed corpus (ReleaseSafe)" \
 	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".fuzz-seeds --no-link --print-build-logs
 
+run_check "inline tests reach a test binary" \
+	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".test-reachability --no-link --print-build-logs
+
 run_check "fuzz result contract" \
 	nix build .#checks."$(nix eval --impure --raw --expr 'builtins.currentSystem')".fuzz-result --no-link --print-build-logs
 

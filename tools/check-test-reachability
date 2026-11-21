@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Fail when a Zig source file under src/ declares tests that no test binary
+# runs. Zig collects tests only from a test module's root file and from files
+# a `test { ... }` block in an already-collected file references, either as
+# `_ = @import("path.zig");` or as `_ = name;` where the same file declares
+# `const name = @import("path.zig");`. Roots are the src/ files build.zig
+# passes as `root_source_file = b.path(...)`.
+#
+# Usage: tools/check-test-reachability [REPO_ROOT]
+
+set -u
+
+root="${1:-.}"
+cd "$root" || exit 2
+
+# Top-level `test {` blocks of a file, one referenced path per line, resolved
+# against the file's directory. Named module imports (no .zig) are skipped:
+# those modules are roots of their own when they carry tests.
+test_refs() {
+	local file="$1" dir
+	dir=$(dirname "$file")
+	awk -v dir="$dir" '
+		/^(pub )?const [A-Za-z_][A-Za-z0-9_]* = @import\("[^"]+\.zig"\)/ {
+			match($0, /const [A-Za-z_][A-Za-z0-9_]*/); name = substr($0, RSTART + 6, RLENGTH - 6)
+			match($0, /@import\("[^"]+"\)/); path = substr($0, RSTART + 9, RLENGTH - 11)
+			imports[name] = path
+		}
+		/^test \{/ { inside = 1; next }
+		inside && /^\}/ { inside = 0; next }
+		inside {
+			line = $0
+			while (match(line, /@import\("[^"]+\.zig"\)/)) {
+				refs[substr(line, RSTART + 9, RLENGTH - 11)] = 1
+				line = substr(line, RSTART + RLENGTH)
+			}
+			if (match($0, /_ = [A-Za-z_][A-Za-z0-9_]*;/)) {
+				pending[substr($0, RSTART + 4, RLENGTH - 5)] = 1
+			}
+		}
+		END {
+			for (n in pending) if (n in imports) refs[imports[n]] = 1
+			for (r in refs) print dir "/" r
+		}
+	' "$file"
+}
+
+normalize() {
+	realpath -m --relative-to=. "$1"
+}
+
+declare -A reachable=()
+queue=()
+while IFS= read -r path; do
+	queue+=("$path")
+done < <(grep -o 'root_source_file = b.path("src/[^"]*\.zig")' build.zig | sed 's/.*b.path("\(.*\)")/\1/' | sort -u)
+
+if [ "${#queue[@]}" -eq 0 ]; then
+	echo "check-test-reachability: no src/ test roots found in build.zig" >&2
+	exit 2
+fi
+
+while [ "${#queue[@]}" -gt 0 ]; do
+	file=$(normalize "${queue[0]}")
+	queue=("${queue[@]:1}")
+	[ -n "${reachable[$file]:-}" ] && continue
+	[ -f "$file" ] || continue
+	reachable[$file]=1
+	while IFS= read -r ref; do
+		queue+=("$ref")
+	done < <(test_refs "$file")
+done
+
+missing=0
+while IFS= read -r file; do
+	file=$(normalize "$file")
+	if grep -q '^test ' "$file" && [ -z "${reachable[$file]:-}" ]; then
+		echo "check-test-reachability: $file declares tests that no test binary runs" >&2
+		missing=$((missing + 1))
+	fi
+done < <(find src -name '*.zig' -type f | sort)
+
+if [ "$missing" -gt 0 ]; then
+	echo "check-test-reachability: reference each file from a test block (see src/jpegz.zig) or give it a test module" >&2
+	exit 1
+fi
+echo "check-test-reachability: every src/ file with tests is reachable (${#reachable[@]} collected)"
