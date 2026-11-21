@@ -281,8 +281,11 @@ pub inline fn computeK(N: u32, A: u32) u5 {
 /// §A.5.3: read a unary part `high`; if it's < LIMIT - qbpp - 1,
 /// read `k` low bits and combine. Otherwise we hit the escape: read
 /// `qbpp` bits directly and add 1.
-pub inline fn decodeGolombRice(br: *bitstream.BitReader, k: u5, limit: u8, qbpp: u8) u32 {
+/// A limited-length Golomb code (T.87 A.5.3) has at most LIMIT - qbpp - 1
+/// leading zeros: that many is the escape. A longer prefix is no codeword.
+pub inline fn decodeGolombRice(br: *bitstream.BitReader, k: u5, limit: u8, qbpp: u8) error{GolombCodeInvalid}!u32 {
     const high = br.readUnary(limit);
+    if (high > @as(u32, limit) - @as(u32, qbpp) - 1) return error.GolombCodeInvalid;
     if (high < @as(u32, limit) - @as(u32, qbpp) - 1) {
         const low: u32 = if (k > 0) br.readBits(@intCast(k)) else 0;
         return (high << k) | low;
@@ -527,7 +530,7 @@ test "decodeGolombRice: k=0 simple unary code" {
     // Stream 0b001_00000 → 2 zeros then a 1 → high = 2.
     const data = [_]u8{0b0010_0000};
     var br = bitstream.BitReader.init(&data);
-    try std.testing.expectEqual(@as(u32, 2), decodeGolombRice(&br, 0, 16, 8));
+    try std.testing.expectEqual(@as(u32, 2), try decodeGolombRice(&br, 0, 16, 8));
 }
 
 test "decodeGolombRice: k=2 mixed unary+binary" {
@@ -535,7 +538,7 @@ test "decodeGolombRice: k=2 mixed unary+binary" {
     // → result = (1 << 2) | 3 = 7.
     const data = [_]u8{0b0111_0000};
     var br = bitstream.BitReader.init(&data);
-    try std.testing.expectEqual(@as(u32, 7), decodeGolombRice(&br, 2, 16, 8));
+    try std.testing.expectEqual(@as(u32, 7), try decodeGolombRice(&br, 2, 16, 8));
 }
 
 test "ScanState.reset: 8-bit lossless defaults" {

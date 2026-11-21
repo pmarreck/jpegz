@@ -204,8 +204,16 @@ pub const FindingCode = enum(u32) {
     lossless_pointtransform_invalid = 101,
 
     // ── JPEG-LS (T.87) (120..139) ────────────────────────────────
+    // A run segment past the end of its line (T.87 A.7); FAIL at the byte
+    // holding the last bit read. Decoding stops.
     jpegls_invalid_run_mode = 120,
+    // An LSE ID 1 outside T.87 C.2.4.1.1 Table C.1; FAIL at the LSE marker,
+    // detail token maxval, thresholds or reset (validate, 2026-11-21).
     jpegls_context_table_invalid = 121,
+    // validate-approved 2026-11-21. A limited-length Golomb code whose unary
+    // prefix exceeds LIMIT - qbpp - 1 (T.87 A.5.3), so it is no codeword;
+    // FAIL at the byte holding the last bit read. Decoding stops.
+    jpegls_golomb_code_invalid = 122,
 
     // ── JPEG 2000 (140..179) ─────────────────────────────────────
     jp2_invalid_signature = 140,

@@ -924,7 +924,8 @@ test "classic facade distinguishes unchecked and unsupported codecs from validit
 	const sof = std.mem.indexOf(u8, jls, &.{ 0xff, 0xf7 }) orelse return error.MissingFixtureSof;
 	@memset(malformed_jls[sof + 7 .. sof + 9], 0); // Zero width; retain SOF55 identification.
 	const skipped = [_]struct { data: []const u8, verdict: jpegz.StrictVerdict }{
-		.{ .data = jls, .verdict = .indeterminate },
+		// The Zig JPEG-LS decoder now checks the codec (validate, 2026-11-21).
+		.{ .data = jls, .verdict = .valid },
 		.{ .data = &malformed_jls, .verdict = .corrupt },
 	};
 	for (skipped) |case| {

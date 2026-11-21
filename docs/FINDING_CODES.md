@@ -53,6 +53,7 @@ coordinator approved codes before 2026-11-06).
 | 101 | `lossless_pointtransform_invalid` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 120 | `jpegls_invalid_run_mode` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 121 | `jpegls_context_table_invalid` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
+| 122 | `jpegls_golomb_code_invalid` | jpegz | validate approval, 2026-11-21 | this commit (2026-11-21) |
 | 140 | `jp2_invalid_signature` | jp2z | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 141 | `jp2_invalid_codestream` | jp2z | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 142 | `jp2_bad_progression_order` | jp2z | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |

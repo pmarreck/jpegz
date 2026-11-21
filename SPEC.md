@@ -25,8 +25,21 @@ Annex E conformance streams t8nde0/3 and t16e0/3, and returns `NotImplemented`
 for an LSE MAXVAL other than 2^P−1 until the RANGE derivation is settled.
 Restart intervals (DRI with a 2- to 4-byte Ri, then RST0..7 in sequence) are
 decoded for single-component and line- or sample-interleaved scans; each
-interval resets the contexts and starts from zero neighbors. An RSTm out of
-sequence is `InvalidMarker`.
+interval resets the contexts and starts from zero neighbors.
+
+`validate` decodes JPEG-LS scans as its codec check (validate rulings,
+2026-11-21). The marker walk honors T.87 bit stuffing: an FF followed by a
+byte below 0x80 is entropy data, not a marker. Entropy faults stop decoding
+and are FAIL at the byte holding the last bit read: 122
+`jpegls_golomb_code_invalid` (a unary prefix past LIMIT − qbpp − 1) and 120
+`jpegls_invalid_run_mode` (a run past the end of its line). At a restart
+boundary, no RSTm is FAIL 56 and a wrong m is FAIL 57, at the marker. An LSE
+ID 1 outside Table C.1 is FAIL 121 at the LSE marker with detail `maxval`,
+`thresholds` or `reset`. Reads past the entropy data are `insufficient_data`
+at the marker (57 for an RSTm) or `truncated_stream` at the end of the input;
+that cause takes precedence over a code fault it produces. Multi-component
+ILV 0, subsampled components and an LSE MAXVAL other than 2^P−1 are "codec
+not checked".
 Consumers import jp2z and libjxlz through the facade, preserving one instance
 of each Zig module. Project purpose lives in [INTENT.md](INTENT.md).
 

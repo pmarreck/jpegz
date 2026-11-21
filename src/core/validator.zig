@@ -773,7 +773,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             // non-padding marker (likely EOI, but could be another SOS
             // for progressive/multi-scan sequences).
             pos = seg_end;
-            const new_pos = skipEntropyData(data, pos);
+            const new_pos = skipEntropyData(data, pos, report.variant == .jpegls);
             // If skipEntropyData reaches end without finding any marker,
             // surface as truncation. We treat "ran off the end" as the
             // entropy stream not being terminated by EOI (or a follow-on
@@ -929,7 +929,8 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                     if (f.severity == .fail) break true;
                 } else false;
                 if (!typed) try addFinding(&report, allocator, .fail,
-                    mapDecodeErrorToFindingCode(err), null, @errorName(err));
+                    if (report.variant == .jpegls) mapJpeglsDecodeError(err) else mapDecodeErrorToFindingCode(err),
+                    null, @errorName(err));
             },
         }
     }
@@ -971,6 +972,13 @@ fn blockingFail(report: *const ValidationReport, nonblocking_fails: usize) bool 
 
 fn checkCodec(allocator: Allocator, data: []const u8, variant: Variant, sink: *types.FindingsSink) errors.DecodeError!void {
     if (variant == .lossless_huffman) return @import("../decode/lossless.zig").validate(data, sink);
+    // Straight to the JPEG-LS decoder: the general dispatcher would fall
+    // through an unsupported JPEG-LS scan into the T.81 decoders.
+    if (variant == .jpegls) {
+        var image = try @import("../decode/jpegls.zig").decodeWithOptions(allocator, data, .{ .findings_sink = sink });
+        image.deinit(allocator);
+        return;
+    }
     var image = try types.decodeWithOptions(allocator, data, .{ .lenient = true, .findings_sink = sink });
     image.deinit(allocator);
 }
@@ -1004,6 +1012,23 @@ fn mapDecodeErrorToFindingCode(err: errors.DecodeError) FindingCode {
     };
 }
 
+/// JPEG-LS decode errors with no typed finding (validate, 2026-11-21: never
+/// `huffman_table_corrupt`). Entropy faults always arrive typed (120, 122,
+/// 56, 57, and 121 for LSE values), so the remaining errors come from
+/// segment content the marker walk does not parse. Exhaustive: a new
+/// DecodeError does not compile until it is classified here.
+fn mapJpeglsDecodeError(err: errors.DecodeError) FindingCode {
+    return switch (err) {
+        error.TruncatedStream => .truncated_stream,
+        error.InvalidMarker => .bad_marker_length,
+        error.UnsupportedPrecision => .invalid_sof_precision,
+        // Only reachable if a fault skipped its typed finding: flag it as
+        // unclassified rather than guess a codec code.
+        error.BackendError, error.InvalidJp2Codestream, error.NotRowStreamable, error.CallbackAborted => .unknown_marker,
+        error.NotImplemented, error.OutOfMemory => unreachable,
+    };
+}
+
 /// libjpeg-turbo handles SOF0/1/2/3/9/10/11. JPEG-LS, differential
 /// variants, and JPEG 2000 don't reach this validator (JP2 has its
 /// own path); skip the decode-through if the marker walker thinks the
@@ -1018,10 +1043,12 @@ fn shouldRunCodecCheck(variant: Variant) bool {
         .baseline_arithmetic,
         .progressive_arithmetic,
         .lossless_arithmetic,
+        // The Zig JPEG-LS decoder reports its faults (validate, 2026-11-21).
+        .jpegls,
         => true,
         // jpeg_xl never reaches this walker either — `validateAny` routes it
         // to libjxlz before any T.81 marker parsing happens.
-        .unknown, .jpegls, .jpeg2000, .jpeg_xl => false,
+        .unknown, .jpeg2000, .jpeg_xl => false,
     };
 }
 
@@ -1077,7 +1104,9 @@ fn startsWith(haystack: []const u8, prefix: []const u8) bool {
 /// Returns the byte offset of the 0xFF that begins the next "real"
 /// marker (so the outer parser can re-enter its 0xFF-handling loop).
 /// Returns null if the stream ends without a terminating marker.
-fn skipEntropyData(data: []const u8, start: usize) ?usize {
+/// `jpegls`: T.87 A.1.3 bit-stuffs instead of byte-stuffing, so an FF
+/// followed by a byte below 0x80 is entropy data, not a marker.
+fn skipEntropyData(data: []const u8, start: usize, jpegls: bool) ?usize {
     var i = start;
     while (i < data.len) {
         if (data[i] != 0xFF) {
@@ -1089,6 +1118,10 @@ fn skipEntropyData(data: []const u8, start: usize) ?usize {
         while (j < data.len and data[j] == 0xFF) j += 1;
         if (j >= data.len) return null;
         const next = data[j];
+        if (jpegls and j == i + 1 and next < 0x80) {
+            i = j + 1;
+            continue;
+        }
         if (next == 0x00) {
             // 0xFF 0x00 = stuffed literal, continues entropy data.
             i = j + 1;

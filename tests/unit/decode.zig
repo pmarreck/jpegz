@@ -937,12 +937,188 @@ test "JPEG-LS restart intervals (DRI + RSTm) decode exactly: CharLS restart stre
         const first = std.mem.indexOf(u8, bad, &.{ 0xff, 0xd0 }).?;
         const second = first + 2 + std.mem.indexOf(u8, bad[first + 2 ..], &.{ 0xff, 0xd1 }).?;
         bad[second + 1] = 0xd3;
-        try std.testing.expectError(error.InvalidMarker, jpegz.jpegls_cleanroom_decode(allocator, bad));
+        // A restart fault stops decoding (finding 57 when validated).
+        try std.testing.expectError(error.BackendError, jpegz.jpegls_cleanroom_decode(allocator, bad));
     }
     // Three components, one scan each (ILV 0), are not decoded yet.
     try std.testing.expectError(error.NotImplemented, jpegz.jpegls_cleanroom_decode(allocator, jpegls_conformance.test8_ilv_none_rm_7));
 }
 
+/// The single FAIL finding with `code` in a validation report, or null.
+fn onlyFail(report: jpegz.ValidationReport, code: jpegz.FindingCode) ?jpegz.Finding {
+    var found: ?jpegz.Finding = null;
+    for (report.findings.items) |f| {
+        if (f.severity != .fail) continue;
+        if (f.code != code or found != null) return null;
+        found = f;
+    }
+    return found;
+}
+
+fn dumpFindings(label: []const u8, report: jpegz.ValidationReport) void {
+    std.debug.print("{s}: codec check {t}\n", .{ label, report.codec_check });
+    for (report.findings.items) |f| std.debug.print("  {t} {t} {?d} exact={} {?s}\n", .{ f.severity, f.code, f.offset, f.offset_is_exact, f.detail });
+}
+
+test "JPEG-LS validate decodes intact streams without FAIL findings" {
+    const allocator = std.testing.allocator;
+    var streams: [12][]const u8 = undefined;
+    var n: usize = 0;
+    for ([_][]const u8{
+        @embedFile("fixtures/jpegls_4x4_gray8.jls"),  @embedFile("fixtures/jpegls_4x4_gray16.jls"),
+        @embedFile("fixtures/jpegls_4x4_rgb8.jls"),   @embedFile("fixtures/jpegls_4x4_rgb16.jls"),
+        @embedFile("fixtures/jpegls_4x4_rgb8_ilv1.jls"), @embedFile("fixtures/jpegls_8x8_gray8_near2.jls"),
+    }) |data| {
+        streams[n] = data;
+        n += 1;
+    }
+    if (jpegls_conformance.available) for ([_][]const u8{
+        jpegls_conformance.t8nde0, jpegls_conformance.t8nde3, jpegls_conformance.t16e0,
+        jpegls_conformance.t16e3, jpegls_conformance.test16_rm_5, jpegls_conformance.test8_ilv_sample_rm_7,
+    }) |data| {
+        streams[n] = data;
+        n += 1;
+    };
+    for (streams[0..n], 0..) |data, i| {
+        var report = try jpegz.validate(allocator, data);
+        defer report.deinit(allocator);
+        const failed = for (report.findings.items) |f| {
+            if (f.severity == .fail) break true;
+        } else false;
+        if (failed or report.codec_check != .decoded) {
+            var label: [16]u8 = undefined;
+            dumpFindings(std.fmt.bufPrint(&label, "stream {d}", .{i}) catch "stream", report);
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "JPEG-LS Golomb code past LIMIT is FAIL 122 and stops decoding" {
+    const allocator = std.testing.allocator;
+    const src = @embedFile("fixtures/jpegls_4x4_gray8.jls");
+    // Entropy data is bytes 25..46 (EOI at 46). All zeros make the first
+    // run-interruption code a unary prefix of 31 zeros; the escape is 22.
+    var data = src.*;
+    @memset(data[25..46], 0);
+    try std.testing.expectError(error.BackendError, jpegz.jpegls_cleanroom_decode(allocator, &data));
+    var report = try jpegz.validate(allocator, &data);
+    defer report.deinit(allocator);
+    const f = onlyFail(report, .jpegls_golomb_code_invalid) orelse {
+        dumpFindings("zeroed entropy", report);
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expect(f.offset_is_exact and f.offset.? >= 25 and f.offset.? < 46);
+}
+
+test "JPEG-LS restart faults are FAIL 57 (wrong RSTm) and 56 (no RSTm) at the marker" {
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    for ([_]struct { byte: u8, code: jpegz.FindingCode }{
+        .{ .byte = 0xd3, .code = .restart_marker_unexpected },
+        .{ .byte = 0xd9, .code = .restart_marker_missing },
+    }) |case| {
+        const data = try allocator.dupe(u8, jpegls_conformance.test16_rm_5);
+        defer allocator.free(data);
+        const first = std.mem.indexOf(u8, data, &.{ 0xff, 0xd0 }).?;
+        const second = first + 2 + std.mem.indexOf(u8, data[first + 2 ..], &.{ 0xff, 0xd1 }).?;
+        data[second + 1] = case.byte;
+        var report = try jpegz.validate(allocator, data);
+        defer report.deinit(allocator);
+        const f = for (report.findings.items) |f| {
+            if (f.code == case.code and f.severity == .fail) break f;
+        } else {
+            dumpFindings(@tagName(case.code), report);
+            return error.TestUnexpectedResult;
+        };
+        try std.testing.expect(f.offset_is_exact);
+        try std.testing.expectEqual(@as(u64, second), f.offset.?);
+    }
+}
+
+test "JPEG-LS LSE ID 1 outside Table C.1 is FAIL 121 at the LSE marker" {
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    // t8nde0: FF F8 at 15, then Ll, ID 1, MAXVAL at 20, T1 22, T2 24, T3 26, RESET 28.
+    const src = jpegls_conformance.t8nde0;
+    try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xf8, 0, 13, 1, 0, 0xff, 0, 9, 0, 9, 0, 9, 0, 31 }, src[15..30]);
+    for ([_]struct { at: usize, value: u16, token: []const u8 }{
+        .{ .at = 20, .value = 256, .token = "maxval" },
+        .{ .at = 22, .value = 10, .token = "thresholds" },
+        .{ .at = 26, .value = 300, .token = "thresholds" },
+        .{ .at = 28, .value = 2, .token = "reset" },
+    }) |case| {
+        const data = try allocator.dupe(u8, src);
+        defer allocator.free(data);
+        data[case.at] = @intCast(case.value >> 8);
+        data[case.at + 1] = @truncate(case.value);
+        var report = try jpegz.validate(allocator, data);
+        defer report.deinit(allocator);
+        const f = onlyFail(report, .jpegls_context_table_invalid) orelse {
+            dumpFindings(case.token, report);
+            return error.TestUnexpectedResult;
+        };
+        try std.testing.expect(f.offset_is_exact and f.offset.? == 15);
+        try std.testing.expectEqualStrings(case.token, f.detail.?);
+    }
+}
+
+test "JPEG-LS entropy that ends early is insufficient_data at the marker, truncated_stream at EOF" {
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const src = jpegls_conformance.t8nde0;
+    const cut = src.len / 2;
+    // Cut mid-entropy and close with EOI: the walk is sound, reads stop at EOI.
+    const early = try std.mem.concat(allocator, u8, &.{ src[0..cut], &.{ 0xff, 0xd9 } });
+    defer allocator.free(early);
+    var report = try jpegz.validate(allocator, early);
+    defer report.deinit(allocator);
+    const f = onlyFail(report, .insufficient_data) orelse {
+        dumpFindings("cut + EOI", report);
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expect(f.offset_is_exact and f.offset.? == cut);
+    // Cut with no marker at all: the decoder alone sees the data end.
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+    // Zero bits past the end may also form an invalid code; either way the
+    // finding names the truncation, not the code.
+    if (jpegz.internal.jpeglsDecodeWithFindings(allocator, src[0..cut], &sink)) |image| {
+        var decoded = image;
+        decoded.deinit(allocator);
+    } else |_| {}
+    var truncated = false;
+    for (sink.items()) |item| {
+        if (item.code == .truncated_stream and item.severity == .fail) truncated = true;
+        if (item.code == .jpegls_golomb_code_invalid or item.code == .jpegls_invalid_run_mode) {
+            std.debug.print("EOF cut reported a code fault: {t}\n", .{item.code});
+            return error.TestUnexpectedResult;
+        }
+    }
+    try std.testing.expect(truncated);
+}
+
+test "JPEG-LS subsampled components are unsupported, not corrupt: conformance t8sse0/3" {
+    // Valid T.87 Annex E streams with G sub-sampled 4x vertically and B 2x
+    // both ways. Until the scan decoders model per-component line lengths
+    // they must say so instead of desynchronizing into a false fault.
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ jpegls_conformance.t8sse0, jpegls_conformance.t8sse3 }) |data| {
+        try std.testing.expectError(error.NotImplemented, jpegz.jpegls_cleanroom_decode(allocator, data));
+        var report = try jpegz.validate(allocator, data);
+        defer report.deinit(allocator);
+        try std.testing.expectEqual(.unsupported, report.codec_check);
+        for (report.findings.items) |f| try std.testing.expect(f.severity != .fail);
+    }
+}
+
+test "JPEG-LS LSE MAXVAL jpegz cannot decode is codec not checked, not a finding" {
+    const allocator = std.testing.allocator;
+    var report = try jpegz.validate(allocator, @embedFile("fixtures/jpegls_16x16_gray8_maxval200.jls"));
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(.unsupported, report.codec_check);
+    for (report.findings.items) |f| try std.testing.expect(f.severity != .fail);
+}
 test "JPEG-LS LSE MAXVAL other than 2^P-1 is NotImplemented, not guessed" {
     // CharLS 3.0, MAXVAL 200 at P=8. CharLS derives RANGE from P; FFmpeg
     // derives it from MAXVAL; the two disagree on this stream.

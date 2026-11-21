@@ -36,6 +36,14 @@ pub const BitReader = struct {
     /// The marker byte itself (e.g. 0xD9 for EOI). Valid only when
     /// `marker_seen == true`.
     marker_byte: u8,
+    /// A read needed more bits than the data held before a marker
+    /// (`marker_seen`) or the end of the buffer (`exhausted`); the
+    /// shortfall was supplied as zero bits.
+    starved: bool = false,
+    exhausted: bool = false,
+    /// Data offset a decoder fault refers to when it is not the read
+    /// position, e.g. a restart marker that does not match.
+    fault_pos: ?usize = null,
 
     pub fn init(data: []const u8) BitReader {
         return .{
@@ -87,25 +95,50 @@ pub const BitReader = struct {
     /// byte, so the marker starts at or after `pos - 1`; within entropy data
     /// an FF is always followed by a byte below 0x80 (bit stuffing), so the
     /// first FF followed by a byte of 0x80 or more is the marker.
-    pub fn skipToRestart(self: *BitReader, expected: u8) error{ TruncatedStream, InvalidMarker }!void {
+    /// Errors: `RestartMissing` when no marker follows (or it is not an
+    /// RSTm), `RestartUnexpected` for an RSTm with the wrong m. Either sets
+    /// `fault_pos` to the marker's FF (or the end of the data).
+    pub fn skipToRestart(self: *BitReader, expected: u8) error{ RestartMissing, RestartUnexpected }!void {
         var i: usize = if (self.pos > 0) self.pos - 1 else 0;
         while (true) : (i += 1) {
-            if (i + 1 >= self.data.len) return error.TruncatedStream;
+            if (i + 1 >= self.data.len) {
+                self.fault_pos = self.data.len;
+                return error.RestartMissing;
+            }
             if (self.data[i] == 0xFF and self.data[i + 1] >= 0x80) break;
         }
         var j = i + 1;
         while (j < self.data.len and self.data[j] == 0xFF) j += 1;
-        if (j >= self.data.len) return error.TruncatedStream;
-        if (self.data[j] != expected) return error.InvalidMarker;
-        self.* = .{
-            .data = self.data,
-            .pos = j + 1,
-            .buf = 0,
-            .valid = 0,
-            .last_byte_was_ff = false,
-            .marker_seen = false,
-            .marker_byte = 0,
-        };
+        self.fault_pos = i;
+        if (j >= self.data.len or self.data[j] < 0xD0 or self.data[j] > 0xD7) return error.RestartMissing;
+        if (self.data[j] != expected) return error.RestartUnexpected;
+        self.fault_pos = null;
+        self.pos = j + 1;
+        self.buf = 0;
+        self.valid = 0;
+        self.last_byte_was_ff = false;
+        self.marker_seen = false;
+        self.marker_byte = 0;
+    }
+
+    /// Offset of the byte holding the most recently consumed bit (0 before
+    /// any read). Bytes after an FF contribute 7 bits (T.87 A.1.3).
+    pub fn bytePosition(self: *const BitReader) usize {
+        var unread: usize = self.valid;
+        var p = self.pos;
+        while (p > 0) {
+            const width: usize = if (p >= 2 and self.data[p - 2] == 0xFF) 7 else 8;
+            if (unread < width) break;
+            unread -= width;
+            p -= 1;
+        }
+        return if (p > 0) p - 1 else 0;
+    }
+
+    /// Where a fault detected now should point: `fault_pos` when set,
+    /// otherwise the byte holding the last bit read.
+    pub fn faultOffset(self: *const BitReader) usize {
+        return self.fault_pos orelse self.bytePosition();
     }
 
     /// Read `n` bits MSB-first. n ∈ [0, 32]. Refills as needed; if
@@ -116,6 +149,10 @@ pub const BitReader = struct {
         std.debug.assert(n <= 32);
         if (n == 0) return 0;
         self.refill(@intCast(n));
+        if (self.valid < n) {
+            self.starved = true;
+            if (!self.marker_seen) self.exhausted = true;
+        }
         // Take top n bits.
         const shift: u6 = @intCast(64 - @as(u7, n));
         const result: u32 = @intCast(self.buf >> shift);

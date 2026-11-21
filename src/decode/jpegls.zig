@@ -20,6 +20,130 @@ const bitstream = @import("jpegls_bitstream");
 const findings_mod = @import("findings.zig");
 
 const Error = errors.DecodeError;
+
+/// Entropy faults a scan decoder can hit. `decodeWithOptions` turns each
+/// into a FAIL finding (validate rulings 2026-11-21) via the exhaustive
+/// `faultFinding` and returns `BackendError`; decoding stops there.
+const ScanFault = error{ GolombCodeInvalid, RunModeInvalid, RestartMissing, RestartUnexpected };
+const ScanError = Error || ScanFault;
+
+fn faultFinding(fault: ScanFault) struct { code: errors.FindingCode, detail: []const u8 } {
+    return switch (fault) {
+        error.GolombCodeInvalid => .{ .code = .jpegls_golomb_code_invalid, .detail = "Golomb code with a unary prefix longer than LIMIT - qbpp - 1 (T.87 A.5.3)" },
+        error.RunModeInvalid => .{ .code = .jpegls_invalid_run_mode, .detail = "run segment extends past the end of the line (T.87 A.7)" },
+        error.RestartMissing => .{ .code = .restart_marker_missing, .detail = "no RSTm marker at a restart-interval boundary" },
+        error.RestartUnexpected => .{ .code = .restart_marker_unexpected, .detail = "RSTm out of the modulo-8 sequence at a restart-interval boundary" },
+    };
+}
+
+/// The fault half of a scan error, or null for an ordinary decode error.
+fn asFault(err: ScanError) ?ScanFault {
+    return switch (err) {
+        error.GolombCodeInvalid, error.RunModeInvalid, error.RestartMissing, error.RestartUnexpected => |fault| fault,
+        else => null,
+    };
+}
+
+/// What a scan decoder leaves for its caller: where a fault points, and
+/// whether reads ran past the entropy data (zero bits supplied).
+const ScanReport = struct {
+    fault_at: usize = 0,
+    starved: bool = false,
+    exhausted: bool = false,
+    /// Offset of the marker's FF and the marker byte, when reads stopped at one.
+    marker_at: ?usize = null,
+    marker_byte: u8 = 0,
+
+    fn capture(self: *ScanReport, br: *const bitstream.BitReader) void {
+        self.fault_at = br.faultOffset();
+        self.starved = br.starved;
+        self.exhausted = br.exhausted;
+        if (br.marker_seen) {
+            self.marker_at = br.pos - 1;
+            self.marker_byte = br.marker_byte;
+        }
+    }
+};
+
+/// Which T.87 C.2.4.1.1 (Table C.1) constraint an LSE ID 1 breaks, if any,
+/// for frame precision `P` and the scan's NEAR. Zero fields are defaults.
+const LseConstraint = enum { maxval, thresholds, reset };
+
+fn lseViolation(preset: PresetParams, P: u8, near: u32) ?LseConstraint {
+    const bit_max: u32 = (@as(u32, 1) << @intCast(P)) - 1;
+    if (preset.MAXVAL != 0 and (preset.MAXVAL < 1 or preset.MAXVAL > bit_max)) return .maxval;
+    const maxval: u32 = if (preset.MAXVAL != 0) preset.MAXVAL else bit_max;
+    var defaults: codec.ScanState = undefined;
+    defaults.reset(P, near);
+    defaults.MAXVAL = maxval;
+    defaults.setDefaultThresholds();
+    if (preset.T1 != 0 and (preset.T1 < near + 1 or preset.T1 > maxval)) return .thresholds;
+    const t1 = if (preset.T1 != 0) preset.T1 else defaults.T1;
+    if (preset.T2 != 0 and (preset.T2 < t1 or preset.T2 > maxval)) return .thresholds;
+    const t2 = if (preset.T2 != 0) preset.T2 else defaults.T2;
+    if (preset.T3 != 0 and (preset.T3 < t2 or preset.T3 > maxval)) return .thresholds;
+    if (preset.RESET != 0 and (preset.RESET < 3 or preset.RESET > @max(255, maxval))) return .reset;
+    return null;
+}
+
+/// Decode one scan, reporting its faults and any read past the entropy data
+/// to `sink` at offsets in `data` (the scan's entropy data starts at `start`).
+fn decodeScanReported(
+    allocator: Allocator,
+    data: []const u8,
+    start: usize,
+    frame: *const FrameInfo,
+    scan: *const ScanInfo,
+    preset: *const PresetParams,
+    sink: ?*findings_mod.FindingsSink,
+) Error!types.Image {
+    var report: ScanReport = .{};
+    const entropy = data[start..];
+    const result: ScanError!types.Image = if (frame.num_components == 1)
+        // ILV is irrelevant for single-component scans (T.87 A.2): the
+        // line, sample and none layouts are the same bitstream.
+        decodeScanMono(allocator, entropy, frame, scan, preset, &report)
+    else if (frame.num_components == 3 and scan.ILV == 2)
+        decodeScanRgb(allocator, entropy, frame, scan, preset, &report)
+    else if (frame.num_components >= 2 and scan.ILV == 1)
+        decodeScanLine(allocator, entropy, frame, scan, preset, &report)
+    else
+        error.NotImplemented;
+    var image = result catch |err| {
+        const fault = asFault(err) orelse return @errorCast(err);
+        if (sink) |s| {
+            // Zero bits supplied past the entropy data make invalid codes;
+            // the cause then is the data ending early, not the code.
+            if (report.starved) {
+                try reportStarvation(s, &report, start, data.len);
+            } else {
+                const finding = faultFinding(fault);
+                s.emitExact(.fail, finding.code, @intCast(start + report.fault_at), finding.detail) catch return error.OutOfMemory;
+            }
+        }
+        return error.BackendError;
+    };
+    errdefer image.deinit(allocator);
+    // Reads past the entropy data got zero bits, as T.81 decoders recover.
+    if (report.starved) if (sink) |s| try reportStarvation(s, &report, start, data.len);
+    return image;
+}
+
+/// Report reads that ran past the entropy data: at the end of the input
+/// (`truncated_stream`), or at a marker (`insufficient_data`, or 57 for an
+/// RSTm inside an interval), with the parity validate asked for.
+fn reportStarvation(s: *findings_mod.FindingsSink, report: *const ScanReport, start: usize, data_len: usize) Error!void {
+    {
+        if (report.exhausted) {
+            // data_len is not a byte of the input, so this offset is not exact.
+            s.emit(.fail, .truncated_stream, @intCast(data_len), "JPEG-LS entropy data ended before every line was decoded") catch return error.OutOfMemory;
+        } else if (report.marker_at) |at| {
+            const rst = report.marker_byte >= 0xD0 and report.marker_byte <= 0xD7;
+            s.emitExact(.fail, if (rst) .restart_marker_unexpected else .insufficient_data, @intCast(start + at),
+                if (rst) "RSTm inside a restart interval: entropy data ended early" else "marker reached before every line was decoded") catch return error.OutOfMemory;
+        }
+    }
+}
 const native_endian = builtin.cpu.arch.endian();
 
 // T.87 marker bytes (those that differ from T.81 are noted).
@@ -69,7 +193,7 @@ pub const ScanInfo = struct {
 /// as at the start of the scan (contexts, run index). Callers zero their
 /// line buffers, so the first line after the marker sees zero neighbors,
 /// as CharLS's decoder does.
-fn restartAt(state: *codec.ScanState, br: *bitstream.BitReader, P: u8, scan: *const ScanInfo, preset: PresetParams, rst_index: *u3) Error!void {
+fn restartAt(state: *codec.ScanState, br: *bitstream.BitReader, P: u8, scan: *const ScanInfo, preset: PresetParams, rst_index: *u3) ScanError!void {
     try br.skipToRestart(0xD0 + @as(u8, rst_index.*));
     rst_index.* +%= 1;
     initScanState(state, P, scan.NEAR, preset);
@@ -113,6 +237,8 @@ pub fn decodeWithOptions(
     var preset: PresetParams = .{};
     // Lines per restart interval from DRI; 0 = no restart markers.
     var restart_interval: u32 = 0;
+    // Offset of the last LSE marker, for finding 121.
+    var lse_at: ?usize = null;
 
     while (pos + 1 < data.len) {
         const skip_start = pos;
@@ -143,9 +269,17 @@ pub fn decodeWithOptions(
                 if (frame.?.P < 2 or frame.?.P > 16) return error.UnsupportedPrecision;
                 if (frame.?.num_components != 1 and frame.?.num_components != 3)
                     return error.NotImplemented;
+                // Subsampled components (T.87 conformance t8sse0/3) have
+                // their own line lengths, which the scan decoders do not
+                // model yet: unsupported, not a fault.
+                for (frame.?.components[1..frame.?.num_components]) |c| {
+                    if (c.h_factor != frame.?.components[0].h_factor or c.v_factor != frame.?.components[0].v_factor)
+                        return error.NotImplemented;
+                }
                 pos += parseSegmentLength(data, pos);
             },
             M_LSE => {
+                lse_at = pos - 2;
                 try parseLse(data, pos, &preset);
                 pos += parseSegmentLength(data, pos);
             },
@@ -168,20 +302,12 @@ pub fn decodeWithOptions(
                 scan.restart_interval = restart_interval;
                 pos += parseSegmentLength(data, pos);
                 if (scan.ILV > 2) return error.NotImplemented;
+                if (lse_at) |at| if (lseViolation(preset, frame.?.P, scan.NEAR)) |which| {
+                    if (options.findings_sink) |sink| sink.emitExact(.fail, .jpegls_context_table_invalid, @intCast(at), @tagName(which)) catch return error.OutOfMemory;
+                    return error.BackendError;
+                };
                 if (customMaxval(preset, frame.?.P)) return error.NotImplemented;
-                if (frame.?.num_components == 1) {
-                    // ILV is irrelevant for single-component scans
-                    // (T.87 §A.2 — line/sample/none all degenerate
-                    // to the same bitstream); route through mono.
-                    return try decodeScanMono(allocator, data[pos..], &frame.?, &scan, &preset);
-                }
-                if (frame.?.num_components == 3 and scan.ILV == 2) {
-                    return try decodeScanRgb(allocator, data[pos..], &frame.?, &scan, &preset);
-                }
-                if (frame.?.num_components >= 2 and scan.ILV == 1) {
-                    return try decodeScanLine(allocator, data[pos..], &frame.?, &scan, &preset);
-                }
-                return error.NotImplemented;
+                return decodeScanReported(allocator, data, pos, &frame.?, &scan, &preset, options.findings_sink);
             },
             // Standalone markers we can skip safely (RST, TEM, SOI/EOI
             // shouldn't appear here; treat as no-op).
@@ -377,7 +503,8 @@ fn decodeScanMono(
     frame: *const FrameInfo,
     scan: *const ScanInfo,
     preset: *const PresetParams,
-) Error!types.Image {
+    report: *ScanReport,
+) ScanError!types.Image {
     const W: u32 = frame.width;
     const H: u32 = frame.height;
     const P: u8 = frame.P;
@@ -387,6 +514,7 @@ fn decodeScanMono(
     initScanState(&state, P, scan.NEAR, preset.*);
 
     var br = bitstream.BitReader.init(data);
+    defer report.capture(&br);
     const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H) * bytes_per_sample);
     errdefer allocator.free(pixels);
 
@@ -446,7 +574,7 @@ fn decodeScanMono(
                     state.contexts[0][ctx.q].N,
                     state.contexts[0][ctx.q].A,
                 );
-                const merrval = codec.decodeGolombRice(&br, k, state.LIMIT, state.qbpp);
+                const merrval = try codec.decodeGolombRice(&br, k, state.LIMIT, state.qbpp);
                 var errval = codec.mapMErrvalToErrval(merrval);
                 // T.87 A.5.2: the k = 0 error correction applies only when NEAR = 0.
                 if (k == 0 and state.NEAR == 0) {
@@ -511,7 +639,7 @@ fn decodeRun(
     prev_line: []const i32,
     start_x: u32,
     W: u32,
-) Error!u32 {
+) ScanError!u32 {
     const pixel_count: u32 = W - start_x;
     var index: u32 = 0;
     // Run-length: emit 1 << J[run_index] pixels per 1-bit, cap at
@@ -532,7 +660,7 @@ fn decodeRun(
             index += residual;
         }
     }
-    if (index > pixel_count) return error.BackendError;
+    if (index > pixel_count) return error.RunModeInvalid;
 
     // Fill run with Ra.
     var i: u32 = 0;
@@ -552,7 +680,7 @@ fn decodeRun(
     // Run-interruption context is shared across components (see fn doc).
     const rc = &state.run_contexts[0][ri_type];
     const k = codec.runModeGetK(rc, ri_type);
-    const e_mapped = codec.decodeGolombRice(
+    const e_mapped = try codec.decodeGolombRice(
         br, k,
         @as(u8, @intCast(@as(i32, state.LIMIT) - codec.J_TABLE[state.run_index[ci]] - 1)),
         state.qbpp,
@@ -591,7 +719,7 @@ fn decodeLineForComponent(
     cur_line: []i32,
     prev_line: []const i32,
     W: u32,
-) Error!void {
+) ScanError!void {
     // T.87 §A.1.2: at start of line, Ra ← Rb. Store at index 1 (index
     // 0 is the left-of-image sentinel, kept 0).
     cur_line[0] = prev_line[1];
@@ -629,7 +757,7 @@ fn decodeLineForComponent(
                 state.contexts[0][ctx.q].N,
                 state.contexts[0][ctx.q].A,
             );
-            const merrval = codec.decodeGolombRice(br, k, state.LIMIT, state.qbpp);
+            const merrval = try codec.decodeGolombRice(br, k, state.LIMIT, state.qbpp);
             var errval = codec.mapMErrvalToErrval(merrval);
             // T.87 A.5.2: the k = 0 error correction applies only when NEAR = 0.
             if (k == 0 and state.NEAR == 0) {
@@ -663,7 +791,8 @@ fn decodeScanLine(
     frame: *const FrameInfo,
     scan: *const ScanInfo,
     preset: *const PresetParams,
-) Error!types.Image {
+    report: *ScanReport,
+) ScanError!types.Image {
     const W: u32 = frame.width;
     const H: u32 = frame.height;
     const P: u8 = frame.P;
@@ -674,6 +803,7 @@ fn decodeScanLine(
     initScanState(&state, P, scan.NEAR, preset.*);
 
     var br = bitstream.BitReader.init(data);
+    defer report.capture(&br);
     const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H) * nc * bytes_per_sample);
     errdefer allocator.free(pixels);
 
@@ -760,7 +890,8 @@ fn decodeScanRgb(
     frame: *const FrameInfo,
     scan: *const ScanInfo,
     preset: *const PresetParams,
-) Error!types.Image {
+    report: *ScanReport,
+) ScanError!types.Image {
     const W: u32 = frame.width;
     const H: u32 = frame.height;
     const P: u8 = frame.P;
@@ -770,6 +901,7 @@ fn decodeScanRgb(
     initScanState(&state, P, scan.NEAR, preset.*);
 
     var br = bitstream.BitReader.init(data);
+    defer report.capture(&br);
     const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H) * 3 * bytes_per_sample);
     errdefer allocator.free(pixels);
 
@@ -844,7 +976,7 @@ fn decodeScanRgb(
                     if (px < 0) px = 0 else if (px > @as(i32, @intCast(state.MAXVAL))) px = @intCast(state.MAXVAL);
 
                     const k = codec.computeK(cstate.N, cstate.A);
-                    const merrval = codec.decodeGolombRice(&br, k, state.LIMIT, state.qbpp);
+                    const merrval = try codec.decodeGolombRice(&br, k, state.LIMIT, state.qbpp);
                     var errval = codec.mapMErrvalToErrval(merrval);
                     // T.87 A.5.2: the k = 0 error correction applies only when NEAR = 0.
                     if (k == 0 and state.NEAR == 0) {
@@ -905,7 +1037,7 @@ fn decodeRunRgb(
     prev_line: []const i32,
     start_x: u32,
     W: u32,
-) Error!u32 {
+) ScanError!u32 {
     const pixel_count: u32 = W - start_x;
     var index: u32 = 0;
     while (br.readBits(1) == 1) {
@@ -922,7 +1054,7 @@ fn decodeRunRgb(
             index += residual;
         }
     }
-    if (index > pixel_count) return error.BackendError;
+    if (index > pixel_count) return error.RunModeInvalid;
 
     // Fill run with Ra triplet.
     var i: u32 = 0;
@@ -948,7 +1080,7 @@ fn decodeRunRgb(
     var ci: usize = 0;
     while (ci < 3) : (ci += 1) {
         const k = codec.runModeGetK(rc, 0);
-        const e_mapped = codec.decodeGolombRice(
+        const e_mapped = try codec.decodeGolombRice(
             br, k,
             @as(u8, @intCast(@as(i32, state.LIMIT) - codec.J_TABLE[state.run_index[0]] - 1)),
             state.qbpp,
@@ -973,3 +1105,32 @@ comptime {
     _ = codec;
 }
 
+
+test "decodeRun: a run residual past the end of the line is RunModeInvalid (finding 120)" {
+    // RUNindex 12 gives J = 3: a 0 bit ends the run, then 3 residual bits.
+    // Residual 7 on a 4-sample line overruns it. Bits: 0 111 0000.
+    var state: codec.ScanState = undefined;
+    initScanState(&state, 8, 0, .{});
+    state.run_index[0] = 12;
+    try std.testing.expectEqual(@as(u8, 3), codec.J_TABLE[12]);
+    var br = bitstream.BitReader.init(&.{ 0x70, 0x00, 0x00, 0x00 });
+    var cur = [_]i32{0} ** 6;
+    const prev = [_]i32{0} ** 6;
+    try std.testing.expectError(error.RunModeInvalid, decodeRun(&state, &br, 0, 0, &cur, &prev, 0, 4));
+}
+
+test "every ScanFault is recognized and maps to its finding code" {
+    const want = .{
+        .{ error.GolombCodeInvalid, errors.FindingCode.jpegls_golomb_code_invalid },
+        .{ error.RunModeInvalid, errors.FindingCode.jpegls_invalid_run_mode },
+        .{ error.RestartMissing, errors.FindingCode.restart_marker_missing },
+        .{ error.RestartUnexpected, errors.FindingCode.restart_marker_unexpected },
+    };
+    try std.testing.expectEqual(@typeInfo(ScanFault).error_set.?.len, want.len);
+    inline for (want) |pair| {
+        const fault: ScanFault = pair[0];
+        try std.testing.expectEqual(@as(?ScanFault, fault), asFault(fault));
+        try std.testing.expectEqual(pair[1], faultFinding(fault).code);
+    }
+    try std.testing.expectEqual(@as(?ScanFault, null), asFault(error.TruncatedStream));
+}
