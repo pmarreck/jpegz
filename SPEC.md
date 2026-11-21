@@ -23,6 +23,10 @@ predictive lossless and arithmetic DCT modes. JPEG-LS decoding is also in Zig;
 it applies LSE preset thresholds and RESET, is checked against the T.87
 Annex E conformance streams t8nde0/3 and t16e0/3, and returns `NotImplemented`
 for an LSE MAXVAL other than 2^P−1 until the RANGE derivation is settled.
+Restart intervals (DRI with a 2- to 4-byte Ri, then RST0..7 in sequence) are
+decoded for single-component and line- or sample-interleaved scans; each
+interval resets the contexts and starts from zero neighbors. An RSTm out of
+sequence is `InvalidMarker`.
 Consumers import jp2z and libjxlz through the facade, preserving one instance
 of each Zig module. Project purpose lives in [INTENT.md](INTENT.md).
 

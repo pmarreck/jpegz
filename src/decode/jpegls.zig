@@ -60,7 +60,25 @@ pub const ScanInfo = struct {
     /// Interleave mode (0 = none/planar, 1 = line, 2 = sample). v1
     /// supports 0 and 2 once §2 ships.
     ILV: u8,
+    /// Lines per restart interval (DRI); 0 = none. Set by the caller of
+    /// `parseSos` from the most recent DRI.
+    restart_interval: u32 = 0,
 };
+
+/// At a restart-interval boundary: consume RSTm and reset the coding state
+/// as at the start of the scan (contexts, run index). Callers zero their
+/// line buffers, so the first line after the marker sees zero neighbors,
+/// as CharLS's decoder does.
+fn restartAt(state: *codec.ScanState, br: *bitstream.BitReader, P: u8, scan: *const ScanInfo, preset: PresetParams, rst_index: *u3) Error!void {
+    try br.skipToRestart(0xD0 + @as(u8, rst_index.*));
+    rst_index.* +%= 1;
+    initScanState(state, P, scan.NEAR, preset);
+}
+
+/// True at the first line of every restart interval after the first.
+fn restartDue(scan: *const ScanInfo, y: u32) bool {
+    return scan.restart_interval != 0 and y != 0 and y % scan.restart_interval == 0;
+}
 
 /// Caller-supplied knobs. Mirrors `baseline.DecodeOptions` shape so the
 /// dispatcher can pass through a `FindingsSink` uniformly. The only
@@ -93,6 +111,8 @@ pub fn decodeWithOptions(
     var frame: ?FrameInfo = null;
     // LSE preset-parameter overrides — applied during scan init in §2.
     var preset: PresetParams = .{};
+    // Lines per restart interval from DRI; 0 = no restart markers.
+    var restart_interval: u32 = 0;
 
     while (pos + 1 < data.len) {
         const skip_start = pos;
@@ -130,9 +150,13 @@ pub fn decodeWithOptions(
                 pos += parseSegmentLength(data, pos);
             },
             M_DRI => {
-                // Optional. JPEG-LS uses restart markers analogously to
-                // T.81; v1 doesn't see any in our fixtures so we skip.
-                pos += parseSegmentLength(data, pos);
+                // T.87 C.2.5: Ri in 2, 3 or 4 bytes (Lr = 4, 5 or 6), lines
+                // per restart interval; 0 disables restarts.
+                const seg_len = parseSegmentLength(data, pos);
+                if (seg_len < 4 or seg_len > 6 or pos + seg_len > data.len) return error.InvalidMarker;
+                restart_interval = 0;
+                for (data[pos + 2 .. pos + seg_len]) |byte| restart_interval = (restart_interval << 8) | byte;
+                pos += seg_len;
             },
             M_DNL => {
                 // Define Number of Lines (T.87 §B.2.5). Rarely used.
@@ -140,7 +164,8 @@ pub fn decodeWithOptions(
             },
             M_SOS => {
                 if (frame == null) return error.InvalidMarker;
-                const scan = try parseSos(data, pos, &frame.?);
+                var scan = try parseSos(data, pos, &frame.?);
+                scan.restart_interval = restart_interval;
                 pos += parseSegmentLength(data, pos);
                 if (scan.ILV > 2) return error.NotImplemented;
                 if (customMaxval(preset, frame.?.P)) return error.NotImplemented;
@@ -251,6 +276,7 @@ fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
     const seg_len = parseSegmentLength(data, pos);
     if (seg_len < 6 or pos + seg_len > data.len) return error.TruncatedStream;
     var info: ScanInfo = undefined;
+    info.restart_interval = 0;
     info.num_components = data[pos + 2];
     if (info.num_components == 0 or info.num_components > 4) return error.InvalidMarker;
     var i: usize = 0;
@@ -373,8 +399,13 @@ fn decodeScanMono(
     defer allocator.free(prev_line);
     @memset(prev_line, 0);
 
+    var rst_index: u3 = 0;
     var y: u32 = 0;
     while (y < H) : (y += 1) {
+        if (restartDue(scan, y)) {
+            try restartAt(&state, &br, P, scan, preset.*, &rst_index);
+            @memset(prev_line, 0);
+        }
         @memset(cur_line, 0);
         // T.87 §A.1.2: at start of line, Ra is set to the prior
         // line's value at column 0. We store at index 1 (index 0
@@ -663,8 +694,13 @@ fn decodeScanLine(
         @memset(prev_lines[c], 0);
     }
 
+    var rst_index: u3 = 0;
     var y: u32 = 0;
     while (y < H) : (y += 1) {
+        if (restartDue(scan, y)) {
+            try restartAt(&state, &br, P, scan, preset.*, &rst_index);
+            for (prev_lines[0..nc]) |line| @memset(line, 0);
+        }
         // Decode each component's strip for this line.
         var ci: usize = 0;
         while (ci < nc) : (ci += 1) {
@@ -750,8 +786,13 @@ fn decodeScanRgb(
     defer allocator.free(prev_line);
     @memset(prev_line, 0);
 
+    var rst_index: u3 = 0;
     var y: u32 = 0;
     while (y < H) : (y += 1) {
+        if (restartDue(scan, y)) {
+            try restartAt(&state, &br, P, scan, preset.*, &rst_index);
+            @memset(prev_line, 0);
+        }
         @memset(cur_line, 0);
         // T.87 §A.1.2: at start of line, Ra(comp) ← Rb(comp). The left
         // sentinel (col -1) of cur_line takes prev_line's col 0 values.

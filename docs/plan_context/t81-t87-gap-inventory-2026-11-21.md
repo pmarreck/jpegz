@@ -43,7 +43,7 @@ parseable"), two kinds of gap matter differently:
 | Progressive Nf ∉ {1,3} | Not implemented | Unsupported |
 | JPEG-LS Nf ∉ {1,3} | Not implemented | No codec check at all |
 | JPEG-LS ILV=0 with Nf>1 (one scan per component) | Not implemented | No codec check at all |
-| JPEG-LS restart intervals | DRI skipped | No codec check; see the PLAN item on the missing restart oracle |
+| JPEG-LS restart intervals | **Decoded 2026-11-21** (mono, ILV 1, ILV 2; CharLS restart streams exact) | No codec check yet |
 | JPEG-LS entropy (any) | Decoded | `shouldRunCodecCheck` excludes `.jpegls`, so findings 46/47 are dormant |
 
 ## Stale documentation found

@@ -623,9 +623,17 @@ pub fn build(b: *std.Build) void {
     // (cross-target builds) the module says so and the tests skip.
     const conformance_files = b.addWriteFiles();
     if (with_charls) {
-        const dir = b.fmt("{s}/test/data/conformance", .{charls_src_path.?});
-        const names = [_][]const u8{ "t8nde0.jls", "t8nde3.jls", "test8bs2.pgm", "t16e0.jls", "t16e3.jls", "test16.pgm" };
-        for (names) |name| _ = conformance_files.addCopyFile(.{ .cwd_relative = b.fmt("{s}/{s}", .{ dir, name }) }, name);
+        // Paths under the charls test/data directory; staged flat.
+        const names = [_][]const u8{
+            "conformance/t8nde0.jls",   "conformance/t8nde3.jls",   "conformance/test8bs2.pgm",
+            "conformance/t16e0.jls",    "conformance/t16e3.jls",    "conformance/test16.pgm",
+            "conformance/test8.ppm",    "test16_rm_5.jls",          "test8_ilv_none_rm_7.jls",
+            "test8_ilv_line_rm_7.jls",  "test8_ilv_sample_rm_7.jls", "test8_ilv_sample_rm_300.jls",
+        };
+        for (names) |name| _ = conformance_files.addCopyFile(
+            .{ .cwd_relative = b.fmt("{s}/test/data/{s}", .{ charls_src_path.?, name }) },
+            std.fs.path.basename(name),
+        );
         _ = conformance_files.add("conformance.zig",
             \\pub const available = true;
             \\pub const t8nde0 = @embedFile("t8nde0.jls");
@@ -634,6 +642,12 @@ pub fn build(b: *std.Build) void {
             \\pub const t16e0 = @embedFile("t16e0.jls");
             \\pub const t16e3 = @embedFile("t16e3.jls");
             \\pub const test16 = @embedFile("test16.pgm");
+            \\pub const test8 = @embedFile("test8.ppm");
+            \\pub const test16_rm_5 = @embedFile("test16_rm_5.jls");
+            \\pub const test8_ilv_none_rm_7 = @embedFile("test8_ilv_none_rm_7.jls");
+            \\pub const test8_ilv_line_rm_7 = @embedFile("test8_ilv_line_rm_7.jls");
+            \\pub const test8_ilv_sample_rm_7 = @embedFile("test8_ilv_sample_rm_7.jls");
+            \\pub const test8_ilv_sample_rm_300 = @embedFile("test8_ilv_sample_rm_300.jls");
             \\
         );
     } else {
@@ -645,6 +659,12 @@ pub fn build(b: *std.Build) void {
             \\pub const t16e0 = "";
             \\pub const t16e3 = "";
             \\pub const test16 = "";
+            \\pub const test8 = "";
+            \\pub const test16_rm_5 = "";
+            \\pub const test8_ilv_none_rm_7 = "";
+            \\pub const test8_ilv_line_rm_7 = "";
+            \\pub const test8_ilv_sample_rm_7 = "";
+            \\pub const test8_ilv_sample_rm_300 = "";
             \\
         );
     }

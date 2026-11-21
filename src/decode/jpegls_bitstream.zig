@@ -81,6 +81,33 @@ pub const BitReader = struct {
         }
     }
 
+    /// End a restart interval: drop the unread bits, consume the marker
+    /// `expected` (RSTm, after any FF fill bytes) and continue with a fresh
+    /// bit buffer just past it. Refill never consumes a marker's second
+    /// byte, so the marker starts at or after `pos - 1`; within entropy data
+    /// an FF is always followed by a byte below 0x80 (bit stuffing), so the
+    /// first FF followed by a byte of 0x80 or more is the marker.
+    pub fn skipToRestart(self: *BitReader, expected: u8) error{ TruncatedStream, InvalidMarker }!void {
+        var i: usize = if (self.pos > 0) self.pos - 1 else 0;
+        while (true) : (i += 1) {
+            if (i + 1 >= self.data.len) return error.TruncatedStream;
+            if (self.data[i] == 0xFF and self.data[i + 1] >= 0x80) break;
+        }
+        var j = i + 1;
+        while (j < self.data.len and self.data[j] == 0xFF) j += 1;
+        if (j >= self.data.len) return error.TruncatedStream;
+        if (self.data[j] != expected) return error.InvalidMarker;
+        self.* = .{
+            .data = self.data,
+            .pos = j + 1,
+            .buf = 0,
+            .valid = 0,
+            .last_byte_was_ff = false,
+            .marker_seen = false,
+            .marker_byte = 0,
+        };
+    }
+
     /// Read `n` bits MSB-first. n ∈ [0, 32]. Refills as needed; if
     /// the stream is exhausted (or hit a marker), returns zero-padded
     /// bits — same convention as the rest of the library's bit

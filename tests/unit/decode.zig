@@ -883,6 +883,66 @@ test "JPEG-LS 12-bit T.87 conformance t16e0 and t16e3 with default parameters" {
     }
 }
 
+test "JPEG-LS restart intervals (DRI + RSTm) decode exactly: CharLS restart streams" {
+    // CharLS test/data streams with a DRI before SOF55: 12-bit mono every
+    // 5 lines; 8-bit RGB line- and sample-interleaved every 7 lines; and an
+    // interval of 300, longer than the 256-line image, so no marker
+    // appears. Lossless, so the source images are exact references.
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    {
+        var image = try jpegz.jpegls_cleanroom_decode(allocator, jpegls_conformance.test16_rm_5);
+        defer image.deinit(allocator);
+        const want = pgmSamples(jpegls_conformance.test16);
+        const got = image.pixelsU16();
+        try std.testing.expectEqual(want.len / 2, got.len);
+        for (got, 0..) |sample, i| {
+            const ref: u16 = (@as(u16, want[2 * i]) << 8) | want[2 * i + 1];
+            if (sample != ref) {
+                std.debug.print("test16_rm_5: sample {d} is {d}, want {d}\n", .{ i, sample, ref });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+    const want_rgb = pgmSamples(jpegls_conformance.test8);
+    for ([_]struct { name: []const u8, data: []const u8 }{
+        .{ .name = "line, every 7", .data = jpegls_conformance.test8_ilv_line_rm_7 },
+        .{ .name = "sample, every 7", .data = jpegls_conformance.test8_ilv_sample_rm_7 },
+        .{ .name = "sample, every 300", .data = jpegls_conformance.test8_ilv_sample_rm_300 },
+    }) |case| {
+        var image = try jpegz.jpegls_cleanroom_decode(allocator, case.data);
+        defer image.deinit(allocator);
+        try std.testing.expectEqual(@as(u8, 3), image.channels);
+        if (std.mem.indexOfDiff(u8, want_rgb, image.pixels)) |i| {
+            std.debug.print("{s}: byte {d} differs (len {d} vs {d})\n", .{ case.name, i, image.pixels.len, want_rgb.len });
+            return error.TestUnexpectedResult;
+        }
+    }
+    // A 3-byte Ri (DRI Lr = 5, T.87 C.2.5) names the same interval.
+    {
+        const src = jpegls_conformance.test16_rm_5;
+        try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xdd, 0, 4, 0, 5 }, src[2..8]);
+        const wide = try std.mem.concat(allocator, u8, &.{ src[0..2], &.{ 0xff, 0xdd, 0, 5, 0, 0, 5 }, src[8..] });
+        defer allocator.free(wide);
+        var a = try jpegz.jpegls_cleanroom_decode(allocator, src);
+        defer a.deinit(allocator);
+        var b = try jpegz.jpegls_cleanroom_decode(allocator, wide);
+        defer b.deinit(allocator);
+        try std.testing.expectEqualSlices(u8, a.pixels, b.pixels);
+    }
+    // RSTm must follow the modulo-8 sequence: renumber the second marker.
+    {
+        const bad = try allocator.dupe(u8, jpegls_conformance.test16_rm_5);
+        defer allocator.free(bad);
+        const first = std.mem.indexOf(u8, bad, &.{ 0xff, 0xd0 }).?;
+        const second = first + 2 + std.mem.indexOf(u8, bad[first + 2 ..], &.{ 0xff, 0xd1 }).?;
+        bad[second + 1] = 0xd3;
+        try std.testing.expectError(error.InvalidMarker, jpegz.jpegls_cleanroom_decode(allocator, bad));
+    }
+    // Three components, one scan each (ILV 0), are not decoded yet.
+    try std.testing.expectError(error.NotImplemented, jpegz.jpegls_cleanroom_decode(allocator, jpegls_conformance.test8_ilv_none_rm_7));
+}
+
 test "JPEG-LS LSE MAXVAL other than 2^P-1 is NotImplemented, not guessed" {
     // CharLS 3.0, MAXVAL 200 at P=8. CharLS derives RANGE from P; FFmpeg
     // derives it from MAXVAL; the two disagree on this stream.
