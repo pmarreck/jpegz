@@ -1753,6 +1753,43 @@ test "validate: arithmetic_table_corrupt classifies bad Tc/Tb in DAC, silent on 
     }
 }
 
+test "DAC entries classify every Tc/Tb byte and every DC and AC conditioning value (T.81 B.2.4.3)" {
+	// The fixture's DAC holds (0x00, 0x10): DC table 0 with L = 0, U = 1, and
+	// (0x10, 0x05): AC table 0 with Kx = 5. B.2.4.3: Tc is 0 or 1, Tb is 0..3,
+	// a DC Cs is L + 16U with 0 <= L <= U <= 15, and an AC Cs is Kx in 1..63.
+	// Validate (2026-11-22): FAIL 53 exactly at the offending byte, once per
+	// segment.
+	const allocator = std.testing.allocator;
+	const dac = findMarker(fixture_arith_8x8_gray, 0xcc).?;
+	try std.testing.expectEqualSlices(u8, &.{ 0, 6, 0x00, 0x10, 0x10, 0x05 }, fixture_arith_8x8_gray[dac + 2 .. dac + 8]);
+	const Field = enum { tc_tb, dc_cs, ac_cs };
+	for ([_]Field{ .tc_tb, .dc_cs, .ac_cs }) |field| {
+		const at: usize = switch (field) { .tc_tb => dac + 4, .dc_cs => dac + 5, .ac_cs => dac + 7 };
+		for (0..256) |value| {
+			const data = try allocator.dupe(u8, fixture_arith_8x8_gray);
+			defer allocator.free(data);
+			data[at] = @intCast(value);
+			const invalid = switch (field) {
+				// The first entry's Cs, 0x10, is a valid DC (L 0, U 1) and AC (Kx 16) value.
+				.tc_tb => value >> 4 > 1 or value & 15 > 3,
+				.dc_cs => value & 15 > value >> 4,
+				.ac_cs => value < 1 or value > 63,
+			};
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			var records: usize = 0;
+			for (report.findings.items) |f| if (f.code == .arithmetic_table_corrupt) {
+				records += 1;
+				try std.testing.expectEqual(jpegz.Severity.fail, f.severity);
+				try std.testing.expect(f.offset_is_exact);
+				try std.testing.expectEqual(@as(?u64, at), f.offset);
+			};
+			errdefer std.debug.print("{s} value 0x{x:0>2}: {d} records\n", .{ @tagName(field), value, records });
+			try std.testing.expectEqual(@as(usize, @intFromBool(invalid)), records);
+		}
+	}
+}
+
 test "validate: progressive_scan_count is INFO on progressive, absent on baseline" {
     const allocator = std.testing.allocator;
 

@@ -494,14 +494,31 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         // ── DAC: validate arithmetic conditioning entries (T.81 §B.2.4.3) ──
         // Each entry is a (Tc/Tb, Cs) pair: Tc (high nibble) must be 0 (DC)
         // or 1 (AC); Tb (low nibble, conditioning table destination) must be
-        // 0..3. A malformed entry is flagged rather than silently accepted.
+        // 0..3. A DC Cs is L + 16U with 0 <= L <= U <= 15; an AC Cs is Kx in
+        // 1..63. Validate (2026-11-22): FAIL 53 exactly at the first offending
+        // byte, once per segment.
         if (marker_byte == Marker.DAC) {
             var dp: usize = seg_body_start;
             while (dp + 1 < seg_end) : (dp += 2) {
                 const tctb = data[dp];
+                const cs = data[dp + 1];
                 if ((tctb >> 4) > 1 or (tctb & 0x0F) > 3) {
-                    try addFinding(&report, allocator, .fail, .arithmetic_table_corrupt,
+                    try addExactFinding(&report, allocator, .arithmetic_table_corrupt,
                         dp, "DAC Tc must be 0 or 1 and Tb must be 0..3");
+                    break;
+                }
+                if (tctb >> 4 == 0 and cs & 0x0F > cs >> 4) {
+                    var dbuf: [80]u8 = undefined;
+                    try addExactFinding(&report, allocator, .arithmetic_table_corrupt, dp + 1,
+                        std.fmt.bufPrint(&dbuf, "DAC DC conditioning needs L <= U; got L={d} U={d}",
+                            .{ cs & 0x0F, cs >> 4 }) catch "DAC DC conditioning needs L <= U");
+                    break;
+                }
+                if (tctb >> 4 == 1 and (cs < 1 or cs > 63)) {
+                    var dbuf: [64]u8 = undefined;
+                    try addExactFinding(&report, allocator, .arithmetic_table_corrupt, dp + 1,
+                        std.fmt.bufPrint(&dbuf, "DAC AC Kx must be 1..63; got {d}", .{cs})
+                            catch "DAC AC Kx must be 1..63");
                     break;
                 }
             }

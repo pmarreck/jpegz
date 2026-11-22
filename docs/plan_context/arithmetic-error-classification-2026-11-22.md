@@ -27,3 +27,26 @@ rulings (same code as the T.81 Huffman path for the same situation):
   restart interval, or at the SOS without DRI, labeled as the interval.
 
 **Before shipping:** send the corpus report and controlled reds to validate.
+
+## Follow-up ruling (validate, 2026-11-22)
+
+**A. Unread bytes before a marker:** FAIL 8 `extraneous_bytes_before_marker`,
+exactly at the first byte the decoder never fetched. Detail is
+`arithmetic_interval` or `arithmetic_scan_end`.
+- **Basis:** the T.81 D.1.8 flush emits only bytes the decoder fetches.
+- **Not unread:** 0xFF fill bytes, and bytes already taken by pre-fetch.
+- **Before shipping:** run every reachable arithmetic producer
+  (libjpeg-turbo across restart intervals and image sizes, jpegtran
+  `-arithmetic`, IJG libjpeg 9 if available, corpus SOF9/SOF10 files). Any
+  producer that leaves unread bytes goes back to validate for a re-grade
+  instead of shipping FAIL.
+
+**B. Early end of entropy data:** no separate finding.
+- **Why:** D.1.8 lets encoders drop trailing zero bytes, and D.2.6 supplies
+  zeros past a marker.
+- **Where damage surfaces:** short intervals desynchronize and show up as
+  56, 57 or 8 at the next boundary.
+- **Missing marker:** a file that ends without its marker keeps
+  `truncated_stream`.
+- **Detection limit (document in SPEC):** a short final interval whose
+  zero-filled decode completes cleanly cannot be detected.

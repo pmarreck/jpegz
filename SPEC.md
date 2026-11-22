@@ -336,6 +336,12 @@ first row. Progressive scans also check padding and EOB-run exhaustion;
 remaining coefficient and scan-history constraints are tracked in PLAN.md.
 Do not advertise complete corruption detection from pixel-oracle equality.
 
+A DAC entry outside T.81 B.2.4.3 is FAIL 53 (`arithmetic_table_corrupt`),
+exactly at its first offending byte and once per segment. Faults are a Tc
+other than 0 or 1, a Tb above 3, a DC Cs with L > U, or an AC Kx outside
+1..63 (validate, 2026-11-22). The remaining arithmetic decode errors are being
+typed under the same ruling; see PLAN.md.
+
 Sequential Huffman frames reject an additional SOS after all components have
 been coded, with exact finding 55 at its first selector. The post-coverage
 walk skips length-delimited metadata and stops at the first EOI. It commits
