@@ -86,6 +86,49 @@ fn lseViolation(preset: PresetParams, P: u8, near: u32) ?LseConstraint {
     return null;
 }
 
+/// Offset of the marker that ends the entropy data starting at `start`:
+/// the first FF followed by a byte of 0x80 or more that is not an RSTm
+/// (T.87 A.1.3 bit stuffing keeps every other FF below 0x80).
+fn endOfScan(data: []const u8, start: usize) ?usize {
+    var i = start;
+    while (i + 1 < data.len) : (i += 1) {
+        if (data[i] != 0xFF) continue;
+        const next = data[i + 1];
+        if (next < 0x80 or next == 0xFF) continue;
+        if (next >= 0xD0 and next <= 0xD7) {
+            i += 1;
+            continue;
+        }
+        return i;
+    }
+    return null;
+}
+
+/// Interleave the ILV 0 component planes into one raster image. The
+/// planes stay owned by the caller.
+fn interleavePlanes(allocator: Allocator, frame: *const FrameInfo, planes: *const [4]?types.Image) Error!types.Image {
+    const nc: usize = frame.num_components;
+    const bytes: usize = if (frame.P <= 8) 1 else 2;
+    const samples: usize = @as(usize, frame.width) * frame.height;
+    const pixels = try allocator.alloc(u8, samples * nc * bytes);
+    errdefer allocator.free(pixels);
+    for (0..nc) |c| {
+        const plane = planes[c].?.pixels;
+        for (0..samples) |i| {
+            @memcpy(pixels[(i * nc + c) * bytes ..][0..bytes], plane[i * bytes ..][0..bytes]);
+        }
+    }
+    return .{
+        .pixels = pixels,
+        .width = frame.width,
+        .height = frame.height,
+        .channels = @intCast(nc),
+        .bits_per_sample = frame.P,
+        .source_color_space = .rgb,
+        .layout = .rgb,
+    };
+}
+
 /// Decode one scan, reporting its faults and any read past the entropy data
 /// to `sink` at offsets in `data` (the scan's entropy data starts at `start`).
 fn decodeScanReported(
@@ -99,9 +142,10 @@ fn decodeScanReported(
 ) Error!types.Image {
     var report: ScanReport = .{};
     const entropy = data[start..];
-    const result: ScanError!types.Image = if (frame.num_components == 1)
+    const result: ScanError!types.Image = if (frame.num_components == 1 or scan.ILV == 0)
         // ILV is irrelevant for single-component scans (T.87 A.2): the
-        // line, sample and none layouts are the same bitstream.
+        // line, sample and none layouts are the same bitstream. An ILV 0
+        // scan of a multi-component frame codes one component the same way.
         decodeScanMono(allocator, entropy, frame, scan, preset, &report)
     else if (frame.num_components == 3 and scan.ILV == 2)
         decodeScanRgb(allocator, entropy, frame, scan, preset, &report)
@@ -239,6 +283,10 @@ pub fn decodeWithOptions(
     var restart_interval: u32 = 0;
     // Offset of the last LSE marker, for finding 121.
     var lse_at: ?usize = null;
+    // ILV 0 component planes, decoded one scan at a time.
+    var planes: [4]?types.Image = .{ null, null, null, null };
+    var planes_done: usize = 0;
+    defer for (&planes) |*plane| if (plane.*) |*image| image.deinit(allocator);
 
     while (pos + 1 < data.len) {
         const skip_start = pos;
@@ -307,6 +355,17 @@ pub fn decodeWithOptions(
                     return error.BackendError;
                 };
                 if (customMaxval(preset, frame.?.P)) return error.NotImplemented;
+                if (frame.?.num_components > 1 and scan.ILV == 0) {
+                    // T.87 A.2: ILV 0 codes each component in its own scan.
+                    if (scan.num_components != 1) return error.InvalidMarker;
+                    const ci = scan.comp_indices[0];
+                    if (planes[ci] != null) return error.InvalidMarker;
+                    planes[ci] = try decodeScanReported(allocator, data, pos, &frame.?, &scan, &preset, options.findings_sink);
+                    planes_done += 1;
+                    if (planes_done == frame.?.num_components) return interleavePlanes(allocator, &frame.?, &planes);
+                    pos = endOfScan(data, pos) orelse return error.TruncatedStream;
+                    continue;
+                }
                 return decodeScanReported(allocator, data, pos, &frame.?, &scan, &preset, options.findings_sink);
             },
             // Standalone markers we can skip safely (RST, TEM, SOI/EOI

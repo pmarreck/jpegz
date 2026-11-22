@@ -909,6 +909,7 @@ test "JPEG-LS restart intervals (DRI + RSTm) decode exactly: CharLS restart stre
         .{ .name = "line, every 7", .data = jpegls_conformance.test8_ilv_line_rm_7 },
         .{ .name = "sample, every 7", .data = jpegls_conformance.test8_ilv_sample_rm_7 },
         .{ .name = "sample, every 300", .data = jpegls_conformance.test8_ilv_sample_rm_300 },
+        .{ .name = "none (one scan per component), every 7", .data = jpegls_conformance.test8_ilv_none_rm_7 },
     }) |case| {
         var image = try jpegz.jpegls_cleanroom_decode(allocator, case.data);
         defer image.deinit(allocator);
@@ -940,8 +941,6 @@ test "JPEG-LS restart intervals (DRI + RSTm) decode exactly: CharLS restart stre
         // A restart fault stops decoding (finding 57 when validated).
         try std.testing.expectError(error.BackendError, jpegz.jpegls_cleanroom_decode(allocator, bad));
     }
-    // Three components, one scan each (ILV 0), are not decoded yet.
-    try std.testing.expectError(error.NotImplemented, jpegz.jpegls_cleanroom_decode(allocator, jpegls_conformance.test8_ilv_none_rm_7));
 }
 
 /// The single FAIL finding with `code` in a validation report, or null.
@@ -1095,6 +1094,38 @@ test "JPEG-LS entropy that ends early is insufficient_data at the marker, trunca
         }
     }
     try std.testing.expect(truncated);
+}
+
+test "JPEG-LS ILV 0 (one scan per component): T.87 conformance t8c0e0 and t8c0e3" {
+    // TEST8 coded with each component in its own scan, lossless and NEAR=3.
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const want = pgmSamples(jpegls_conformance.test8);
+    for ([_]struct { data: []const u8, near: i32 }{
+        .{ .data = jpegls_conformance.t8c0e0, .near = 0 },
+        .{ .data = jpegls_conformance.t8c0e3, .near = 3 },
+    }) |case| {
+        var image = try jpegz.jpegls_cleanroom_decode(allocator, case.data);
+        defer image.deinit(allocator);
+        try std.testing.expectEqual(@as(u8, 3), image.channels);
+        try std.testing.expectEqual(want.len, image.pixels.len);
+        var worst: i32 = 0;
+        for (image.pixels, want) |got, ref| worst = @max(worst, @as(i32, @intCast(@abs(@as(i32, got) - @as(i32, ref)))));
+        if (worst > case.near) {
+            std.debug.print("ILV 0 NEAR={d}: worst sample error {d}\n", .{ case.near, worst });
+            return error.TestUnexpectedResult;
+        }
+        var report = try jpegz.validate(allocator, case.data);
+        defer report.deinit(allocator);
+        try std.testing.expectEqual(.decoded, report.codec_check);
+    }
+    // A component coded by two scans (the second SOS names component 1 again).
+    const twice = try allocator.dupe(u8, jpegls_conformance.t8c0e0);
+    defer allocator.free(twice);
+    const first_sos = std.mem.indexOf(u8, twice, &.{ 0xff, 0xda }).?;
+    const second_sos = first_sos + 2 + std.mem.indexOf(u8, twice[first_sos + 2 ..], &.{ 0xff, 0xda }).?;
+    twice[second_sos + 5] = twice[first_sos + 5];
+    try std.testing.expectError(error.InvalidMarker, jpegz.jpegls_cleanroom_decode(allocator, twice));
 }
 
 test "JPEG-LS subsampled components are unsupported, not corrupt: conformance t8sse0/3" {

@@ -42,7 +42,7 @@ parseable"), two kinds of gap matter differently:
 | Extended 12-bit Nf=4 | Not implemented | Unsupported |
 | Progressive Nf ∉ {1,3} | Not implemented | Unsupported |
 | JPEG-LS Nf ∉ {1,3} | Not implemented | No codec check at all |
-| JPEG-LS ILV=0 with Nf>1 (one scan per component) | Not implemented | No codec check at all |
+| JPEG-LS ILV=0 with Nf>1 (one scan per component) | **Decoded 2026-11-21** (t8c0e0/3, test8_ilv_none_rm_7) | Checked |
 | JPEG-LS restart intervals | **Decoded 2026-11-21** (mono, ILV 1, ILV 2; CharLS restart streams exact) | No codec check yet |
 | JPEG-LS entropy (any) | Decoded | **Checked 2026-11-21**: codec check on; 120, 121, 122, 56, 57 emitted. The walker had treated FF + byte < 0x80 as a marker, so 28 of 29 CharLS test files (every conformance stream) were false FAILs |
 | JPEG-LS subsampled components | Not implemented (t8sse0/3) | Codec not checked |

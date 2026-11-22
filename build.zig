@@ -628,6 +628,7 @@ pub fn build(b: *std.Build) void {
             "conformance/t8nde0.jls",   "conformance/t8nde3.jls",   "conformance/test8bs2.pgm",
             "conformance/t16e0.jls",    "conformance/t16e3.jls",    "conformance/test16.pgm",
             "conformance/test8.ppm",    "conformance/t8sse0.jls",   "conformance/t8sse3.jls",
+            "conformance/t8c0e0.jls",   "conformance/t8c0e3.jls",
             "test16_rm_5.jls",          "test8_ilv_none_rm_7.jls",
             "test8_ilv_line_rm_7.jls",  "test8_ilv_sample_rm_7.jls", "test8_ilv_sample_rm_300.jls",
         };
@@ -645,6 +646,8 @@ pub fn build(b: *std.Build) void {
             \\pub const test16 = @embedFile("test16.pgm");
             \\pub const test8 = @embedFile("test8.ppm");
             \\pub const t8sse0 = @embedFile("t8sse0.jls");
+            \\pub const t8c0e0 = @embedFile("t8c0e0.jls");
+            \\pub const t8c0e3 = @embedFile("t8c0e3.jls");
             \\pub const t8sse3 = @embedFile("t8sse3.jls");
             \\pub const test16_rm_5 = @embedFile("test16_rm_5.jls");
             \\pub const test8_ilv_none_rm_7 = @embedFile("test8_ilv_none_rm_7.jls");
@@ -664,6 +667,8 @@ pub fn build(b: *std.Build) void {
             \\pub const test16 = "";
             \\pub const test8 = "";
             \\pub const t8sse0 = "";
+            \\pub const t8c0e0 = "";
+            \\pub const t8c0e3 = "";
             \\pub const t8sse3 = "";
             \\pub const test16_rm_5 = "";
             \\pub const test8_ilv_none_rm_7 = "";

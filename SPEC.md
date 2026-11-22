@@ -37,9 +37,11 @@ boundary, no RSTm is FAIL 56 and a wrong m is FAIL 57, at the marker. An LSE
 ID 1 outside Table C.1 is FAIL 121 at the LSE marker with detail `maxval`,
 `thresholds` or `reset`. Reads past the entropy data are `insufficient_data`
 at the marker (57 for an RSTm) or `truncated_stream` at the end of the input;
-that cause takes precedence over a code fault it produces. Multi-component
-ILV 0, subsampled components and an LSE MAXVAL other than 2^P−1 are "codec
-not checked".
+that cause takes precedence over a code fault it produces. Subsampled
+components and an LSE MAXVAL other than 2^P−1 are "codec not checked".
+Multi-component ILV 0 (one scan per component, conformance t8c0e0/3) is
+decoded scan by scan and interleaved; a component coded by two scans is
+`InvalidMarker`.
 Consumers import jp2z and libjxlz through the facade, preserving one instance
 of each Zig module. Project purpose lives in [INTENT.md](INTENT.md).
 
