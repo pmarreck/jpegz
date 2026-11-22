@@ -37,7 +37,13 @@ boundary, no RSTm is FAIL 56 and a wrong m is FAIL 57, at the marker. An LSE
 ID 1 outside Table C.1 is FAIL 121 at the LSE marker with detail `maxval`,
 `thresholds` or `reset`. Reads past the entropy data are `insufficient_data`
 at the marker (57 for an RSTm) or `truncated_stream` at the end of the input;
-that cause takes precedence over a code fault it produces. Subsampled
+that cause takes precedence over a code fault it produces. At the end of
+each restart interval and of each scan, T.87 A.1 allows only zero-valued
+padding bits in the final byte and optional FF fill before the marker:
+nonzero padding is FAIL 123 `jpegls_padding_not_zeros` at the pad byte (detail
+the bit count), and whole leftover bytes are finding 8
+`extraneous_bytes_before_marker` at the first one (detail `jpegls_interval` or
+`jpegls_scan_end`), emitted at the T.81 path's severity. Subsampled
 components and an LSE MAXVAL other than 2^P−1 are "codec not checked".
 Multi-component ILV 0 (one scan per component, conformance t8c0e0/3) is
 decoded scan by scan and interleaved; a component coded by two scans is

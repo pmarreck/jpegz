@@ -982,7 +982,7 @@ test "JPEG-LS validate decodes intact streams without FAIL findings" {
         var report = try jpegz.validate(allocator, data);
         defer report.deinit(allocator);
         const failed = for (report.findings.items) |f| {
-            if (f.severity == .fail) break true;
+            if (f.severity == .fail or f.code == .extraneous_bytes_before_marker or f.code == .jpegls_padding_not_zeros) break true;
         } else false;
         if (failed or report.codec_check != .decoded) {
             var label: [16]u8 = undefined;
@@ -1034,6 +1034,62 @@ test "JPEG-LS restart faults are FAIL 57 (wrong RSTm) and 56 (no RSTm) at the ma
     }
 }
 
+test "JPEG-LS interval and scan ends: leftover bytes are 8, nonzero padding is FAIL 123" {
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    // A byte inserted before a marker sits after the last coded bit: leftover.
+    for ([_]struct { src: []const u8, marker: [2]u8, token: []const u8 }{
+        .{ .src = jpegls_conformance.test16_rm_5, .marker = .{ 0xff, 0xd0 }, .token = "jpegls_interval" },
+        .{ .src = jpegls_conformance.t8nde0, .marker = .{ 0xff, 0xd9 }, .token = "jpegls_scan_end" },
+    }) |case| {
+        const at = std.mem.lastIndexOf(u8, case.src[0 .. if (case.marker[1] == 0xd9) case.src.len else std.mem.indexOf(u8, case.src, &case.marker).? + 2], &case.marker).?;
+        try std.testing.expect(case.src[at - 1] != 0xff);
+        const data = try std.mem.concat(allocator, u8, &.{ case.src[0..at], &.{0x12}, case.src[at..] });
+        defer allocator.free(data);
+        var report = try jpegz.validate(allocator, data);
+        defer report.deinit(allocator);
+        const f = for (report.findings.items) |f| {
+            if (f.code == .extraneous_bytes_before_marker) break f;
+        } else {
+            dumpFindings(case.token, report);
+            return error.TestUnexpectedResult;
+        };
+        try std.testing.expect(f.offset_is_exact and f.offset.? == at);
+        try std.testing.expectEqualStrings(case.token, f.detail.?);
+    }
+    // FF fill before a marker is marker syntax (T.87 C.1), not leftover data.
+    {
+        const src = jpegls_conformance.t8nde0;
+        const at = src.len - 2;
+        const filled = try std.mem.concat(allocator, u8, &.{ src[0..at], &.{ 0xff, 0xff }, src[at..] });
+        defer allocator.free(filled);
+        var report = try jpegz.validate(allocator, filled);
+        defer report.deinit(allocator);
+        for (report.findings.items) |item| {
+            if (item.code == .extraneous_bytes_before_marker or item.code == .jpegls_padding_not_zeros) {
+                dumpFindings("FF fill", report);
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+    // The final entropy byte of t8nde0 ends in padding: set its lowest bit.
+    {
+        const src = jpegls_conformance.t8nde0;
+        const last = src.len - 3;
+        try std.testing.expectEqual(@as(u8, 0), src[last] & 1);
+        const data = try allocator.dupe(u8, src);
+        defer allocator.free(data);
+        data[last] |= 1;
+        var report = try jpegz.validate(allocator, data);
+        defer report.deinit(allocator);
+        const f = onlyFail(report, .jpegls_padding_not_zeros) orelse {
+            dumpFindings("padding", report);
+            return error.TestUnexpectedResult;
+        };
+        try std.testing.expect(f.offset_is_exact and f.offset.? == last);
+    }
+}
+
 test "JPEG-LS LSE ID 1 outside Table C.1 is FAIL 121 at the LSE marker" {
     if (!jpegls_conformance.available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
@@ -1076,6 +1132,10 @@ test "JPEG-LS entropy that ends early is insufficient_data at the marker, trunca
         return error.TestUnexpectedResult;
     };
     try std.testing.expect(f.offset_is_exact and f.offset.? == cut);
+    // Truncation outranks the interval/scan-end checks (no 8 or 123 as well).
+    for (report.findings.items) |item| {
+        try std.testing.expect(item.code != .extraneous_bytes_before_marker and item.code != .jpegls_padding_not_zeros);
+    }
     // Cut with no marker at all: the decoder alone sees the data end.
     var sink = jpegz.FindingsSink.init(allocator);
     defer sink.deinit();

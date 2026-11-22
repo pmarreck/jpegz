@@ -36,7 +36,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [ ] Complete scan consumption, MCU counts, sampling edges, noninterleaved scans, restart cadence and predictor-reset coverage across supported modes.
 - [ ] Complete progressive scan-history and coefficient-range constraints with independent normative review and valid boundary controls.
 - [ ] Classify the known-good corpus as a set and expand reproducible corruption-probe sweeps across JPEG-LS, JPEG 2000 and JPEG XL; JPEG-LS swept 2026-11-21 (93.0% of 1,600 on four T.87 streams; survivors all entropy) (context: docs/measurements/jpegls-corruption-coverage-2026-11-21.md).
-- [ ] Check JPEG-LS interval and scan ends: leftover entropy bytes and nonzero padding before RSTm or the end marker go unreported today; classification asked of validate 2026-11-22 (context: docs/measurements/jpegls-corruption-coverage-2026-11-21.md).
+- [x] Check JPEG-LS interval and scan ends: leftover entropy bytes are finding 8 (detail jpegls_interval / jpegls_scan_end) and nonzero padding is new FAIL 123 per T.87 A.1, per validate's 2026-11-22 rulings; starved segments stay truncation; test16_rm_5 sniper 60% to 65%, shotgun_variable 87% to 96%; no verdict change on 29 CharLS and 4 ffmpeg JPEG-LS files (context: docs/measurements/jpegls-corruption-coverage-2026-11-21.md; done 2026-11-22 03:40 EST).
 - [ ] Compare proven malformed fixtures and false rejects against prior art; report demonstrated detection, hypothetical detectability and valid changes separately.
 - [ ] Confirm consumer promotion through tiffz.jpegz and rerun the private full-PDF experiment without publishing originals or mutants (context: docs/plan_context/pre-canon-2026-09-24.md).
 
@@ -62,5 +62,4 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Deferred
 
-- [x] Inventory remaining T.81/T.87 gaps including DNL, multiscan lossless, differential/hierarchical modes and uncommon component layouts. Done: inventory written; DNL for DCT frames honored (ecf812b); misplaced DNL 72 and differential SOF without DHP 73 shipped with validate approval (0be9de3) (context: docs/plan_context/t81-t87-gap-inventory-2026-11-21.md; done 2026-11-21 13:45 EST).
 - [ ] Consider DRI parallelism and SIMD after correctness coverage; measure pixel divergence before proposing spec-derived IDCT/color replacement.

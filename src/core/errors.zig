@@ -214,6 +214,12 @@ pub const FindingCode = enum(u32) {
     // prefix exceeds LIMIT - qbpp - 1 (T.87 A.5.3), so it is no codeword;
     // FAIL at the byte holding the last bit read. Decoding stops.
     jpegls_golomb_code_invalid = 122,
+    // validate-approved 2026-11-22. Nonzero padding bits before a marker at
+    // the end of a JPEG-LS restart interval or scan. T.87 A.1: "An
+    // incomplete byte, just before a marker, is padded with zero-valued
+    // bits" (unlike T.81's 1-fill, 62). FAIL at the pad byte, detail the
+    // bit count.
+    jpegls_padding_not_zeros = 123,
 
     // ── JPEG 2000 (140..179) ─────────────────────────────────────
     jp2_invalid_signature = 140,

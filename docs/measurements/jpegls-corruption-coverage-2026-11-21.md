@@ -53,5 +53,20 @@ The restart stream's lower rate has a second cause. At an interval boundary
 jpegz drops unread bits and scans to the RSTm, so surplus entropy bytes left
 by damage that makes an interval decode short are discarded unreported.
 CharLS requires the marker at the read position (one padding bit at most,
-remaining bits zero). The same holds at the end of a scan. Classification
-of that check is pending with validate.
+remaining bits zero). The same holds at the end of a scan.
+
+## After the interval and scan-end check (2026-11-22)
+
+validate ruled leftover bytes finding 8 and nonzero padding new FAIL 123.
+Same master and rounds, the same two streams:
+
+| Stream | sniper | bolter | shotgun_variable |
+|---|---|---|---|
+| test16_rm_5 before | 60% [50.2, 69.1] | 86% | 87% |
+| test16_rm_5 after | 65% [55.3, 73.6] | 89% | 96% |
+| t8nde0 after | 88% | 99% | 99% (unchanged) |
+
+Corrupt counts jpegz's own `corrupt` verdict. Finding 8 is a WARN there (validate
+maps it to FAIL), so its cases count as accepted with exit 3: 7 of the 800.
+No verdict changed on the 29 CharLS JPEG-LS files or validate's four
+ffmpeg-made fixtures.

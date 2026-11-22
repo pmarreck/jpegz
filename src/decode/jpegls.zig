@@ -53,6 +53,28 @@ const ScanReport = struct {
     /// Offset of the marker's FF and the marker byte, when reads stopped at one.
     marker_at: ?usize = null,
     marker_byte: u8 = 0,
+    /// Where interval and scan-end findings go, and the offset of the
+    /// scan's entropy data in the input.
+    sink: ?*findings_mod.FindingsSink = null,
+    base: usize = 0,
+
+    /// T.87 A.1 at the end of a restart interval or scan: report nonzero
+    /// padding (123, FAIL) and whole leftover bytes (8, emitted as the T.81
+    /// path emits it; validate rulings 2026-11-22). A segment whose reads
+    /// ran out of data ends `.ok` here and is reported as truncation.
+    fn checkEnd(self: *const ScanReport, br: *const bitstream.BitReader, comptime where: enum { interval, scan_end }) Error!void {
+        const s = self.sink orelse return;
+        switch (br.segmentEnd()) {
+            .ok => {},
+            .padding => |pad| {
+                var buf: [64]u8 = undefined;
+                const detail = std.fmt.bufPrint(&buf, "{d} padding bit(s) not zero (T.87 A.1)", .{pad.bits}) catch buf[0..0];
+                s.emitExact(.fail, .jpegls_padding_not_zeros, @intCast(self.base + pad.offset), detail) catch return error.OutOfMemory;
+            },
+            .leftover => |at| s.emitExact(.warn, .extraneous_bytes_before_marker, @intCast(self.base + at),
+                if (where == .interval) "jpegls_interval" else "jpegls_scan_end") catch return error.OutOfMemory,
+        }
+    }
 
     fn capture(self: *ScanReport, br: *const bitstream.BitReader) void {
         self.fault_at = br.faultOffset();
@@ -140,7 +162,7 @@ fn decodeScanReported(
     preset: *const PresetParams,
     sink: ?*findings_mod.FindingsSink,
 ) Error!types.Image {
-    var report: ScanReport = .{};
+    var report: ScanReport = .{ .sink = sink, .base = start };
     const entropy = data[start..];
     const result: ScanError!types.Image = if (frame.num_components == 1 or scan.ILV == 0)
         // ILV is irrelevant for single-component scans (T.87 A.2): the
@@ -667,6 +689,7 @@ fn decodeScanMono(
     var y: u32 = 0;
     while (y < H) : (y += 1) {
         if (restartDue(scan, y)) {
+            try report.checkEnd(&br, .interval);
             try restartAt(&state, &br, P, scan, preset.*, &rst_index);
             @memset(prev_line, 0);
         }
@@ -742,6 +765,7 @@ fn decodeScanMono(
         @memcpy(prev_line, cur_line);
     }
 
+    try report.checkEnd(&br, .scan_end);
     return types.Image{
         .pixels = pixels,
         .width = W,
@@ -964,6 +988,7 @@ fn decodeScanLine(
     var y: u32 = 0;
     while (y < H) : (y += 1) {
         if (restartDue(scan, y)) {
+            try report.checkEnd(&br, .interval);
             try restartAt(&state, &br, P, scan, preset.*, &rst_index);
             for (prev_lines[0..nc]) |line| @memset(line, 0);
         }
@@ -997,6 +1022,7 @@ fn decodeScanLine(
         }
     }
 
+    try report.checkEnd(&br, .scan_end);
     return types.Image{
         .pixels = pixels,
         .width = W,
@@ -1058,6 +1084,7 @@ fn decodeScanRgb(
     var y: u32 = 0;
     while (y < H) : (y += 1) {
         if (restartDue(scan, y)) {
+            try report.checkEnd(&br, .interval);
             try restartAt(&state, &br, P, scan, preset.*, &rst_index);
             @memset(prev_line, 0);
         }
@@ -1149,6 +1176,7 @@ fn decodeScanRgb(
         @memcpy(prev_line, cur_line);
     }
 
+    try report.checkEnd(&br, .scan_end);
     return types.Image{
         .pixels = pixels,
         .width = W,

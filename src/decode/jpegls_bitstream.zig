@@ -41,6 +41,10 @@ pub const BitReader = struct {
     /// shortfall was supplied as zero bits.
     starved: bool = false,
     exhausted: bool = false,
+    /// `starved` for the current restart interval only: cleared at each
+    /// restart. A starved read may have consumed a marker's FF as data,
+    /// so the segment end cannot be located from the read position.
+    segment_starved: bool = false,
     /// Data offset a decoder fault refers to when it is not the read
     /// position, e.g. a restart marker that does not match.
     fault_pos: ?usize = null,
@@ -118,7 +122,50 @@ pub const BitReader = struct {
         self.valid = 0;
         self.last_byte_was_ff = false;
         self.marker_seen = false;
+        self.segment_starved = false;
         self.marker_byte = 0;
+    }
+
+    /// What lies between the last bit read and the next marker (T.87 A.1:
+    /// "An incomplete byte, just before a marker, is padded with zero-valued
+    /// bits"; optional FF fill may precede the marker, D.4/C.1).
+    pub const SegmentEnd = union(enum) {
+        ok,
+        /// Nonzero padding bits in the byte at `offset`.
+        padding: struct { offset: usize, bits: u4 },
+        /// Whole bytes from `offset` up to the marker.
+        leftover: usize,
+    };
+
+    /// A segment whose reads ran past its data reports `.ok`: the
+    /// truncation finding covers it.
+    pub fn segmentEnd(self: *const BitReader) SegmentEnd {
+        if (self.segment_starved) return .ok;
+        var unread: usize = self.valid;
+        var p = self.pos;
+        while (p > 0) {
+            const width: usize = if (p >= 2 and self.data[p - 2] == 0xFF) 7 else 8;
+            if (unread < width) break;
+            unread -= width;
+            p -= 1;
+        }
+        // Byte p - 1 still holds `unread` low bits; bytes from p are unread.
+        if (unread > 0) {
+            const mask: u8 = @intCast((@as(u16, 1) << @intCast(unread)) - 1);
+            if (self.data[p - 1] & mask != 0) return .{ .padding = .{ .offset = p - 1, .bits = @intCast(unread) } };
+        }
+        var m = p;
+        while (m + 1 < self.data.len and !(self.data[m] == 0xFF and self.data[m + 1] >= 0x80)) m += 1;
+        // m is the first FF of any fill run: a data FF is always followed
+        // by a byte below 0x80, so fill bytes never count as leftover.
+        if (m + 1 >= self.data.len) m = self.data.len;
+        if (m == p) return .ok;
+        // After a final FF data byte the next byte carries the stuffed 0 bit;
+        // with no data left it is all padding and must be zero.
+        if (m == p + 1 and p >= 1 and self.data[p - 1] == 0xFF) {
+            return if (self.data[p] == 0) .ok else .{ .padding = .{ .offset = p, .bits = 7 } };
+        }
+        return .{ .leftover = p };
     }
 
     /// Offset of the byte holding the most recently consumed bit (0 before
@@ -151,6 +198,7 @@ pub const BitReader = struct {
         self.refill(@intCast(n));
         if (self.valid < n) {
             self.starved = true;
+            self.segment_starved = true;
             if (!self.marker_seen) self.exhausted = true;
         }
         // Take top n bits.
@@ -251,4 +299,52 @@ test "BitReader: exhausted stream returns zero-padded" {
     try std.testing.expectEqual(@as(u32, 0xFF), br.readBits(8));
     // No more data; readBits should return 0 padding.
     try std.testing.expectEqual(@as(u32, 0), br.readBits(8));
+}
+
+test "BitReader.segmentEnd: zero padding, fill, leftover bytes and nonzero padding" {
+    const Case = struct { data: []const u8, reads: []const u6, peek: u6 = 0, want: BitReader.SegmentEnd };
+    const cases = [_]Case{
+        // Zero padding in the final byte, then the marker.
+        .{ .data = &.{ 0xA0, 0xFF, 0xD9 }, .reads = &.{4}, .want = .ok },
+        // Nonzero padding: the low nibble of byte 0.
+        .{ .data = &.{ 0xA1, 0xFF, 0xD9 }, .reads = &.{4}, .want = .{ .padding = .{ .offset = 0, .bits = 4 } } },
+        // FF fill before the marker is marker syntax.
+        .{ .data = &.{ 0xAB, 0xFF, 0xFF, 0xFF, 0xD9 }, .reads = &.{8}, .want = .ok },
+        // A whole byte after the last coded bit.
+        .{ .data = &.{ 0xAB, 0x12, 0xFF, 0xD9 }, .reads = &.{8}, .want = .{ .leftover = 1 } },
+        // A final FF data byte: the next byte holds the stuffed 0 and 7
+        // padding bits, which must be zero.
+        .{ .data = &.{ 0xAB, 0xFF, 0x00, 0xFF, 0xD9 }, .reads = &.{ 8, 8 }, .want = .ok },
+        .{ .data = &.{ 0xAB, 0xFF, 0x01, 0xFF, 0xD9 }, .reads = &.{ 8, 8 }, .want = .{ .padding = .{ .offset = 2, .bits = 7 } } },
+        // Two bytes after a final FF data byte are leftover, not padding.
+        .{ .data = &.{ 0xAB, 0xFF, 0x00, 0x00, 0xFF, 0xD9 }, .reads = &.{ 8, 8 }, .want = .{ .leftover = 2 } },
+        // Peek ahead into the marker's FF, then walk back over it.
+        .{ .data = &.{ 0xAB, 0xCD, 0xFF, 0xD9 }, .reads = &.{ 8, 4 }, .peek = 16, .want = .{ .padding = .{ .offset = 1, .bits = 4 } } },
+        // The walk back crosses a stuffed byte (7 data bits) before the
+        // byte holding the unread padding bits.
+        .{ .data = &.{ 0xAB, 0xFF, 0x40, 0xFF, 0xD9 }, .reads = &.{ 8, 4 }, .peek = 24, .want = .{ .padding = .{ .offset = 1, .bits = 4 } } },
+        // No marker: bytes after a final FF data byte, to the end of input.
+        .{ .data = &.{ 0xAB, 0xFF, 0x00, 0x00 }, .reads = &.{ 8, 8 }, .want = .{ .leftover = 2 } },
+        // Starved: reads ran past the end of the input.
+        .{ .data = &.{0xAB}, .reads = &.{ 8, 8 }, .want = .ok },
+        // Starved at a marker.
+        .{ .data = &.{ 0xAB, 0xFF, 0xD9 }, .reads = &.{ 8, 16 }, .want = .ok },
+    };
+    for (cases) |c| {
+        var br = BitReader.init(c.data);
+        for (c.reads) |n| _ = br.readBits(n);
+        _ = br.peekBits(c.peek);
+        try std.testing.expectEqualDeep(c.want, br.segmentEnd());
+    }
+    // A restart clears the per-interval flag: the next interval is checked.
+    {
+        var br = BitReader.init(&.{ 0xAB, 0xFF, 0xD0, 0xCD, 0x12, 0xFF, 0xD1 });
+        _ = br.readBits(24);
+        try std.testing.expect(br.segment_starved);
+        try std.testing.expectEqual(BitReader.SegmentEnd.ok, br.segmentEnd());
+        try br.skipToRestart(0xD0);
+        try std.testing.expect(br.starved and !br.segment_starved);
+        _ = br.readBits(8);
+        try std.testing.expectEqualDeep(BitReader.SegmentEnd{ .leftover = 4 }, br.segmentEnd());
+    }
 }
