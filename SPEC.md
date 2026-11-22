@@ -45,7 +45,9 @@ decoded scan by scan and interleaved; a component coded by two scans is
 at 0, for images above 65535 samples in either direction; a nonzero SOF
 value beside a nonzero LSE value is `InvalidMarker` (CharLS's rule), and a
 height still 0 (JPEG-LS DNL) is `NotImplemented`. The validator reads the
-same record, so such frames are not finding 61.
+same record, so such frames are not finding 61. A scan that selects a
+mapping table (SOS Tdi ≠ 0) is `NotImplemented`: the table is not applied,
+and returning its indices as samples would mis-decode silently.
 Consumers import jp2z and libjxlz through the facade, preserving one instance
 of each Zig module. Project purpose lives in [INTENT.md](INTENT.md).
 

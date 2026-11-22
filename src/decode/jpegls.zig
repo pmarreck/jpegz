@@ -232,6 +232,9 @@ pub const ScanInfo = struct {
     /// Lines per restart interval (DRI); 0 = none. Set by the caller of
     /// `parseSos` from the most recent DRI.
     restart_interval: u32 = 0,
+    /// Some component selects a mapping table (Tdi != 0, T.87 C.2.3 and
+    /// C.2.4.1.2): its decoded values are table indices, not samples.
+    mapping_table: bool = false,
 };
 
 /// At a restart-interval boundary: consume RSTm and reset the coding state
@@ -380,6 +383,9 @@ pub fn decodeWithOptions(
                     return error.BackendError;
                 };
                 if (customMaxval(preset, frame.?.P)) return error.NotImplemented;
+                // Applying a mapping table is not implemented; returning the
+                // indices as samples would be a silent mis-decode.
+                if (scan.mapping_table) return error.NotImplemented;
                 if (frame.?.num_components > 1 and scan.ILV == 0) {
                     // T.87 A.2: ILV 0 codes each component in its own scan.
                     if (scan.num_components != 1) return error.InvalidMarker;
@@ -531,14 +537,16 @@ fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
     if (seg_len < 6 or pos + seg_len > data.len) return error.TruncatedStream;
     var info: ScanInfo = undefined;
     info.restart_interval = 0;
+    info.mapping_table = false;
     info.num_components = data[pos + 2];
     if (info.num_components == 0 or info.num_components > 4) return error.InvalidMarker;
     var i: usize = 0;
     while (i < info.num_components) : (i += 1) {
         const off = pos + 3 + i * 2;
         const cs = data[off];
-        // T.87 doesn't use Tdj/Taj fields — the second byte is reserved.
-        // Just locate the matching frame component by ID.
+        // The second byte is Tdi, the mapping table selector (0 = none).
+        if (data[off + 1] != 0) info.mapping_table = true;
+        // Locate the matching frame component by ID.
         var found: bool = false;
         var j: usize = 0;
         while (j < frame.num_components) : (j += 1) {

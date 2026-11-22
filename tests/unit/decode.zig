@@ -1179,6 +1179,25 @@ test "JPEG-LS LSE ID 4 oversize dimensions: 65536x1 and 1x65536" {
     try std.testing.expectError(error.InvalidMarker, jpegz.jpegls_cleanroom_decode(allocator, &conflict));
 }
 
+test "JPEG-LS scans that select a mapping table are unsupported, not indices passed off as samples" {
+    // CharLS 3.0: mapping table 1 (LSE ID 2) selected for the component by
+    // SOS Tdi = 1. Clearing Tdi makes the same entropy data decode, so the
+    // selector alone is what jpegz refuses.
+    const allocator = std.testing.allocator;
+    const src = @embedFile("fixtures/jpegls_16x16_gray8_mapping.jls");
+    try std.testing.expectError(error.NotImplemented, jpegz.jpegls_cleanroom_decode(allocator, src));
+    var report = try jpegz.validate(allocator, src);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(.unsupported, report.codec_check);
+    for (report.findings.items) |f| try std.testing.expect(f.severity != .fail);
+    var plain = src.*;
+    const sos = std.mem.indexOf(u8, &plain, &.{ 0xff, 0xda }).?;
+    try std.testing.expectEqual(@as(u8, 1), plain[sos + 6]);
+    plain[sos + 6] = 0;
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, &plain);
+    image.deinit(allocator);
+}
+
 test "JPEG-LS LSE MAXVAL jpegz cannot decode is codec not checked, not a finding" {
     const allocator = std.testing.allocator;
     var report = try jpegz.validate(allocator, @embedFile("fixtures/jpegls_16x16_gray8_maxval200.jls"));

@@ -12,6 +12,7 @@ component, interleave mode none and NEAR 0, unless stated otherwise.
 | `jpegls_65536x1_gray8.jls` | 65536 × 1 | `v[i] = i >> 8` (i = 0..65535, raster order) | defaults; CharLS writes SOF55 X = Y = 0 and an LSE ID 4 (T.87 C.2.4.1.4) with Wxy = 4 |
 | `jpegls_1x65536_gray8.jls` | 1 × 65536 | `v[i] = i >> 8` | as above |
 | `jpegls_16x16_gray8_maxval200.jls` | 16 × 16 | `v[y*16+x] = ((x*37 + y*91) ^ (x*y)) % 201` | `charls_jpegls_encoder_set_preset_coding_parameters` with MAXVAL 200, T1 2, T2 5, T3 9, RESET 16 (LSE ID 1) |
+| `jpegls_16x16_gray8_mapping.jls` | 16 × 16 | as above | `charls_jpegls_encoder_write_mapping_table(1, entry size 1, entries 255 − i)` and `set_mapping_table_id(0, 1)`: an LSE ID 2 and SOS Tdi = 1 |
 
 The oversize files test dimensions only: their samples follow the formula,
 so a decoder is checked without a reference decoder. The MAXVAL 200 file is
