@@ -35,7 +35,8 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 - [ ] Complete scan consumption, MCU counts, sampling edges, noninterleaved scans, restart cadence and predictor-reset coverage across supported modes.
 - [ ] Complete progressive scan-history and coefficient-range constraints with independent normative review and valid boundary controls.
-- [ ] Classify the known-good corpus as a set and expand reproducible corruption-probe sweeps across JPEG-LS, JPEG 2000 and JPEG XL.
+- [ ] Classify the known-good corpus as a set and expand reproducible corruption-probe sweeps across JPEG-LS, JPEG 2000 and JPEG XL; JPEG-LS swept 2026-11-21 (93.0% of 1,600 on four T.87 streams; survivors all entropy) (context: docs/measurements/jpegls-corruption-coverage-2026-11-21.md).
+- [ ] Check JPEG-LS interval and scan ends: leftover entropy bytes and nonzero padding before RSTm or the end marker go unreported today; classification asked of validate 2026-11-22 (context: docs/measurements/jpegls-corruption-coverage-2026-11-21.md).
 - [ ] Compare proven malformed fixtures and false rejects against prior art; report demonstrated detection, hypothetical detectability and valid changes separately.
 - [ ] Confirm consumer promotion through tiffz.jpegz and rerun the private full-PDF experiment without publishing originals or mutants (context: docs/plan_context/pre-canon-2026-09-24.md).
 
