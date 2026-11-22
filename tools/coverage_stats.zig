@@ -52,17 +52,25 @@ pub fn classify(status: []const u8, rc: i32, verdict: []const u8) Class {
     if (!std.mem.eql(u8, status, "applied")) return .harness;
     if (rc == 124) return .timeout;
     if (rc < 0 or rc >= 128) return .crash;
-    if (rc == 126 or rc == 127) return .harness;
-    if (rc == 2) return .io_error;
-    if (rc == 0) return if (std.mem.eql(u8, verdict, "valid")) .accepted else .inconsistent;
-    if (rc == 1) return if (std.mem.eql(u8, verdict, "corrupt")) .detected else .inconsistent;
-    if (rc == 4) return if (std.mem.eql(u8, verdict, "known_defect")) .known_defect else .inconsistent;
-    if (rc == 3) {
-        if (std.mem.eql(u8, verdict, "unsupported")) return .unsupported;
-        if (std.mem.eql(u8, verdict, "indeterminate")) return .indeterminate;
-        return .inconsistent;
-    }
-    return .harness;
+    // The jpegz CLI exit codes (`jpegz --help`, adopted from validate in
+    // b8750aa): 0 valid, 3 valid with a WARN finding, 1 corrupt, 4 known
+    // defect, 5 unsupported or indeterminate, 2 usage, 66/74/77 file access,
+    // 70 internal error, 71 out of memory.
+    return switch (rc) {
+        0, 3 => if (std.mem.eql(u8, verdict, "valid")) .accepted else .inconsistent,
+        1 => if (std.mem.eql(u8, verdict, "corrupt")) .detected else .inconsistent,
+        4 => if (std.mem.eql(u8, verdict, "known_defect")) .known_defect else .inconsistent,
+        5 => if (std.mem.eql(u8, verdict, "unsupported"))
+            .unsupported
+        else if (std.mem.eql(u8, verdict, "indeterminate"))
+            .indeterminate
+        else
+            .inconsistent,
+        66, 74, 77 => .io_error,
+        // jpegz itself failed: outside the denominator, and it fails the run.
+        70, 71 => .crash,
+        else => .harness,
+    };
 }
 
 pub const Cell = struct {
@@ -543,11 +551,15 @@ test "classify trusts the exit code only when the verdict agrees" {
     try std.testing.expectEqual(Class.noop, classify("noop", 0, ""));
     try std.testing.expectEqual(Class.detected, classify("applied", 1, "corrupt"));
     try std.testing.expectEqual(Class.accepted, classify("applied", 0, "valid"));
-    try std.testing.expectEqual(Class.unsupported, classify("applied", 3, "unsupported"));
-    try std.testing.expectEqual(Class.indeterminate, classify("applied", 3, "indeterminate"));
+    try std.testing.expectEqual(Class.unsupported, classify("applied", 5, "unsupported"));
+    try std.testing.expectEqual(Class.indeterminate, classify("applied", 5, "indeterminate"));
+    try std.testing.expectEqual(Class.accepted, classify("applied", 3, "valid"));
     try std.testing.expectEqual(Class.inconsistent, classify("applied", 1, "valid"));
     try std.testing.expectEqual(Class.inconsistent, classify("applied", 0, "corrupt"));
-    try std.testing.expectEqual(Class.io_error, classify("applied", 2, ""));
+    try std.testing.expectEqual(Class.harness, classify("applied", 2, ""));
+    try std.testing.expectEqual(Class.io_error, classify("applied", 66, ""));
+    try std.testing.expectEqual(Class.io_error, classify("applied", 74, ""));
+    try std.testing.expectEqual(Class.crash, classify("applied", 70, ""));
     try std.testing.expectEqual(Class.timeout, classify("applied", 124, ""));
     try std.testing.expectEqual(Class.crash, classify("applied", 139, ""));
     try std.testing.expectEqual(Class.harness, classify("applied", 127, ""));
@@ -559,11 +571,12 @@ test "known-defect exit and verdict must agree across the outcome set" {
     const expected = [_][]const u8{
         "accepted", "inconsistent", "inconsistent", "inconsistent", "inconsistent",
         "inconsistent", "detected", "inconsistent", "inconsistent", "inconsistent",
-        "io_error", "io_error", "io_error", "io_error", "io_error",
-        "inconsistent", "inconsistent", "unsupported", "indeterminate", "inconsistent",
+        "harness", "harness", "harness", "harness", "harness",
+        "accepted", "inconsistent", "inconsistent", "inconsistent", "inconsistent",
         "inconsistent", "inconsistent", "inconsistent", "inconsistent", "known_defect",
+        "inconsistent", "inconsistent", "unsupported", "indeterminate", "inconsistent",
     };
-    for (0..5) |rc| {
+    for (0..6) |rc| {
         for (verdicts, 0..) |verdict, i| {
             try std.testing.expectEqualStrings(expected[rc * 5 + i], @tagName(classify("applied", @intCast(rc), verdict)));
         }
