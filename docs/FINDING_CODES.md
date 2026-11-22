@@ -54,7 +54,7 @@ coordinator approved codes before 2026-11-06).
 | 120 | `jpegls_invalid_run_mode` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 121 | `jpegls_context_table_invalid` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 122 | `jpegls_golomb_code_invalid` | jpegz | validate approval, 2026-11-21 | 32d2501 (2026-11-21) |
-| 123 | `jpegls_padding_not_zeros` | jpegz | validate approval, 2026-11-22 | this commit (2026-11-22) |
+| 123 | `jpegls_padding_not_zeros` | jpegz | validate approval, 2026-11-22 | 45c20ef (2026-11-22) |
 | 140 | `jp2_invalid_signature` | jp2z | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 141 | `jp2_invalid_codestream` | jp2z | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 142 | `jp2_bad_progression_order` | jp2z | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
