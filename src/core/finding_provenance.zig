@@ -90,6 +90,7 @@ pub const table = std.EnumArray(FindingCode, Entry).init(.{
 	.jpegls_mapping_table_invalid = .{ .owner = .jpegz, .basis = .{ .validate = "2026-11-22" }, .commit = null, .date = "2026-11-22" },
 	.jpegls_maxval_derivation = .{ .owner = .jpegz, .basis = .{ .validate = "2026-11-22" }, .commit = "86f99f9", .date = "2026-11-22" },
 	.jpegls_point_transform_overflow = .{ .owner = .jpegz, .basis = .{ .validate = "2026-11-22" }, .commit = "c13efbf", .date = "2026-11-22" },
+	.jpegls_sample_interleave_subsampled = .{ .owner = .jpegz, .basis = .{ .validate = "2026-11-22" }, .commit = null, .date = "2026-11-22" },
 	.jp2_invalid_signature = .{ .owner = .jp2z, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },
 	.jp2_invalid_codestream = .{ .owner = .jp2z, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },
 	.jp2_bad_progression_order = .{ .owner = .jp2z, .basis = .pre_registry, .commit = "6629e2b", .date = "2026-05-04" },

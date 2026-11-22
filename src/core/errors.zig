@@ -246,6 +246,11 @@ pub const FindingCode = enum(u32) {
     // saturates to 2^P - 1. One per scan, at the SOS Al byte (not exact);
     // detail: component, line, column, Rx, Pt and the count.
     jpegls_point_transform_overflow = 128,
+    // validate-approved 2026-11-22. FAIL: a sample-interleaved (ILV 2)
+    // JPEG-LS scan over components of unequal size, which T.87 C.2.3
+    // forbids and for which no decode is specified. Offset: the SOS ILV
+    // byte; detail: each scan component's Hi x Vi.
+    jpegls_sample_interleave_subsampled = 129,
 
     // ── JPEG 2000 (140..179) ─────────────────────────────────────
     jp2_invalid_signature = 140,

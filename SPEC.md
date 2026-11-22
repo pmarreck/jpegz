@@ -58,9 +58,11 @@ plane size ⌈X·Hi/Hmax⌉ × ⌈Y·Vi/Vmax⌉, and lines that only complete th
 are dropped. This is checked against the T.87 Annex E reference planes for
 t8sse0/3. One raster cannot hold unequal planes, so the decode API returns
 `NotImplemented` for them, while validation and
-`jpegls_cleanroom_decode_planes` receive the planes. Restarts, the point
-transform, mapping tables, the dual MAXVAL decode, and ILV 0 and 2 are not
-modeled for unequal planes and return `NotImplemented`. The point transform Pt (SOS
+`jpegls_cleanroom_decode_planes` receive the planes. Sample interleave (ILV 2) over components of unequal size, which T.87 C.2.3
+forbids, is FAIL 129 `jpegls_sample_interleave_subsampled` at the SOS ILV byte
+(detail: each component's Hi x Vi). Restarts, the point transform, mapping
+tables, the dual MAXVAL decode and ILV 0 are not modeled for unequal planes,
+and return `NotImplemented`. The point transform Pt (SOS
 Al, T.87 4.3.2) scales the output to Rx · 2^Pt. A sample whose scaled value
 exceeds 2^P−1 saturates to 2^P−1, and its scan gets one FAIL 128
 `jpegls_point_transform_overflow` at the SOS Al byte (not exact), naming the

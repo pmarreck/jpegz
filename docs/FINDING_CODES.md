@@ -60,6 +60,7 @@ coordinator approved codes before 2026-11-06).
 | 126 | `jpegls_mapping_table_invalid` | jpegz | validate approval, 2026-11-22 | this commit (2026-11-22) |
 | 127 | `jpegls_maxval_derivation` | jpegz | validate approval, 2026-11-22 | 86f99f9 (2026-11-22) |
 | 128 | `jpegls_point_transform_overflow` | jpegz | validate approval, 2026-11-22 | c13efbf (2026-11-22) |
+| 129 | `jpegls_sample_interleave_subsampled` | jpegz | validate approval, 2026-11-22 | this commit (2026-11-22) |
 | 140 | `jp2_invalid_signature` | jp2z | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 141 | `jp2_invalid_codestream` | jp2z | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 142 | `jp2_bad_progression_order` | jp2z | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |

@@ -555,9 +555,24 @@ pub fn decodeWithOptions(
                 };
                 if (scan.mapping_table) try checkMapping(&scan, &tables, preset, frame.?.P, options.findings_sink);
                 if (subsampled(&frame.?)) {
-                    // Only line interleave is modeled for unequal planes
-                    // (T.87 C.2.3 allows sample interleave only for equal
-                    // sizes); restarts, the point transform, mapping tables
+                    // T.87 C.2.3: sample interleave only for components of
+                    // equal size; otherwise the scan has no specified decode
+                    // (FAIL 129, validate ruling 2026-11-22).
+                    if (scan.ILV == 2) {
+                        if (options.findings_sink) |sink| {
+                            var buf: [160]u8 = undefined;
+                            var len: usize = (std.fmt.bufPrint(&buf, "ILV 2 across components of unequal size (T.87 C.2.3); Hi x Vi:", .{}) catch unreachable).len;
+                            for (scan.comp_indices[0..scan.num_components]) |fc| {
+                                const c = frame.?.components[fc];
+                                len += (std.fmt.bufPrint(buf[len..], " {d}x{d}", .{ c.h_factor, c.v_factor }) catch break).len;
+                            }
+                            // The ILV byte precedes Al:Ah in the SOS.
+                            sink.emitExact(.fail, .jpegls_sample_interleave_subsampled, @intCast(scan.al_at - 1), buf[0..len]) catch return error.OutOfMemory;
+                        }
+                        return error.BackendError;
+                    }
+                    // Only line interleave is modeled for unequal planes:
+                    // ILV 0, restarts, the point transform, mapping tables
                     // and the dual MAXVAL decode are not.
                     if (scan.ILV != 1 or scan.restart_interval != 0 or scan.pt != 0 or scan.mapping_table or
                         customMaxval(preset, frame.?.P)) return error.NotImplemented;

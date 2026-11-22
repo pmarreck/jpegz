@@ -3735,11 +3735,31 @@ test "JPEG-LS subsampled scans with restarts, a point transform or sample interl
     const pt = try allocator.dupe(u8, src);
     defer allocator.free(pt);
     pt[sos + 2 + ls - 1] = 1;
-    // ILV = 2.
-    const ilv = try allocator.dupe(u8, src);
-    defer allocator.free(ilv);
-    ilv[sos + 2 + ls - 2] = 2;
-    for ([_][]const u8{ dri, pt, ilv }) |data| {
+    // ILV = 0.
+    const ilv0 = try allocator.dupe(u8, src);
+    defer allocator.free(ilv0);
+    ilv0[sos + 2 + ls - 2] = 0;
+    for ([_][]const u8{ dri, pt, ilv0 }) |data| {
         try std.testing.expectError(error.NotImplemented, jpegz.jpegls_cleanroom_decode_planes(allocator, data));
     }
+}
+
+test "JPEG-LS sample interleave over subsampled components is FAIL 129 at the ILV byte" {
+    // T.87 C.2.3 allows ILV 2 only for components of equal size.
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const data = try allocator.dupe(u8, jpegls_conformance.t8sse0);
+    defer allocator.free(data);
+    const sos = std.mem.indexOf(u8, data, &.{ 0xff, 0xda }).?;
+    const ilv_at = sos + 2 + std.mem.readInt(u16, data[sos + 2 ..][0..2], .big) - 2;
+    data[ilv_at] = 2;
+    try std.testing.expectError(error.BackendError, jpegz.jpegls_cleanroom_decode_planes(allocator, data));
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    const f = onlyFail(report, .jpegls_sample_interleave_subsampled) orelse {
+        dumpFindings("129", report);
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expect(f.offset_is_exact and f.offset.? == ilv_at);
+    try std.testing.expect(std.mem.endsWith(u8, f.detail.?, "Hi x Vi: 2x4 2x1 1x2"));
 }
