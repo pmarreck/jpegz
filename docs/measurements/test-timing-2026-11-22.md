@@ -40,3 +40,21 @@ That test validates a SOF for each of 8 markers × 256 component counts, 2,048 v
 2. **Finding volume:** formatting and storing the 510 findings, including report-array growth past page size. This is real validator cost, about 2.4 ms per such validation. Whether 66 should aggregate per frame is a question for validate (asked 2026-11-22). Until it is answered, the exhaustive sweep stays as is.
 
 After the change, run-step execution is about 7.5 s. The remaining excess over five seconds is that sweep (5 s) and `facade_validation` (1–2 s).
+
+## After finding 66 aggregation (aeb75d2)
+
+validate then ruled that finding 66 reports once per SOF, with counts. The
+sweep's validations no longer format and store up to 510 findings each.
+The same measurement, run steps with compiles cached, now gives:
+
+| Test binary | Before (run 2) | After |
+|---|---|---|
+| validate | 9 s | 1 s |
+| facade_validation | 1 s | 2 s |
+| decode | 354 ms | 380 ms |
+| all other binaries | under 0.1 s each | under 0.15 s each |
+
+Fresh test execution totals about 4.1 s. That is within the five-second
+budget but still above the one-second target. `facade_validation`, the
+JPEG 2000 / JPEG XL validation facade, is now the largest share; its 1–2 s
+spread across runs is the next thing to look at.

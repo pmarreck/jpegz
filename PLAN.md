@@ -42,7 +42,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## JPEG-LS conformance
 
-- [x] Fuzz JPEG-LS decoding, restart streams included, for panics. Done: JPEG-LS fixtures and a restart stream seed both harnesses (a planted panic in restartAt fails the replay); three bounded campaigns (seeds 0x0c9ca8aa, 0x48e23318, 0x776d5275; 10000 iterations per harness each) found no panic or leak; the earlier integer-cast panic needed a mutant that skipped the context reset (commit 57c94d8; done 2026-11-21 21:40 EST).
 - [x] Stop JPEG-LS mapping-table scans decoding to indices. Done: a scan with SOS Tdi != 0 is NotImplemented (CharLS fixture; clearing Tdi decodes) (commit 3868527; done 2026-11-21 22:15 EST).
 - [x] Validate JPEG-LS mapping tables per T.87 C.2.3/C.2.4.1.2-3 with validate's codes 124 (undefined table, FAIL), 125 (Tmi with Pt, WARN) and 126 (malformed table, FAIL; tokens tid_range, wt_range, length, continuation, entries) instead of refusing the scan; one-byte tables map in the decode API, wider ones are NotImplemented there and validate on indices; CharLS fixture plus byte-edited variants, an ID 2 + ID 3 split, replacement and ILV 0 cases; fifteen mutants killed (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md; done 2026-11-22 10:15 EST).
 - [x] Read JPEG-LS Y from a DNL immediately after the first scan when SOF Y = 0 (T.87 C.2.2), reusing 72 dnl_misplaced; t8nde0 and the three-scan t8c0e0 with Y zeroed and a DNL inserted decode to identical pixels and validate clean; no DNL or NL = 0 is 61 and InvalidMarker; six mutants killed (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md; done 2026-11-22 07:50 EST).
@@ -55,7 +54,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Build and CLI
 
-- [ ] Measure fresh test execution separately from admission, dependency setup, evaluation and compilation; preserve complete coverage and report the one-second target/five-second budget; cached CI artifact reuse is qualified at dedea64 (context: docs/plan_context/validate-findings-2026-09-27-to-10-14.md).
+- [x] Measure fresh test execution separately from admission, dependency setup, evaluation and compilation; preserve complete coverage and report the one-second target/five-second budget. Answer: run steps with compiles cached took 10.6 s, 85% in one exhaustive validate sweep; a frame-free leak-checked allocator (524d1ac) and validate's per-SOF finding 66 (aeb75d2) bring execution to about 4.1 s with full coverage, inside the 5 s budget but not the 1 s target; facade_validation (1-2 s) is the largest remaining share; -Dtest-filter=TEXT added for bisection (context: docs/measurements/test-timing-2026-11-22.md; done 2026-11-22 16:10 EST).
 - [ ] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks; coordinate the unnecessary encoder linkage with libjxlz.
 - [ ] Add U5b progress controls and pure timestamp-injected rendering; verify rendered output with Peter and test terminal/width degradation.
 
