@@ -265,8 +265,11 @@ establish this notice. Major zero and 1.00 remain outside its initial scope,
 without a claim of complete conformance. A known-padding cause is retained and
 gives the known-defect verdict.
 
-Every component of a T.81 frame reports FAIL 66 (`sof_sampling_invalid`) at its
-sampling byte when Hi or Vi lies outside 1..4 (Table B.2). An interleaved scan
+A T.81 frame in which any component's Hi or Vi lies outside 1..4 (Table B.2)
+reports one FAIL 66 (`sof_sampling_invalid`) per SOF (validate ruling
+2026-11-22). It sits at the sampling byte of the first invalid factor, and
+names that component and factor plus the frame's counts of invalid factors and
+of the components that carry them. An interleaved scan
 (Ns > 1) whose otherwise legal factors add up to more than 10 data units per
 MCU (B.2.3) reports FAIL 66 at the scan's Ns byte, as libjpeg also refuses it.
 JPEG-LS frames are left to the T.87 validator.

@@ -516,9 +516,10 @@ int main(void) {
 		{
 			const struct { uint8_t factor; size_t failures; const char *first; const char *second; } cases[] = {
 				{0x11, 0, NULL, NULL},
-				{0x10, 1, "Vi (low nibble)=0", NULL},
-				{0x01, 1, "Hi (high nibble)=0", NULL},
-				{0xee, 2, "Hi (high nibble)=14", "Vi (low nibble)=14"},
+				{0x10, 1, "Vi (low nibble)=0", "1 invalid factor in 1 component"},
+				{0x01, 1, "Hi (high nibble)=0", "1 invalid factor in 1 component"},
+				/* One record per SOF: the first invalid factor, with the count. */
+				{0xee, 1, "Hi (high nibble)=14", "2 invalid factors in 1 component"},
 				{0x44, 0, NULL, NULL},
 			};
 			const size_t factor_offset = 100;

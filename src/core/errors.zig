@@ -153,7 +153,9 @@ pub const FindingCode = enum(u32) {
 	// each Hi/Vi sampling-factor nibble must be in 1..4 (T.81 Table B.2).
 	// Widened 2026-11-05 at validate's request to every component of every
 	// T.81 frame, and to an interleaved scan whose MCU exceeds 10 data units
-	// (T.81 B.2.3), reported at the scan's Ns byte.
+	// (T.81 B.2.3), reported at the scan's Ns byte. Since 2026-11-22 (validate)
+	// the factor check reports once per SOF: the first invalid factor, with
+	// the frame's counts of invalid factors and components.
 	sof_sampling_invalid = 66,
 	// Registry-approved 2026-10-28: a complete recognized JFIF header
 	// declares a future version whose metadata semantics are unchecked.

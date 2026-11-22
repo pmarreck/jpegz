@@ -382,7 +382,7 @@ capture bash -c '{ head -c 100 "$2"; printf "\xee"; tail -c +102 "$2"; } | "$1" 
 assert_contains "$out" '"severity":"FAIL","code":"sof_sampling_invalid"' "sampling violation retains its typed cause"
 assert_contains "$out" '"offset":100,"host_offset":100,"offset_is_exact":true' "sampling violation retains exact factor-byte locations"
 assert_contains "$out" 'Hi (high nibble)=14; allowed 1..4' "sampling high nibble retains its observed value and bounds"
-assert_contains "$out" 'Vi (low nibble)=14; allowed 1..4' "sampling low nibble retains its observed value and bounds"
+assert_contains "$out" 'allowed 1..4; 2 invalid factors in 1 component' "one sampling record counts both invalid nibbles"
 
 # A declared segment end is evidence, not an address inside the input.
 capture bash -c '{ head -c 4 "$2"; printf "\xff\xff"; tail -c +7 "$2"; } | "$1" --json -' _ \

@@ -218,14 +218,22 @@ fn checkSequentialScanField(report: *ValidationReport, allocator: Allocator, off
 	try addExactFinding(report, allocator, .sequential_scan_invalid, offset, detail);
 }
 
-fn checkSamplingFactor(report: *ValidationReport, allocator: Allocator, offset: usize,
-	component: u8, name: []const u8, observed: u8) Allocator.Error!void
+/// The first out-of-range Hi or Vi of a SOF (T.81 Table B.2: 1..4).
+const BadSamplingFactor = struct { offset: usize, component: u8, name: []const u8, value: u8 };
+
+/// Finding 66, one record per SOF (validate ruling 2026-11-22): the first
+/// invalid factor, exact, with the frame's counts of invalid factors and of
+/// the components that carry them.
+fn reportSamplingFactors(report: *ValidationReport, allocator: Allocator, first: BadSamplingFactor,
+	factors: usize, components: usize) Allocator.Error!void
 {
-	if (observed >= 1 and observed <= 4) return;
 	const detail = try std.fmt.allocPrint(allocator,
-		"SOF component ID {d} {s}={d}; allowed 1..4", .{ component, name, observed });
+		"SOF component ID {d} {s}={d}; allowed 1..4; {d} invalid factor{s} in {d} component{s}", .{
+			first.component, first.name, first.value,
+			factors, if (factors == 1) "" else "s", components, if (components == 1) "" else "s",
+		});
 	defer allocator.free(detail);
-	try addExactFinding(report, allocator, .sof_sampling_invalid, offset, detail);
+	try addExactFinding(report, allocator, .sof_sampling_invalid, first.offset, detail);
 }
 
 pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!ValidationReport {
@@ -581,6 +589,9 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 							if (data[seg_body_start + 6 + 3 * k] != id) break false;
 						} else true;
                         // Record each declared component ID (Ci) for the SOS cross-check.
+						var bad_factors: usize = 0;
+						var bad_components: usize = 0;
+						var first_bad: ?BadSamplingFactor = null;
                         var ci: usize = 0;
                         while (ci < nf) : (ci += 1) {
 							const component = data[seg_body_start + 6 + 3 * ci];
@@ -603,11 +614,19 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 							// T.81 Table B.2: every T.81 frame's Hi and Vi are 1..4.
 							// The JPEG-LS frame stays with the T.87 validator.
 							if (variant == .jpegls) continue;
-							try checkSamplingFactor(&report, allocator, offset, component,
-								"Hi (high nibble)", data[offset] >> 4);
-							try checkSamplingFactor(&report, allocator, offset, component,
-								"Vi (low nibble)", data[offset] & 15);
+							var bad_here = false;
+							for ([_]struct { name: []const u8, value: u8 }{
+								.{ .name = "Hi (high nibble)", .value = data[offset] >> 4 },
+								.{ .name = "Vi (low nibble)", .value = data[offset] & 15 },
+							}) |factor| {
+								if (factor.value >= 1 and factor.value <= 4) continue;
+								bad_factors += 1;
+								bad_here = true;
+								if (first_bad == null) first_bad = .{ .offset = offset, .component = component, .name = factor.name, .value = factor.value };
+							}
+							if (bad_here) bad_components += 1;
                         }
+						if (first_bad) |bad| try reportSamplingFactors(&report, allocator, bad, bad_factors, bad_components);
                     }
 
                     const lossless_precision = variant == .lossless_huffman or variant == .lossless_arithmetic;

@@ -1422,7 +1422,13 @@ test "sequential SOF sampling nibbles classify the complete byte set" {
 			try std.testing.expectEqual(legal, result.isValid());
 			if (!legal) {
 				const failures = @as(usize, @intFromBool(h < 1 or h > 4)) + @intFromBool(v < 1 or v > 4);
-				try expectExactTypedFailures(result, .sof_sampling_invalid, frame + 11, failures);
+				// One record per SOF (validate ruling 2026-11-22), with the count.
+				try expectExactTypedFailures(result, .sof_sampling_invalid, frame + 11, 1);
+				var buf: [48]u8 = undefined;
+				const tail = try std.fmt.bufPrint(&buf, "; {d} invalid factor{s} in 1 component", .{ failures, if (failures == 1) "" else "s" });
+				for (result.findings.items) |f| if (f.code == .sof_sampling_invalid) {
+					try std.testing.expect(std.mem.endsWith(u8, f.detail.?, tail));
+				};
 			}
 			if (legal) {
 				var decoded = try jpegz.decode(allocator, data);
@@ -1461,6 +1467,18 @@ test "sampling finding scope and complete component guards classify every frame 
 			// JPEG-LS frame (0xf7) stays with the T.87 validator.
 			try std.testing.expectEqual(count >= 1 and marker != 0xf7,
 				reportHasCode(report, .sof_sampling_invalid));
+			// One record per SOF (validate ruling 2026-11-22), at the first
+			// component's factor byte, with the counts.
+			var records: usize = 0;
+			for (report.findings.items) |f| if (f.code == .sof_sampling_invalid) {
+				records += 1;
+				if (count == 255) {
+					try std.testing.expect(f.offset_is_exact and f.offset.? == 13);
+					try std.testing.expectEqualStrings(
+						"SOF component ID 0 Hi (high nibble)=14; allowed 1..4; 510 invalid factors in 255 components", f.detail.?);
+				}
+			};
+			try std.testing.expectEqual(@as(usize, @intFromBool(count >= 1 and marker != 0xf7)), records);
 		}
 	}
 	const complete = [_]u8{ 0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0xee, 0 };
@@ -1553,6 +1571,7 @@ test "multi-component sampling factors and interleaved MCU size are typed" {
 		defer report.deinit(allocator);
 		const ns_offset: u64 = 2 + frame.len + 4;
 		var factor_faults: usize = 0;
+		var factor_records: usize = 0;
 		var mcu_faults: usize = 0;
 		for (report.findings.items) |finding| {
 			if (finding.code != .sof_sampling_invalid) continue;
@@ -1562,10 +1581,19 @@ test "multi-component sampling factors and interleaved MCU size are typed" {
 				mcu_faults += 1;
 				try std.testing.expect(std.mem.indexOf(u8, finding.detail.?, "at most 10") != null);
 			} else {
-				factor_faults += 1;
+				// One record per SOF, at the first invalid factor; its detail
+				// counts every invalid factor (validate ruling 2026-11-22).
+				factor_records += 1;
 				try std.testing.expect(finding.offset.? == 2 + 11 or finding.offset.? == 2 + 14);
+				const detail = finding.detail.?;
+				const at = std.mem.indexOf(u8, detail, "; ").?;
+				const rest = detail[std.mem.indexOfPos(u8, detail, at + 2, "; ").? + 2 ..];
+				factor_faults = try std.fmt.parseInt(usize, rest[0..std.mem.indexOfScalar(u8, rest, ' ').?], 10);
+				// Each faulty case damages exactly one component.
+				try std.testing.expect(std.mem.endsWith(u8, detail, " in 1 component"));
 			}
 		}
+		try std.testing.expectEqual(@as(usize, @intFromBool(case.factor_faults > 0)), factor_records);
 		errdefer std.debug.print("case y=0x{x} cb=0x{x} ns={d}: factor {d} mcu {d}\n", .{ case.y, case.cb, case.ns, factor_faults, mcu_faults });
 		try std.testing.expectEqual(case.factor_faults, factor_faults);
 		try std.testing.expectEqual(@as(usize, @intFromBool(case.mcu_fault)), mcu_faults);
