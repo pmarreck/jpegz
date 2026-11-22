@@ -736,6 +736,10 @@ const fixture_arith_baseline_16x16_rgb_420 = @embedFile("fixtures/arith_baseline
 const fixture_arith_baseline_16x16_rgb_422 = @embedFile("fixtures/arith_baseline_16x16_rgb_422.jpg");
 const fixture_arith_baseline_16x16_rgb_440 = @embedFile("fixtures/arith_baseline_16x16_rgb_440.jpg");
 const fixture_arith_baseline_8x8_gray = @embedFile("fixtures/arith_baseline_8x8_gray.jpg");
+/// One-MCU restart intervals, libjpeg-turbo 3.2.1 (fixtures/ARITH_RESTART_PROVENANCE.md).
+const fixture_arith_restart_gray = @embedFile("fixtures/arith_restart_32x32_gray_1b.jpg");
+const fixture_arith_restart_rgb420 = @embedFile("fixtures/arith_restart_32x32_rgb420_1b.jpg");
+const fixture_arith_restart_rgb420_progressive = @embedFile("fixtures/arith_restart_32x32_rgb420_progressive_1b.jpg");
 
 // ─────────────────────────────────────────────────────────────────────
 // B2 — JPEG-LS (T.87) via charls wrapper. Cleanroom to follow.
@@ -1804,6 +1808,37 @@ test "B1 SOF10: arithmetic progressive cleanroom (gray + RGB at all sampling fac
         }
         try std.testing.expect(max_delta <= 2);
     }
+}
+
+test "arithmetic restart intervals resume at each RSTn: coefficients and pixels match libjpeg" {
+	// T.81 F.2.4.2 / D.2.6: after each RSTn the arithmetic decoder restarts
+	// on the bytes that follow that marker. With one MCU per interval, a
+	// decoder that resumes anywhere else loses the next marker or decodes
+	// the wrong bytes.
+	const allocator = std.testing.allocator;
+	for ([_][]const u8{ fixture_arith_restart_gray, fixture_arith_restart_rgb420, fixture_arith_restart_rgb420_progressive }) |data| {
+		var cleanroom = try jpegz.internal.arithDecode(allocator, data);
+		defer cleanroom.deinit(allocator);
+		var wrapper = try jpegz.internal.wrapperDecode(allocator, data);
+		defer wrapper.deinit(allocator);
+		try std.testing.expectEqual(@as(u32, 32), cleanroom.width);
+		try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expect(report.isValid());
+	}
+	// Builds without the libjpeg oracle (cross targets) have an empty dump type.
+	if (comptime !@hasField(jpegz.internal.WrapperCoefDump, "coefs")) return;
+	for ([_][]const u8{ fixture_arith_restart_gray, fixture_arith_restart_rgb420 }) |data| {
+		var cleanroom = try jpegz.internal.arithDumpCoefsSof9(allocator, data);
+		defer cleanroom.deinit(allocator);
+		var wrapper = try jpegz.internal.wrapperDumpCoefs(allocator, data);
+		defer wrapper.deinit(allocator);
+		try std.testing.expectEqual(wrapper.num_components, cleanroom.num_components);
+		for (0..wrapper.num_components) |c| {
+			try std.testing.expectEqualSlices(i16, wrapper.coefs[c], cleanroom.coefs[c]);
+		}
+	}
 }
 
 test "B1: SOF9 arithmetic baseline cleanroom (gray + RGB at all sampling factors)" {

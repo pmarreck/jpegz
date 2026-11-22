@@ -224,6 +224,14 @@ pub const QCoder = struct {
         };
     }
 
+    /// Restart the coder at the current byte, after an RSTn it has already
+    /// consumed (T.81 F.2.4.2, D.2.6): the code and range registers reload
+    /// from the bytes that follow, and `pos` stays an offset into the same
+    /// `data`, so callers never mix offsets from different slices.
+    pub fn restart(self: *QCoder) void {
+        self.* = .{ .data = self.data, .pos = self.pos, .a = 0, .c = 0, .ct = -16, .marker_byte = 0, .marker_seen = false };
+    }
+
     /// T.81 §D.2.6 byte fetch with 0xFF marker handling. Returns the
     /// byte to insert into the code register. On a marker, sets
     /// `marker_byte`/`marker_seen` and returns 0 (the "supply zero
@@ -416,11 +424,11 @@ pub const ScanState = struct {
         };
     }
 
-    /// Reset on RSTm marker (T.81 §F.2.4.2). Q-coder restarts over
-    /// the remaining bytes, all statistics re-zero, DC predictors
-    /// and contexts reset. DAC parameters persist (scan-wide).
-    pub fn resetForRestart(self: *ScanState, data: []const u8) void {
-        self.qcoder = QCoder.init(data);
+    /// Reset on RSTm marker (T.81 §F.2.4.2). Q-coder restarts on the
+    /// bytes after the marker it consumed, all statistics re-zero, DC
+    /// predictors and contexts reset. DAC parameters persist (scan-wide).
+    pub fn resetForRestart(self: *ScanState) void {
+        self.qcoder.restart();
         self.dc_stats = .{.{INITIAL_CONTEXT} ** DC_STAT_BINS} ** 4;
         self.ac_stats = .{.{INITIAL_CONTEXT} ** AC_STAT_BINS} ** 4;
         self.last_dc_val = .{ 0, 0, 0, 0 };
@@ -904,7 +912,14 @@ test "ScanState.resetForRestart: predictors and stats reset, DAC persists" {
     state.dc_context[2] = 12;
     state.dc_stats[0][3] = 0x80 | 50; // non-initial value
     state.arith_ac_K[1] = 9; // simulate a DAC override
-    state.resetForRestart(data[1..]);
+    state.qcoder.pos = 2; // just past a consumed marker
+    state.qcoder.marker_seen = true;
+    state.resetForRestart();
+    // The coder resumes at the same offset into the same buffer.
+    try std.testing.expectEqual(@as(usize, 2), state.qcoder.pos);
+    try std.testing.expectEqual(@as(usize, 3), state.qcoder.data.len);
+    try std.testing.expect(!state.qcoder.marker_seen);
+    try std.testing.expectEqual(@as(i32, -16), state.qcoder.ct);
     try std.testing.expectEqual(@as(i32, 0), state.last_dc_val[0]);
     try std.testing.expectEqual(@as(u8, 0), state.dc_context[2]);
     try std.testing.expectEqual(INITIAL_CONTEXT, state.dc_stats[0][3]);

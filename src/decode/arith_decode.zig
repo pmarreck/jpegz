@@ -212,7 +212,7 @@ fn dumpScanCoefsSof9(
             if (restart_interval > 0 and mcus_since_rst == restart_interval) {
                 if (!state.qcoder.marker_seen) return error.InvalidMarker;
                 if (state.qcoder.marker_byte != expected_rst) return error.InvalidMarker;
-                state.resetForRestart(data[state.qcoder.pos..]);
+                state.resetForRestart();
                 mcus_since_rst = 0;
                 expected_rst = 0xD0 + ((expected_rst - 0xD0 + 1) & 0x07);
             }
@@ -467,8 +467,7 @@ fn decodeScanSof9(
             if (restart_interval > 0 and mcus_since_rst == restart_interval) {
                 if (!state.qcoder.marker_seen) return error.InvalidMarker;
                 if (state.qcoder.marker_byte != expected_rst) return error.InvalidMarker;
-                const continue_at = state.qcoder.pos;
-                state.resetForRestart(data[continue_at..]);
+                state.resetForRestart();
                 mcus_since_rst = 0;
                 expected_rst = 0xD0 + ((expected_rst - 0xD0 + 1) & 0x07);
             }
@@ -706,17 +705,18 @@ fn decodeArithProgressiveScan(
     const handleArithRst = struct {
         fn run(
             s: *arith_coder.ScanState,
-            buf: []const u8,
             expected: *u8,
             re_dc: bool,
             re_ac: bool,
         ) Error!void {
             if (!s.qcoder.marker_seen) return error.InvalidMarker;
             if (s.qcoder.marker_byte != expected.*) return error.InvalidMarker;
+            // startScan applies the scan-type reset policy used at scan
+            // start; the coder then resumes after the marker, at an
+            // offset into the same buffer.
             const pos_after = s.qcoder.pos;
-            // startScan re-inits Q-coder over remaining bytes with the
-            // same scan-type reset policy used at scan start.
-            s.startScan(buf[pos_after..], re_dc, re_ac);
+            s.startScan(s.qcoder.data, re_dc, re_ac);
+            s.qcoder.pos = pos_after;
             expected.* = 0xD0 + ((expected.* - 0xD0 + 1) & 0x07);
         }
     }.run;
@@ -729,7 +729,7 @@ fn decodeArithProgressiveScan(
             var mx: u32 = 0;
             while (mx < mcu_cols) : (mx += 1) {
                 if (restart_interval > 0 and units_since_rst == restart_interval) {
-                    try handleArithRst(state, data[entropy_start..], &expected_rst, reset_dc, reset_ac);
+                    try handleArithRst(state, &expected_rst, reset_dc, reset_ac);
                     units_since_rst = 0;
                 }
                 var ci: usize = 0;
@@ -768,7 +768,7 @@ fn decodeArithProgressiveScan(
             var bx: u32 = 0;
             while (bx < xi) : (bx += 1) {
                 if (restart_interval > 0 and units_since_rst == restart_interval) {
-                    try handleArithRst(state, data[entropy_start..], &expected_rst, reset_dc, reset_ac);
+                    try handleArithRst(state, &expected_rst, reset_dc, reset_ac);
                     units_since_rst = 0;
                 }
                 const off: usize = (@as(usize, by) * @as(usize, stride) +
