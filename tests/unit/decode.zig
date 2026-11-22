@@ -1841,6 +1841,58 @@ test "arithmetic restart intervals resume at each RSTn: coefficients and pixels 
 	}
 }
 
+test "lossless point transform: the decoder rescales every sample by 2^Pt (T.81 A.4)" {
+	// Encoded from known sources with Pt = 2, 3 and 4
+	// (fixtures/LOSSLESS_POINT_TRANSFORM_PROVENANCE.md), so each decoded
+	// sample must equal (source >> Pt) << Pt.
+	const allocator = std.testing.allocator;
+	{
+		var img = try jpegz.decode(allocator, @embedFile("fixtures/lossless_16x16_rgb_p8_pt2_sel7_rst1.jpg"));
+		defer img.deinit(allocator);
+		try std.testing.expectEqual(@as(usize, 16 * 16 * 3), img.pixels.len);
+		for (img.pixels, 0..) |got, i| {
+			const x = (i / 3) % 16;
+			const y = i / 48;
+			const c = i % 3;
+			const source = (16 * x + 8 * y + 32 * c + 10) % 256;
+			try std.testing.expectEqual(source >> 2 << 2, got);
+		}
+	}
+	const Wide = struct { data: []const u8, pt: u4, x_step: usize, y_step: usize, base: usize, modulus: usize };
+	for ([_]Wide{
+		.{ .data = @embedFile("fixtures/lossless_16x16_gray_p12_pt3_sel1.jpg"), .pt = 3, .x_step = 256, .y_step = 16, .base = 7, .modulus = 4096 },
+		.{ .data = @embedFile("fixtures/lossless_16x16_gray_p16_pt4_sel4.jpg"), .pt = 4, .x_step = 4096, .y_step = 256, .base = 1234, .modulus = 65536 },
+	}) |case| {
+		var img = try jpegz.decode(allocator, case.data);
+		defer img.deinit(allocator);
+		const px = img.pixelsU16();
+		try std.testing.expectEqual(@as(usize, 256), px.len);
+		for (px, 0..) |got, i| {
+			const source = (case.x_step * (i % 16) + case.y_step * (i / 16) + case.base) % case.modulus;
+			try std.testing.expectEqual(source >> case.pt << case.pt, got);
+		}
+	}
+}
+
+test "lossless point-transform decode is total over every single-bit flip" {
+	// A damaged stream can reconstruct a reduced sample wider than P - Pt
+	// bits; the 2^Pt rescale must still return a P-bit sample or an error,
+	// never trap.
+	const allocator = std.testing.allocator;
+	const pristine = @embedFile("fixtures/lossless_16x16_gray_p16_pt4_sel4.jpg");
+	var data = pristine.*;
+	for (0..data.len) |i| {
+		for (0..8) |bit| {
+			data[i] ^= @as(u8, 1) << @intCast(bit);
+			defer data[i] = pristine[i];
+			if (jpegz.decode(allocator, &data)) |img0| {
+				var img = img0;
+				img.deinit(allocator);
+			} else |_| {}
+		}
+	}
+}
+
 test "B1: SOF9 arithmetic baseline cleanroom (gray + RGB at all sampling factors)" {
     // Real cleanroom-vs-wrapper gate. Same tolerance shape as A3:
     // ≤4 LSB for RGB (chroma upsampling amplifies sub-pixel rounding),

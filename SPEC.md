@@ -347,6 +347,8 @@ components and non-1x1 sampling. It consumes differences, MCU edge padding,
 restart intervals and the marker chain through EOI without constructing
 pixels. DNL, separated component scans and frames with more than four
 components remain unsupported. Pixel decoding retains its narrower layouts.
+Decoded lossless samples with a point transform are rescaled by 2^Pt (T.81
+A.4), so a decoder returns `(source >> Pt) << Pt` for each sample.
 
 For the DCT processes (sequential, progressive and arithmetic), an SOF height
 of 0 takes its line count from a DNL segment immediately after the first scan

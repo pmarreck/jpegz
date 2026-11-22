@@ -23,8 +23,6 @@
 //! Out of scope (falls back to libjpeg_wrapper via NotImplemented):
 //!   - Non-1×1 component sampling factors (rare; tiff-with-jpeg-
 //!     compression occasionally uses subsampled lossless).
-//!   - Point transform Al > 0 (sample shifted up by Al; trivial when
-//!     a fixture surfaces it).
 //!
 //! Reference: ITU-T T.81 §H.1 (Lossless mode, Annex H).
 
@@ -679,6 +677,17 @@ fn decodeScan(
         break :zero br.marker_byte;
     };
     if (marker >= 0xD0 and marker <= 0xD7) return error.BackendError;
+	// T.81 A.4: "The output of the decoder is rescaled by multiplying by
+	// 2^Pt." Prediction runs on the reduced samples above, so the rescale
+	// follows the whole scan. The mask keeps the P-bit sample width that
+	// reconstruction already imposes.
+	if (pt > 0) {
+		var i: usize = 0;
+		while (i < width * height * nc) : (i += 1) {
+			const reduced = sampleAt(out, sample_bytes, 0, i, 0, 1, 0);
+			writeSample(out, sample_bytes, 0, i, 0, 1, 0, @intCast((reduced << pt) & sample_mask));
+		}
+	}
     return out;
 }
 
