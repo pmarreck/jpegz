@@ -1188,18 +1188,46 @@ test "JPEG-LS ILV 0 (one scan per component): T.87 conformance t8c0e0 and t8c0e3
     try std.testing.expectError(error.InvalidMarker, jpegz.jpegls_cleanroom_decode(allocator, twice));
 }
 
-test "JPEG-LS subsampled components are unsupported, not corrupt: conformance t8sse0/3" {
-    // Valid T.87 Annex E streams with G sub-sampled 4x vertically and B 2x
-    // both ways. Until the scan decoders model per-component line lengths
-    // they must say so instead of desynchronizing into a false fault.
+test "JPEG-LS subsampled components decode to the T.87 Annex E reference planes: t8sse0/3" {
+    // Line interleaved, R 256x256 (H 2, V 4), G 256x64 (H 2, V 1), B
+    // 128x128 (H 1, V 2): each MCU is 4 lines of R, 1 of G and 2 of B
+    // (T.87 B.2, B.4). The HP reference planes are the oracle: exact for
+    // t8sse0, within NEAR 3 for t8sse3.
     if (!jpegls_conformance.available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    for ([_][]const u8{ jpegls_conformance.t8sse0, jpegls_conformance.t8sse3 }) |data| {
+    const refs = [_][]const u8{ pgmSamples(jpegls_conformance.test8r), pgmSamples(jpegls_conformance.test8gr4), pgmSamples(jpegls_conformance.test8bs2) };
+    const sizes = [_][2]u32{ .{ 256, 256 }, .{ 256, 64 }, .{ 128, 128 } };
+    for ([_][]const u8{ jpegls_conformance.t8sse0, jpegls_conformance.t8sse3 }, [_]u8{ 0, 3 }) |data, near| {
+        var planes = try jpegz.jpegls_cleanroom_decode_planes(allocator, data);
+        defer for (&planes) |*plane| if (plane.*) |*image| image.deinit(allocator);
+        for (0..3) |c| {
+            const plane = planes[c].?;
+            try std.testing.expectEqual(sizes[c][0], plane.width);
+            try std.testing.expectEqual(sizes[c][1], plane.height);
+            try std.testing.expectEqual(refs[c].len, plane.pixels.len);
+            for (refs[c], plane.pixels) |want, got| {
+                try std.testing.expect(@max(want, got) - @min(want, got) <= near);
+            }
+        }
+        try std.testing.expect(planes[3] == null);
+        // One raster cannot hold unequal planes: the decode API still refuses.
         try std.testing.expectError(error.NotImplemented, jpegz.jpegls_cleanroom_decode(allocator, data));
         var report = try jpegz.validate(allocator, data);
         defer report.deinit(allocator);
-        try std.testing.expectEqual(.unsupported, report.codec_check);
-        for (report.findings.items) |f| try std.testing.expect(f.severity != .fail);
+        try std.testing.expectEqual(.decoded, report.codec_check);
+        for (report.findings.items) |f| try std.testing.expect(f.severity == .info);
+    }
+}
+
+test "JPEG-LS decodePlanes de-interleaves frames without subsampling" {
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, jpegls_conformance.t8c0e0);
+    defer image.deinit(allocator);
+    var planes = try jpegz.jpegls_cleanroom_decode_planes(allocator, jpegls_conformance.t8c0e0);
+    defer for (&planes) |*plane| if (plane.*) |*p| p.deinit(allocator);
+    for (0..3) |c| {
+        for (planes[c].?.pixels, 0..) |v, i| try std.testing.expectEqual(image.pixels[i * 3 + c], v);
     }
 }
 
@@ -3666,4 +3694,52 @@ test "JPEG-LS mapping table selected by one ILV 0 scan maps only that component"
     defer report.deinit(allocator);
     try std.testing.expectEqual(.decoded, report.codec_check);
     for (report.findings.items) |f| try std.testing.expect(f.severity == .info);
+}
+
+test "JPEG-LS subsampled frame whose height needs a padded last MCU drops the padding lines" {
+    // t8sse0 with SOF Y = 253: still ceil(253 / 4) = 64 MCUs, so the same
+    // entropy data codes R 253 lines (+3 padding), G 64 and B 127 (+1). The
+    // decoder must drop the padding (T.87 B.4) and return cropped planes.
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const data = try allocator.dupe(u8, jpegls_conformance.t8sse0);
+    defer allocator.free(data);
+    const sof = std.mem.indexOf(u8, data, &.{ 0xff, 0xf7 }).?;
+    std.mem.writeInt(u16, data[sof + 5 ..][0..2], 253, .big);
+    var planes = try jpegz.jpegls_cleanroom_decode_planes(allocator, data);
+    defer for (&planes) |*plane| if (plane.*) |*image| image.deinit(allocator);
+    const refs = [_][]const u8{ pgmSamples(jpegls_conformance.test8r), pgmSamples(jpegls_conformance.test8gr4), pgmSamples(jpegls_conformance.test8bs2) };
+    const sizes = [_][2]u32{ .{ 256, 253 }, .{ 256, 64 }, .{ 128, 127 } };
+    for (0..3) |c| {
+        const plane = planes[c].?;
+        try std.testing.expectEqual(sizes[c][0], plane.width);
+        try std.testing.expectEqual(sizes[c][1], plane.height);
+        try std.testing.expectEqualSlices(u8, refs[c][0 .. sizes[c][0] * sizes[c][1]], plane.pixels);
+    }
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(.decoded, report.codec_check);
+    for (report.findings.items) |f| try std.testing.expect(f.severity == .info);
+}
+
+test "JPEG-LS subsampled scans with restarts, a point transform or sample interleave are NotImplemented" {
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const src = jpegls_conformance.t8sse0;
+    const sos = std.mem.indexOf(u8, src, &.{ 0xff, 0xda }).?;
+    const ls = std.mem.readInt(u16, src[sos + 2 ..][0..2], .big);
+    // A DRI before the SOS.
+    const dri = try std.mem.concat(allocator, u8, &.{ src[0..sos], &.{ 0xff, 0xdd, 0x00, 0x04, 0x00, 0x10 }, src[sos..] });
+    defer allocator.free(dri);
+    // Pt = 1 in the SOS Al.
+    const pt = try allocator.dupe(u8, src);
+    defer allocator.free(pt);
+    pt[sos + 2 + ls - 1] = 1;
+    // ILV = 2.
+    const ilv = try allocator.dupe(u8, src);
+    defer allocator.free(ilv);
+    ilv[sos + 2 + ls - 2] = 2;
+    for ([_][]const u8{ dri, pt, ilv }) |data| {
+        try std.testing.expectError(error.NotImplemented, jpegz.jpegls_cleanroom_decode_planes(allocator, data));
+    }
 }

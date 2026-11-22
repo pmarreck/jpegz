@@ -72,6 +72,8 @@ pub const version: [:0]const u8 = "0.1.0";
 /// wrapper on `NotImplemented`; this entry skips that fallback so
 /// cleanroom-coverage tests can't be masked by charls.
 pub const jpegls_cleanroom_decode = @import("decode/jpegls.zig").decode;
+/// Each JPEG-LS component plane at its own size (subsampled frames too).
+pub const jpegls_cleanroom_decode_planes = @import("decode/jpegls.zig").decodePlanes;
 
 const last_error = @import("core/last_error.zig");
 

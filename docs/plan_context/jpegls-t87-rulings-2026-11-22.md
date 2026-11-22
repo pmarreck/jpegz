@@ -87,3 +87,20 @@ Windows binaries and was not run.
   C.2's default does the same.
 - **Key fixtures:** Pt = 1 with one overflowing Rx (128 at P = 8), and a
   control whose largest sample, 127, shifts to 254.
+
+## Subsampled components (T.87 B.2, B.4; 2026-11-22)
+
+- **Line interleave:** each MCU is Vi lines of each scan component, in
+  order, each at its own plane size ⌈X·Hi/Hmax⌉ × ⌈Y·Vi/Vmax⌉. There are
+  ⌈Y/Vmax⌉ MCUs; the lines that complete the last MCU are dropped.
+- **Oracle:** the ITU/HP image set's TEST8R, TEST8GR4 and TEST8BS2 for
+  t8sse0 (exact) and t8sse3 (within NEAR 3). A metamorphic control sets Y
+  to 253 in t8sse0, which leaves the same 64 MCUs, and expects the cropped
+  reference planes.
+- **Output decision:** unequal planes go to `DecodeOptions.planes` and
+  `jpegls_cleanroom_decode_planes`; validation uses them. The plain decode
+  API returns NotImplemented, since one raster cannot hold them. How to
+  return them is an open owner decision.
+- **Not modeled for unequal planes:** restarts, the point transform,
+  mapping tables, the dual MAXVAL decode, and ILV 0 and 2. No oracle
+  covers these. These remain NotImplemented.

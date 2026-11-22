@@ -52,7 +52,15 @@ such a scan is decoded both ways (validate ruling 2026-11-22). INFO 127
 depend on the decoder), and `only_charls` when only CharLS's coding does
 (unsupported, until a known-defect admission). When only A.2.1 decodes
 cleanly, the scan is valid; when neither does, the A.2.1 findings stand.
-Subsampled components are "codec not checked". The point transform Pt (SOS
+Subsampled components (unequal sampling factors) decode in line-interleaved
+scans per T.87 B.2 and B.4. Each MCU is Vi lines of each component at its own
+plane size ⌈X·Hi/Hmax⌉ × ⌈Y·Vi/Vmax⌉, and lines that only complete the last MCU
+are dropped. This is checked against the T.87 Annex E reference planes for
+t8sse0/3. One raster cannot hold unequal planes, so the decode API returns
+`NotImplemented` for them, while validation and
+`jpegls_cleanroom_decode_planes` receive the planes. Restarts, the point
+transform, mapping tables, the dual MAXVAL decode, and ILV 0 and 2 are not
+modeled for unequal planes and return `NotImplemented`. The point transform Pt (SOS
 Al, T.87 4.3.2) scales the output to Rx · 2^Pt. A sample whose scaled value
 exceeds 2^P−1 saturates to 2^P−1, and its scan gets one FAIL 128
 `jpegls_point_transform_overflow` at the SOS Al byte (not exact), naming the

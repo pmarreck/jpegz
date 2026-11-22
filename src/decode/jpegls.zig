@@ -293,6 +293,9 @@ pub const ScanInfo = struct {
     pt: u4 = 0,
     /// Offset of the SOS Al:Ah byte, for finding 128.
     al_at: usize = 0,
+    /// Where line-interleaved components of unequal plane size go (see
+    /// `DecodeOptions.planes`); null refuses them.
+    planes_out: ?*[4]?types.Image = null,
     /// Mapping table selector Tmi per scan component, and its byte offset
     /// (T.87 C.2.3); 0 selects no table.
     tmi: [4]u8 = .{ 0, 0, 0, 0 },
@@ -343,7 +346,82 @@ pub const DecodeOptions = struct {
     /// passes false: the table indices are what the scan codes, and the
     /// checks do not depend on how entries map to samples.
     map_samples: bool = true,
+    /// Receives each component plane at its own size when the frame's
+    /// components have unequal sizes (subsampling, T.81 A.1.1); the
+    /// returned image is then empty. Without it such frames are
+    /// NotImplemented: one raster cannot hold them. The caller frees the
+    /// planes.
+    planes: ?*[4]?types.Image = null,
 };
+
+/// Every component plane at its own size: subsampled frames decode into
+/// planes, others are de-interleaved. The caller frees each plane.
+pub fn decodePlanes(allocator: Allocator, data: []const u8) Error![4]?types.Image {
+    var planes: [4]?types.Image = .{ null, null, null, null };
+    errdefer for (&planes) |*plane| if (plane.*) |*image| image.deinit(allocator);
+    var image = try decodeWithOptions(allocator, data, .{ .planes = &planes });
+    defer image.deinit(allocator);
+    for (planes) |plane| if (plane != null) return planes;
+    const nc: usize = image.channels;
+    const bps: usize = if (image.bits_per_sample <= 8) 1 else 2;
+    const samples: usize = @as(usize, image.width) * image.height;
+    for (0..nc) |c| {
+        const pixels = try allocator.alloc(u8, samples * bps);
+        for (0..samples) |i| @memcpy(pixels[i * bps ..][0..bps], image.pixels[(i * nc + c) * bps ..][0..bps]);
+        planes[c] = .{
+            .pixels = pixels,
+            .width = image.width,
+            .height = image.height,
+            .channels = 1,
+            .bits_per_sample = image.bits_per_sample,
+            .source_color_space = .grayscale,
+            .layout = .grayscale,
+        };
+    }
+    return planes;
+}
+
+const PlaneDims = struct { w: u32, h: u32 };
+
+fn maxFactors(frame: *const FrameInfo) struct { h: u32, v: u32 } {
+    var h: u32 = 1;
+    var v: u32 = 1;
+    for (frame.components[0..frame.num_components]) |c| {
+        h = @max(h, c.h_factor);
+        v = @max(v, c.v_factor);
+    }
+    return .{ .h = h, .v = v };
+}
+
+/// Plane size of frame component `c` (T.87 C.2.2 with T.81 A.1.1):
+/// ceil(X * Hi / Hmax) by ceil(Y * Vi / Vmax).
+fn planeDims(frame: *const FrameInfo, c: usize) PlaneDims {
+    const max = maxFactors(frame);
+    const comp = frame.components[c];
+    return .{
+        .w = @intCast(std.math.divCeil(u64, @as(u64, frame.width) * comp.h_factor, max.h) catch unreachable),
+        .h = @intCast(std.math.divCeil(u64, @as(u64, frame.height) * comp.v_factor, max.v) catch unreachable),
+    };
+}
+
+fn subsampled(frame: *const FrameInfo) bool {
+    for (frame.components[1..frame.num_components]) |c| {
+        if (c.h_factor != frame.components[0].h_factor or c.v_factor != frame.components[0].v_factor) return true;
+    }
+    return false;
+}
+
+fn emptyImage(allocator: Allocator, P: u8) Error!types.Image {
+    return .{
+        .pixels = try allocator.alloc(u8, 0),
+        .width = 0,
+        .height = 0,
+        .channels = 0,
+        .bits_per_sample = P,
+        .source_color_space = .grayscale,
+        .layout = .grayscale,
+    };
+}
 
 /// Default-options entry — null sink, silent tolerance.
 pub fn decode(allocator: Allocator, data: []const u8) Error!types.Image {
@@ -410,13 +488,13 @@ pub fn decodeWithOptions(
                 if (frame.?.P < 2 or frame.?.P > 16) return error.UnsupportedPrecision;
                 if (frame.?.num_components != 1 and frame.?.num_components != 3)
                     return error.NotImplemented;
-                // Subsampled components (T.87 conformance t8sse0/3) have
-                // their own line lengths, which the scan decoders do not
-                // model yet: unsupported, not a fault.
-                for (frame.?.components[1..frame.?.num_components]) |c| {
-                    if (c.h_factor != frame.?.components[0].h_factor or c.v_factor != frame.?.components[0].v_factor)
-                        return error.NotImplemented;
+                // Sampling factors divide plane sizes (T.81 A.1.1).
+                for (frame.?.components[0..frame.?.num_components]) |c| {
+                    if (c.h_factor == 0 or c.v_factor == 0) return error.InvalidMarker;
                 }
+                // Subsampled components (T.87 conformance t8sse0/3) have
+                // their own plane sizes, which one raster cannot hold.
+                if (subsampled(&frame.?) and options.planes == null) return error.NotImplemented;
                 pos += parseSegmentLength(data, pos);
             },
             M_LSE => {
@@ -476,6 +554,15 @@ pub fn decodeWithOptions(
                     return error.BackendError;
                 };
                 if (scan.mapping_table) try checkMapping(&scan, &tables, preset, frame.?.P, options.findings_sink);
+                if (subsampled(&frame.?)) {
+                    // Only line interleave is modeled for unequal planes
+                    // (T.87 C.2.3 allows sample interleave only for equal
+                    // sizes); restarts, the point transform, mapping tables
+                    // and the dual MAXVAL decode are not.
+                    if (scan.ILV != 1 or scan.restart_interval != 0 or scan.pt != 0 or scan.mapping_table or
+                        customMaxval(preset, frame.?.P)) return error.NotImplemented;
+                    scan.planes_out = options.planes;
+                }
                 if (frame.?.num_components > 1 and scan.ILV == 0) {
                     // T.87 A.2: ILV 0 codes each component in its own scan.
                     if (scan.num_components != 1) return error.InvalidMarker;
@@ -878,6 +965,7 @@ fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
     info.mapping_table = false;
     info.derivation = .spec;
     info.tmi = .{ 0, 0, 0, 0 };
+    info.planes_out = null;
     info.tmi_at = .{ 0, 0, 0, 0 };
     info.num_components = data[pos + 2];
     if (info.num_components == 0 or info.num_components > 4) return error.InvalidMarker;
@@ -1277,80 +1365,103 @@ fn decodeScanLine(
     preset: *const PresetParams,
     report: *ScanReport,
 ) ScanError!types.Image {
-    const W: u32 = frame.width;
-    const H: u32 = frame.height;
     const P: u8 = frame.P;
     const nc: usize = scan.num_components;
-    const bytes_per_sample: usize = if (P <= 8) 1 else 2;
+    const bps: usize = if (P <= 8) 1 else 2;
 
     var state: codec.ScanState = undefined;
     initScanState(&state, P, scan.NEAR, preset.*, scan.derivation);
 
     var br = bitstream.BitReader.init(data);
     defer report.capture(&br);
-    const pixels = try allocator.alloc(u8, @as(usize, W) * @as(usize, H) * nc * bytes_per_sample);
-    errdefer allocator.free(pixels);
 
-    // Per-component scan-line buffers. Each (W+2) i32s wide — index 0
-    // is the left-sentinel, indices 1..W hold the decoded samples.
-    // Capped at 4 per ScanState's component-state arrays.
-    const line_len: usize = @as(usize, W) + 2;
+    // T.87 B.2 and B.4: an MCU is V1 lines of the first scan component,
+    // then V2 lines of the next, and so on, each component at its own plane
+    // size (T.81 A.1.1). Lines past a plane's height only complete the last
+    // MCU and are dropped.
+    var dims: [4]PlaneDims = undefined;
+    var vf: [4]u32 = undefined;
+    for (0..nc) |c| {
+        const fc = scan.comp_indices[c];
+        dims[c] = planeDims(frame, fc);
+        vf[c] = frame.components[fc].v_factor;
+    }
+    const mcu_rows: u32 = @intCast(std.math.divCeil(u64, frame.height, maxFactors(frame).v) catch unreachable);
+
+    var planes: [4][]u8 = .{ &.{}, &.{}, &.{}, &.{} };
+    var owned: usize = 0;
+    defer for (planes[0..owned]) |plane| if (plane.len > 0) allocator.free(plane);
     var cur_lines: [4][]i32 = .{ &.{}, &.{}, &.{}, &.{} };
     var prev_lines: [4][]i32 = .{ &.{}, &.{}, &.{}, &.{} };
     defer {
         for (cur_lines) |buf| if (buf.len > 0) allocator.free(buf);
         for (prev_lines) |buf| if (buf.len > 0) allocator.free(buf);
     }
-    var c: usize = 0;
-    while (c < nc) : (c += 1) {
-        cur_lines[c] = try allocator.alloc(i32, line_len);
-        prev_lines[c] = try allocator.alloc(i32, line_len);
+    for (0..nc) |c| {
+        planes[c] = try allocator.alloc(u8, @as(usize, dims[c].w) * dims[c].h * bps);
+        owned = c + 1;
+        cur_lines[c] = try allocator.alloc(i32, @as(usize, dims[c].w) + 2);
+        prev_lines[c] = try allocator.alloc(i32, @as(usize, dims[c].w) + 2);
         @memset(prev_lines[c], 0);
     }
 
     var rst_index: u3 = 0;
-    var y: u32 = 0;
-    while (y < H) : (y += 1) {
-        if (restartDue(scan, y)) {
+    var m: u32 = 0;
+    while (m < mcu_rows) : (m += 1) {
+        if (restartDue(scan, m)) {
             try report.checkEnd(&br, .interval);
             try restartAt(&state, &br, P, scan, preset.*, &rst_index);
             for (prev_lines[0..nc]) |line| @memset(line, 0);
         }
-        // Decode each component's strip for this line.
-        var ci: usize = 0;
-        while (ci < nc) : (ci += 1) {
-            @memset(cur_lines[ci], 0);
-            try decodeLineForComponent(&state, &br, ci, cur_lines[ci], prev_lines[ci], W);
-        }
-        // Drain into interleaved raster pixels.
-        var x: u32 = 0;
-        while (x < W) : (x += 1) {
-            var cc: usize = 0;
-            while (cc < nc) : (cc += 1) {
-                const sample: i32 = cur_lines[cc][x + 1];
-                const out_idx: usize =
-                    (@as(usize, y) * @as(usize, W) * nc +
-                     @as(usize, x) * nc + cc) * bytes_per_sample;
-                if (P <= 8) {
-                    pixels[out_idx] = @intCast(sample);
-                } else {
-                    const v: u16 = @intCast(sample);
-                    std.mem.writeInt(u16, pixels[out_idx..][0..2], v, native_endian);
+        for (0..nc) |c| {
+            var v: u32 = 0;
+            while (v < vf[c]) : (v += 1) {
+                @memset(cur_lines[c], 0);
+                try decodeLineForComponent(&state, &br, c, cur_lines[c], prev_lines[c], dims[c].w);
+                const line = m * vf[c] + v;
+                if (line < dims[c].h) {
+                    const row = planes[c][@as(usize, line) * dims[c].w * bps ..][0 .. @as(usize, dims[c].w) * bps];
+                    for (0..dims[c].w) |x| {
+                        const sample = cur_lines[c][x + 1];
+                        if (bps == 1) row[x] = @intCast(sample) else std.mem.writeInt(u16, row[2 * x ..][0..2], @intCast(sample), native_endian);
+                    }
                 }
+                @memcpy(prev_lines[c], cur_lines[c]);
             }
         }
-        // Promote cur → prev for each component's next line.
-        var swp: usize = 0;
-        while (swp < nc) : (swp += 1) {
-            @memcpy(prev_lines[swp], cur_lines[swp]);
-        }
     }
-
     try report.checkEnd(&br, .scan_end);
+
+    const equal = for (dims[0..nc]) |d| {
+        if (d.w != frame.width or d.h != frame.height) break false;
+    } else true;
+    if (!equal) {
+        // Unequal planes have no single raster; only `planes` callers get them.
+        const out = scan.planes_out orelse return error.NotImplemented;
+        for (0..nc) |c| {
+            const fc = scan.comp_indices[c];
+            out[fc] = .{
+                .pixels = planes[c],
+                .width = dims[c].w,
+                .height = dims[c].h,
+                .channels = 1,
+                .bits_per_sample = P,
+                .source_color_space = .grayscale,
+                .layout = .grayscale,
+            };
+        }
+        owned = 0;
+        return emptyImage(allocator, P);
+    }
+    const samples: usize = @as(usize, frame.width) * frame.height;
+    const pixels = try allocator.alloc(u8, samples * nc * bps);
+    for (0..nc) |c| {
+        for (0..samples) |i| @memcpy(pixels[(i * nc + c) * bps ..][0..bps], planes[c][i * bps ..][0..bps]);
+    }
     return types.Image{
         .pixels = pixels,
-        .width = W,
-        .height = H,
+        .width = frame.width,
+        .height = frame.height,
         .channels = @intCast(nc),
         .bits_per_sample = P,
         .source_color_space = .rgb,

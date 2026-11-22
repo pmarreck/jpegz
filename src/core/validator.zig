@@ -986,7 +986,10 @@ fn checkCodec(allocator: Allocator, data: []const u8, variant: Variant, sink: *t
     // Straight to the JPEG-LS decoder: the general dispatcher would fall
     // through an unsupported JPEG-LS scan into the T.81 decoders.
     if (variant == .jpegls) {
-        var image = try @import("../decode/jpegls.zig").decodeWithOptions(allocator, data, .{ .findings_sink = sink, .map_samples = false });
+        // Subsampled planes are decoded and checked, then discarded.
+        var planes: [4]?types.Image = .{ null, null, null, null };
+        defer for (&planes) |*plane| if (plane.*) |*image| image.deinit(allocator);
+        var image = try @import("../decode/jpegls.zig").decodeWithOptions(allocator, data, .{ .findings_sink = sink, .map_samples = false, .planes = &planes });
         image.deinit(allocator);
         return;
     }
