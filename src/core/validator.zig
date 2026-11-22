@@ -16,6 +16,7 @@ const errors = @import("errors.zig");
 const huffman = @import("../decode/huffman.zig");
 const baseline = @import("../decode/baseline.zig");
 const jpeg_markers = @import("../decode/jpeg_markers.zig");
+const jpegls = @import("../decode/jpegls.zig");
 const types = @import("../jpegz.zig");
 
 const Severity = errors.Severity;
@@ -533,18 +534,25 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                 } else {
                     const precision = data[seg_body_start];
                     const declared_height = readU16BE(data, seg_body_start + 1);
-                    const width = readU16BE(data, seg_body_start + 3);
+                    const declared_width = readU16BE(data, seg_body_start + 3);
                     // T.81 B.2.5: Y = 0 defers the line count to a DNL right
                     // after the first scan, as the DCT decoders resolve it.
-                    const dnl_height: ?u16 = if (declared_height == 0)
+                    const dnl_height: ?u16 = if (declared_height == 0 and variant != .jpegls)
                         jpeg_markers.dnlLines(data, seg_body_start - 2 + seg_len)
                     else
                         null;
-                    const height = dnl_height orelse declared_height;
+                    // T.87 C.2.4.1.4: an LSE ID 4 fills a JPEG-LS dimension the
+                    // SOF55 leaves at 0 (sizes above 65535).
+                    const oversize: ?jpegls.Oversize = if (variant == .jpegls and (declared_height == 0 or declared_width == 0))
+                        jpegls.oversizeDimensions(data)
+                    else
+                        null;
+                    const width: u32 = if (declared_width != 0) declared_width else if (oversize) |o| o.width else 0;
+                    const height: u32 = if (declared_height != 0) declared_height else if (dnl_height) |lines| lines else if (oversize) |o| o.height else 0;
 					frame_declared_y = declared_height;
 					frame_lines = if (declared_height != 0) declared_height else dnl_height;
-                    report.width = @as(u32, width);
-                    report.height = @as(u32, height);
+                    report.width = width;
+                    report.height = height;
 
                     // SOF3 Y=0 needs DNL and remains unsupported by its entropy
                     // validator. Other pixel decoders still require both sizes
@@ -1104,9 +1112,9 @@ fn startsWith(haystack: []const u8, prefix: []const u8) bool {
 /// Returns the byte offset of the 0xFF that begins the next "real"
 /// marker (so the outer parser can re-enter its 0xFF-handling loop).
 /// Returns null if the stream ends without a terminating marker.
-/// `jpegls`: T.87 A.1.3 bit-stuffs instead of byte-stuffing, so an FF
+/// `bit_stuffed` (JPEG-LS): T.87 A.1.3 bit-stuffs instead of byte-stuffing, so an FF
 /// followed by a byte below 0x80 is entropy data, not a marker.
-fn skipEntropyData(data: []const u8, start: usize, jpegls: bool) ?usize {
+fn skipEntropyData(data: []const u8, start: usize, bit_stuffed: bool) ?usize {
     var i = start;
     while (i < data.len) {
         if (data[i] != 0xFF) {
@@ -1118,7 +1126,7 @@ fn skipEntropyData(data: []const u8, start: usize, jpegls: bool) ?usize {
         while (j < data.len and data[j] == 0xFF) j += 1;
         if (j >= data.len) return null;
         const next = data[j];
-        if (jpegls and j == i + 1 and next < 0x80) {
+        if (bit_stuffed and j == i + 1 and next < 0x80) {
             i = j + 1;
             continue;
         }

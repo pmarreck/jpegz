@@ -41,7 +41,11 @@ that cause takes precedence over a code fault it produces. Subsampled
 components and an LSE MAXVAL other than 2^P−1 are "codec not checked".
 Multi-component ILV 0 (one scan per component, conformance t8c0e0/3) is
 decoded scan by scan and interleaved; a component coded by two scans is
-`InvalidMarker`.
+`InvalidMarker`. An LSE ID 4 (T.87 C.2.4.1.4) fills a SOF55 dimension left
+at 0, for images above 65535 samples in either direction; a nonzero SOF
+value beside a nonzero LSE value is `InvalidMarker` (CharLS's rule), and a
+height still 0 (JPEG-LS DNL) is `NotImplemented`. The validator reads the
+same record, so such frames are not finding 61.
 Consumers import jp2z and libjxlz through the facade, preserving one instance
 of each Zig module. Project purpose lives in [INTENT.md](INTENT.md).
 

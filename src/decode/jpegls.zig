@@ -204,8 +204,9 @@ const M_DNL: u8 = 0xDC; // Define Number of Lines (rare)
 pub const FrameInfo = struct {
     /// Precision in bits per sample (1..16, typically 8/12/16).
     P: u8,
-    height: u16,
-    width: u16,
+    /// u32: an LSE ID 4 (T.87 C.2.4.1.4) can give sizes above 65535.
+    height: u32,
+    width: u32,
     /// Number of components (1 or 3 in v1 scope).
     num_components: u8,
     components: [4]ComponentInfo,
@@ -283,6 +284,8 @@ pub fn decodeWithOptions(
     var restart_interval: u32 = 0;
     // Offset of the last LSE marker, for finding 121.
     var lse_at: ?usize = null;
+    // Frame dimensions from an LSE ID 4, applied at the first scan.
+    var oversize: ?Oversize = null;
     // ILV 0 component planes, decoded one scan at a time.
     var planes: [4]?types.Image = .{ null, null, null, null };
     var planes_done: usize = 0;
@@ -327,6 +330,11 @@ pub fn decodeWithOptions(
                 pos += parseSegmentLength(data, pos);
             },
             M_LSE => {
+                if (pos + 2 < data.len and data[pos + 2] == 4) {
+                    oversize = try parseOversize(data, pos);
+                    pos += parseSegmentLength(data, pos);
+                    continue;
+                }
                 lse_at = pos - 2;
                 try parseLse(data, pos, &preset);
                 pos += parseSegmentLength(data, pos);
@@ -346,6 +354,23 @@ pub fn decodeWithOptions(
             },
             M_SOS => {
                 if (frame == null) return error.InvalidMarker;
+                // CharLS's rule for LSE ID 4: it fills a dimension the SOF left
+                // at 0, and a nonzero SOF value beside a nonzero LSE value
+                // contradicts it.
+                if (oversize) |o| {
+                    if (o.height != 0) {
+                        if (frame.?.height != 0) return error.InvalidMarker;
+                        frame.?.height = o.height;
+                    }
+                    if (o.width != 0) {
+                        if (frame.?.width != 0) return error.InvalidMarker;
+                        frame.?.width = o.width;
+                    }
+                    oversize = null;
+                }
+                if (frame.?.width == 0) return error.InvalidMarker;
+                // Y = 0 defers to a JPEG-LS DNL (T.87 C.2.6), not decoded yet.
+                if (frame.?.height == 0) return error.NotImplemented;
                 var scan = try parseSos(data, pos, &frame.?);
                 scan.restart_interval = restart_interval;
                 pos += parseSegmentLength(data, pos);
@@ -440,6 +465,50 @@ fn initScanState(state: *codec.ScanState, P: u8, near: u32, preset: PresetParams
 /// such scans are NotImplemented rather than decoded by a guess.
 fn customMaxval(preset: PresetParams, P: u8) bool {
     return preset.MAXVAL != 0 and preset.MAXVAL != (@as(u32, 1) << @intCast(P)) - 1;
+}
+
+/// Image dimensions from an LSE ID 4 (T.87 C.2.4.1.4); 0 leaves the SOF
+/// value in place.
+pub const Oversize = struct { height: u32, width: u32 };
+
+/// Parse an LSE ID 4 at `pos` (its length field): Wxy in 2..4, then Ye
+/// and Xe in Wxy bytes each.
+fn parseOversize(data: []const u8, pos: usize) Error!Oversize {
+    const seg_len = parseSegmentLength(data, pos);
+    if (seg_len < 4 or pos + seg_len > data.len) return error.TruncatedStream;
+    const wxy: usize = data[pos + 3];
+    if (wxy < 2 or wxy > 4 or seg_len != 4 + 2 * wxy) return error.InvalidMarker;
+    var ye: u32 = 0;
+    var xe: u32 = 0;
+    for (data[pos + 4 .. pos + 4 + wxy]) |byte| ye = (ye << 8) | byte;
+    for (data[pos + 4 + wxy .. pos + 4 + 2 * wxy]) |byte| xe = (xe << 8) | byte;
+    return .{ .height = ye, .width = xe };
+}
+
+/// The last well-formed LSE ID 4 before the first scan, for a marker walk
+/// that needs the frame size without decoding (the validator).
+pub fn oversizeDimensions(data: []const u8) ?Oversize {
+    var pos: usize = 2;
+    var found: ?Oversize = null;
+    while (pos + 3 < data.len) {
+        if (data[pos] != 0xFF or data[pos + 1] == 0xFF) {
+            pos += 1;
+            continue;
+        }
+        const marker = data[pos + 1];
+        if (marker == M_SOS or marker == M_EOI) break;
+        if (marker == 0x01 or (marker >= 0xD0 and marker <= 0xD8)) {
+            pos += 2;
+            continue;
+        }
+        const len = parseSegmentLength(data, pos + 2);
+        if (len < 2) break;
+        if (marker == M_LSE and len >= 3 and pos + 4 < data.len and data[pos + 4] == 4) {
+            found = parseOversize(data, pos + 2) catch null;
+        }
+        pos += 2 + len;
+    }
+    return found;
 }
 
 fn parseLse(data: []const u8, pos: usize, out: *PresetParams) Error!void {

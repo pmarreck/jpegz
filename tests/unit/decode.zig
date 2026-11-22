@@ -1143,6 +1143,42 @@ test "JPEG-LS subsampled components are unsupported, not corrupt: conformance t8
     }
 }
 
+test "JPEG-LS LSE ID 4 oversize dimensions: 65536x1 and 1x65536" {
+    // CharLS 3.0 writes SOF55 X = Y = 0 and an LSE ID 4 (T.87 C.2.4.1.4)
+    // when a dimension exceeds 65535. Samples are the staircase v = i >> 8,
+    // so the formula is the oracle.
+    const allocator = std.testing.allocator;
+    for ([_]struct { data: []const u8, width: u32, height: u32 }{
+        .{ .data = @embedFile("fixtures/jpegls_65536x1_gray8.jls"), .width = 65536, .height = 1 },
+        .{ .data = @embedFile("fixtures/jpegls_1x65536_gray8.jls"), .width = 1, .height = 65536 },
+    }) |case| {
+        var image = try jpegz.jpegls_cleanroom_decode(allocator, case.data);
+        defer image.deinit(allocator);
+        try std.testing.expectEqual(case.width, image.width);
+        try std.testing.expectEqual(case.height, image.height);
+        for (image.pixels, 0..) |sample, i| {
+            if (sample != @as(u8, @intCast(i >> 8))) {
+                std.debug.print("{d}x{d}: sample {d} is {d}\n", .{ case.width, case.height, i, sample });
+                return error.TestUnexpectedResult;
+            }
+        }
+        var report = try jpegz.validate(allocator, case.data);
+        defer report.deinit(allocator);
+        try std.testing.expectEqual(@as(?u32, case.width), report.width);
+        try std.testing.expectEqual(@as(?u32, case.height), report.height);
+        try std.testing.expectEqual(.decoded, report.codec_check);
+        for (report.findings.items) |f| if (f.severity == .fail) {
+            dumpFindings("oversize", report);
+            return error.TestUnexpectedResult;
+        };
+    }
+    // A nonzero SOF dimension beside a nonzero LSE value contradicts it.
+    const src = @embedFile("fixtures/jpegls_65536x1_gray8.jls");
+    var conflict = src.*;
+    conflict[8] = 1; // SOF55 Y low byte: Y = 1 while the LSE also gives Ye = 1.
+    try std.testing.expectError(error.InvalidMarker, jpegz.jpegls_cleanroom_decode(allocator, &conflict));
+}
+
 test "JPEG-LS LSE MAXVAL jpegz cannot decode is codec not checked, not a finding" {
     const allocator = std.testing.allocator;
     var report = try jpegz.validate(allocator, @embedFile("fixtures/jpegls_16x16_gray8_maxval200.jls"));
