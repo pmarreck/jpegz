@@ -1258,19 +1258,222 @@ test "JPEG-LS scans that select a mapping table are unsupported, not indices pas
     image.deinit(allocator);
 }
 
-test "JPEG-LS LSE MAXVAL jpegz cannot decode is codec not checked, not a finding" {
-    const allocator = std.testing.allocator;
-    var report = try jpegz.validate(allocator, @embedFile("fixtures/jpegls_16x16_gray8_maxval200.jls"));
-    defer report.deinit(allocator);
-    try std.testing.expectEqual(.unsupported, report.codec_check);
-    for (report.findings.items) |f| try std.testing.expect(f.severity != .fail);
+fn maxvalDerivation(report: jpegz.ValidationReport) ?jpegz.Finding {
+    for (report.findings.items) |f| if (f.code == .jpegls_maxval_derivation) return f;
+    return null;
 }
-test "JPEG-LS LSE MAXVAL other than 2^P-1 is NotImplemented, not guessed" {
-    // CharLS 3.0, MAXVAL 200 at P=8. CharLS derives RANGE from P; FFmpeg
-    // derives it from MAXVAL; the two disagree on this stream.
+
+test "JPEG-LS LSE MAXVAL decoding only under CharLS's RANGE-from-P coding is unsupported with INFO 127" {
+    // Stock CharLS 3.0, MAXVAL 200 at P = 8: CharLS takes RANGE, qbpp, bpp
+    // and LIMIT from 2^P - 1; T.87 A.2.1 takes them from MAXVAL.
     const allocator = std.testing.allocator;
     const data = @embedFile("fixtures/jpegls_16x16_gray8_maxval200.jls");
     try std.testing.expectError(error.NotImplemented, jpegz.jpegls_cleanroom_decode(allocator, data));
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(.unsupported, report.codec_check);
+    for (report.findings.items) |f| try std.testing.expect(f.severity != .fail);
+    const f = maxvalDerivation(report) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(jpegz.Severity.info, f.severity);
+    try std.testing.expect(f.offset_is_exact and f.offset.? == std.mem.indexOf(u8, data, &.{ 0xff, 0xf8 }).?);
+    try std.testing.expect(std.mem.startsWith(u8, f.detail.?, "only_charls"));
+}
+
+test "JPEG-LS LSE MAXVAL scan clean under neither coding keeps the A.2.1 findings" {
+    // The CharLS MAXVAL 200 stream cut inside its entropy data, then EOI:
+    // both codings run out of data, so the A.2.1 truncation finding stands.
+    const allocator = std.testing.allocator;
+    const src = @embedFile("fixtures/jpegls_16x16_gray8_maxval200.jls");
+    const sos = std.mem.indexOf(u8, src, &.{ 0xff, 0xda }).?;
+    const cut = sos + 2 + std.mem.readInt(u16, src[sos + 2 ..][0..2], .big) + 20;
+    const data = try std.mem.concat(allocator, u8, &.{ src[0..cut], &.{ 0xff, 0xd9 } });
+    defer allocator.free(data);
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    try std.testing.expect(maxvalDerivation(report) == null);
+    const f = onlyFail(report, .insufficient_data) orelse {
+        dumpFindings("maxval cut", report);
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expect(f.offset_is_exact and f.offset.? == cut);
+}
+
+test "JPEG-LS LSE MAXVAL below 2^P-1 decodes per T.87 A.2.1 (spec-coded, FFmpeg-verified)" {
+    const allocator = std.testing.allocator;
+    for ([_]struct { jls: []const u8, raw: []const u8, bits: u8 }{
+        .{ .jls = @embedFile("fixtures/jpegls_32x32_gray8_maxval63.jls"), .raw = @embedFile("fixtures/jpegls_32x32_gray8_maxval63.raw"), .bits = 8 },
+        .{ .jls = @embedFile("fixtures/jpegls_32x32_gray12_maxval1023.jls"), .raw = @embedFile("fixtures/jpegls_32x32_gray12_maxval1023.raw"), .bits = 12 },
+    }) |case| {
+        var image = try jpegz.jpegls_cleanroom_decode(allocator, case.jls);
+        defer image.deinit(allocator);
+        try std.testing.expectEqual(case.bits, image.bits_per_sample);
+        // The raw files are u8, or little-endian u16; the image is host order.
+        if (case.bits == 8) {
+            try std.testing.expectEqualSlices(u8, case.raw, image.pixels);
+        } else {
+            try std.testing.expectEqual(case.raw.len, image.pixels.len);
+            var i: usize = 0;
+            while (i < case.raw.len) : (i += 2) {
+                const want = std.mem.readInt(u16, case.raw[i..][0..2], .little);
+                const got = std.mem.readInt(u16, image.pixels[i..][0..2], @import("builtin").cpu.arch.endian());
+                try std.testing.expectEqual(want, got);
+            }
+        }
+        var report = try jpegz.validate(allocator, case.jls);
+        defer report.deinit(allocator);
+        try std.testing.expectEqual(.decoded, report.codec_check);
+        try std.testing.expect(maxvalDerivation(report) == null);
+        for (report.findings.items) |f| try std.testing.expect(f.severity == .info);
+    }
+}
+
+/// One stream of a `tools/jpegls-maxval-corpus` pack: P, MAXVAL, NEAR and
+/// content come from the name `p{P}_m{MAXVAL}_n{NEAR}_{content}`.
+const MaxvalStream = struct {
+    name: []const u8,
+    data: []const u8,
+    P: u8,
+    maxval: u32,
+    near: u32,
+    content: enum { formula, gradient, noise, blocks },
+
+    /// Sample (x, y) of the 32x32 source, as maxval_corpus.c computes it.
+    /// `rng` carries the noise generator in raster order.
+    fn sample(self: MaxvalStream, x: u32, y: u32, rng: *u32) u32 {
+        return switch (self.content) {
+            .formula => ((x * 37 + y * 91) ^ (x * y)) % (self.maxval + 1),
+            .gradient => (x + y) * self.maxval / 62,
+            .noise => blk: {
+                rng.* = rng.* *% 1103515245 +% 12345;
+                break :blk (rng.* >> 8) % (self.maxval + 1);
+            },
+            .blocks => if ((x / 8 + y / 8) % 2 == 1) self.maxval / 2 else self.maxval / 3,
+        };
+    }
+
+    /// Every decoded sample is within NEAR of the source (equal at NEAR 0).
+    fn matches(self: MaxvalStream, image: jpegz.Image) bool {
+        var rng: u32 = 0x6a7065 ^ self.maxval ^ (self.near << 20);
+        var i: usize = 0;
+        for (0..32) |y| for (0..32) |x| {
+            const want = self.sample(@intCast(x), @intCast(y), &rng);
+            const got: u32 = if (self.P <= 8) image.pixels[i] else std.mem.readInt(u16, image.pixels[2 * i ..][0..2], @import("builtin").cpu.arch.endian());
+            if (@max(want, got) - @min(want, got) > self.near) return false;
+            i += 1;
+        };
+        return true;
+    }
+};
+
+fn maxvalPack(comptime path: []const u8) []const MaxvalStream {
+    @setEvalBranchQuota(1_000_000);
+    const pack = @embedFile(path);
+    comptime var list: []const MaxvalStream = &.{};
+    comptime var pos: usize = 8;
+    if (!std.mem.eql(u8, pack[0..8], "JLSCORP1")) @compileError("bad pack " ++ path);
+    inline while (pos < pack.len) {
+        const name_len = pack[pos];
+        const name = pack[pos + 1 ..][0..name_len];
+        pos += 1 + name_len;
+        const len = std.mem.readInt(u32, pack[pos..][0..4], .little);
+        pos += 4;
+        var it = std.mem.tokenizeScalar(u8, name, '_');
+        const p = std.fmt.parseInt(u8, it.next().?[1..], 10) catch unreachable;
+        const m = std.fmt.parseInt(u32, it.next().?[1..], 10) catch unreachable;
+        const n = std.fmt.parseInt(u32, it.next().?[1..], 10) catch unreachable;
+        const content = std.meta.stringToEnum(@FieldType(MaxvalStream, "content"), it.next().?).?;
+        list = list ++ [_]MaxvalStream{.{ .name = name, .data = pack[pos..][0..len], .P = p, .maxval = m, .near = n, .content = content }};
+        pos += len;
+    }
+    return list;
+}
+
+/// The 12 streams both codings decode cleanly: smooth content at P = 8,
+/// MAXVAL 2^k - 1, NEAR > 0, where stock and spec-mode CharLS write the
+/// same bytes.
+fn bothCodings(s: MaxvalStream) bool {
+    return s.P == 8 and s.near > 0 and (s.maxval == 15 or s.maxval == 63 or s.maxval == 127) and
+        (s.content == .gradient or s.content == .blocks);
+}
+
+test "JPEG-LS MAXVAL oracle set: 144 stock CharLS 3.0 streams classify by coding" {
+    const allocator = std.testing.allocator;
+    const streams = comptime maxvalPack("fixtures/jpegls_maxval_charls30.jlspack");
+    try std.testing.expectEqual(@as(usize, 144), streams.len);
+    var only: usize = 0;
+    var both: usize = 0;
+    for (streams) |s| {
+        var report = try jpegz.validate(allocator, s.data);
+        defer report.deinit(allocator);
+        for (report.findings.items) |f| if (f.severity == .fail) {
+            std.debug.print("{s}: unexpected FAIL\n", .{s.name});
+            return error.TestUnexpectedResult;
+        };
+        const f = maxvalDerivation(report) orelse {
+            std.debug.print("{s}: no INFO 127\n", .{s.name});
+            return error.TestUnexpectedResult;
+        };
+        if (bothCodings(s)) {
+            try std.testing.expect(std.mem.startsWith(u8, f.detail.?, "also_charls"));
+            try std.testing.expectEqual(.decoded, report.codec_check);
+            var image = try jpegz.jpegls_cleanroom_decode(allocator, s.data);
+            defer image.deinit(allocator);
+            try std.testing.expect(s.matches(image));
+            both += 1;
+        } else {
+            if (!std.mem.startsWith(u8, f.detail.?, "only_charls")) {
+                std.debug.print("{s}: {s}\n", .{ s.name, f.detail.? });
+                return error.TestUnexpectedResult;
+            }
+            try std.testing.expectEqual(.unsupported, report.codec_check);
+            only += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 132), only);
+    try std.testing.expectEqual(@as(usize, 12), both);
+}
+
+test "JPEG-LS MAXVAL oracle set: 72 spec-coded streams decode to their sources (T.87 A.2.1)" {
+    const allocator = std.testing.allocator;
+    const streams = comptime maxvalPack("fixtures/jpegls_maxval_specmode.jlspack");
+    try std.testing.expectEqual(@as(usize, 72), streams.len);
+    for (streams) |s| {
+        var image = jpegz.jpegls_cleanroom_decode(allocator, s.data) catch |err| {
+            std.debug.print("{s}: {s}\n", .{ s.name, @errorName(err) });
+            return err;
+        };
+        defer image.deinit(allocator);
+        if (!s.matches(image)) {
+            std.debug.print("{s}: samples differ from the source\n", .{s.name});
+            return error.TestUnexpectedResult;
+        }
+        var report = try jpegz.validate(allocator, s.data);
+        defer report.deinit(allocator);
+        try std.testing.expectEqual(.decoded, report.codec_check);
+        for (report.findings.items) |f| try std.testing.expect(f.severity == .info);
+        const f = maxvalDerivation(report);
+        try std.testing.expectEqual(bothCodings(s), f != null);
+        if (f) |info| try std.testing.expect(std.mem.startsWith(u8, info.detail.?, "also_charls"));
+    }
+}
+
+test "JPEG-LS LSE MAXVAL stream valid under both codings is valid with INFO 127 also_charls" {
+    // MAXVAL 63, NEAR 1, smooth content: stock and spec-mode CharLS write the
+    // same bytes, so both codings decode it cleanly.
+    const allocator = std.testing.allocator;
+    const data = @embedFile("fixtures/jpegls_32x32_gray8_maxval63_near1.jls");
+    const raw = @embedFile("fixtures/jpegls_32x32_gray8_maxval63_near1.raw");
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, data);
+    defer image.deinit(allocator);
+    try std.testing.expectEqual(raw.len, image.pixels.len);
+    for (raw, image.pixels) |want, got| try std.testing.expect(@abs(@as(i16, want) - @as(i16, got)) <= 1);
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(.decoded, report.codec_check);
+    const f = maxvalDerivation(report) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(jpegz.Severity.info, f.severity);
+    try std.testing.expect(f.offset_is_exact and f.offset.? == std.mem.indexOf(u8, data, &.{ 0xff, 0xf8 }).?);
+    try std.testing.expect(std.mem.startsWith(u8, f.detail.?, "also_charls"));
 }
 
 test "B2.2 NEAR=2: JPEG-LS 8x8 grayscale near-lossless cleanroom (direct entry)" {

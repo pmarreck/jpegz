@@ -21,8 +21,9 @@ without JPEG XL, or alpha at a different depth, return `NotImplemented`.
 Classic decoding currently includes baseline/extended sequential, progressive,
 predictive lossless and arithmetic DCT modes. JPEG-LS decoding is also in Zig;
 it applies LSE preset thresholds and RESET, is checked against the T.87
-Annex E conformance streams t8nde0/3 and t16e0/3, and returns `NotImplemented`
-for an LSE MAXVAL other than 2^P−1 until the RANGE derivation is settled.
+Annex E conformance streams t8nde0/3 and t16e0/3, and derives RANGE, qbpp,
+bpp and LIMIT from the MAXVAL in force (T.87 A.2.1), including an LSE ID 1
+MAXVAL below 2^P−1.
 Restart intervals (DRI with a 2- to 4-byte Ri, then RST0..7 in sequence) are
 decoded for single-component and line- or sample-interleaved scans; each
 interval resets the contexts and starts from zero neighbors.
@@ -43,8 +44,15 @@ padding bits in the final byte and optional FF fill before the marker:
 nonzero padding is FAIL 123 `jpegls_padding_not_zeros` at the pad byte (detail
 the bit count), and whole leftover bytes are finding 8
 `extraneous_bytes_before_marker` at the first one (detail `jpegls_interval` or
-`jpegls_scan_end`), emitted at the T.81 path's severity. Subsampled
-components and an LSE MAXVAL other than 2^P−1 are "codec not checked".
+`jpegls_scan_end`), emitted at the T.81 path's severity. CharLS 3.0 codes an
+LSE MAXVAL below 2^P−1 with RANGE, qbpp, bpp and LIMIT taken from 2^P−1, so
+such a scan is decoded both ways (validate ruling 2026-11-22). INFO 127
+`jpegls_maxval_derivation` at the LSE marker covers two outcomes:
+`also_charls` when both codings decode cleanly (valid, though samples may
+depend on the decoder), and `only_charls` when only CharLS's coding does
+(unsupported, until a known-defect admission). When only A.2.1 decodes
+cleanly, the scan is valid; when neither does, the A.2.1 findings stand.
+Subsampled components are "codec not checked".
 Multi-component ILV 0 (one scan per component, conformance t8c0e0/3) is
 decoded scan by scan and interleaved; a component coded by two scans is
 `InvalidMarker`. An LSE ID 4 (T.87 C.2.4.1.4) fills a SOF55 dimension left

@@ -257,7 +257,15 @@ pub const ScanInfo = struct {
     /// Some component selects a mapping table (Tdi != 0, T.87 C.2.3 and
     /// C.2.4.1.2): its decoded values are table indices, not samples.
     mapping_table: bool = false,
+    /// Which MAXVAL drives RANGE, qbpp, bpp and LIMIT (see `Derivation`).
+    derivation: Derivation = .spec,
 };
+
+/// `spec`: T.87 A.2.1, from the MAXVAL in force. `charls`: CharLS 3.0's
+/// coding of an LSE ID 1 MAXVAL below 2^P - 1, from 2^P - 1 regardless
+/// (the LSE MAXVAL still sets the default thresholds). Only
+/// `decodeScanChecked` selects `charls`, to classify such scans.
+pub const Derivation = enum { spec, charls };
 
 /// At a restart-interval boundary: consume RSTm and reset the coding state
 /// as at the start of the scan (contexts, run index). Callers zero their
@@ -266,7 +274,7 @@ pub const ScanInfo = struct {
 fn restartAt(state: *codec.ScanState, br: *bitstream.BitReader, P: u8, scan: *const ScanInfo, preset: PresetParams, rst_index: *u3) ScanError!void {
     try br.skipToRestart(0xD0 + @as(u8, rst_index.*));
     rst_index.* +%= 1;
-    initScanState(state, P, scan.NEAR, preset);
+    initScanState(state, P, scan.NEAR, preset, scan.derivation);
 }
 
 /// True at the first line of every restart interval after the first.
@@ -404,7 +412,6 @@ pub fn decodeWithOptions(
                     if (options.findings_sink) |sink| sink.emitExact(.fail, .jpegls_context_table_invalid, @intCast(at), @tagName(which)) catch return error.OutOfMemory;
                     return error.BackendError;
                 };
-                if (customMaxval(preset, frame.?.P)) return error.NotImplemented;
                 // Applying a mapping table is not implemented; returning the
                 // indices as samples would be a silent mis-decode.
                 if (scan.mapping_table) return error.NotImplemented;
@@ -413,13 +420,13 @@ pub fn decodeWithOptions(
                     if (scan.num_components != 1) return error.InvalidMarker;
                     const ci = scan.comp_indices[0];
                     if (planes[ci] != null) return error.InvalidMarker;
-                    planes[ci] = try decodeScanReported(allocator, data, pos, &frame.?, &scan, &preset, options.findings_sink);
+                    planes[ci] = try decodeScanChecked(allocator, data, pos, &frame.?, &scan, &preset, lse_at, options.findings_sink);
                     planes_done += 1;
                     if (planes_done == frame.?.num_components) return interleavePlanes(allocator, &frame.?, &planes);
                     pos = endOfScan(data, pos) orelse return error.TruncatedStream;
                     continue;
                 }
-                return decodeScanReported(allocator, data, pos, &frame.?, &scan, &preset, options.findings_sink);
+                return decodeScanChecked(allocator, data, pos, &frame.?, &scan, &preset, lse_at, options.findings_sink);
             },
             // Standalone markers we can skip safely (RST, TEM, SOI/EOI
             // shouldn't appear here; treat as no-op).
@@ -479,18 +486,104 @@ fn parseSof55(data: []const u8, pos: usize) Error!FrameInfo {
 /// Scan state for frame precision `P`, with any LSE ID 1 threshold and
 /// RESET overrides; a zero field keeps its default (T.87 C.2.4.1.1). A
 /// custom MAXVAL is refused before this point (see `customMaxval`).
-fn initScanState(state: *codec.ScanState, P: u8, near: u32, preset: PresetParams) void {
-    state.reset(P, near);
+/// T.87 A.2.1 derives RANGE, qbpp, bpp and LIMIT from the MAXVAL in
+/// force, so an LSE ID 1 MAXVAL below 2^P - 1 changes the coding. CharLS
+/// 3.0 codes such scans from 2^P - 1 instead, and a spec decode of its
+/// output silently yields other samples. Validate's ruling (2026-11-22):
+/// decode both ways and classify by which decodes finish with no finding.
+///   both:        the A.2.1 image, plus INFO 127 `also_charls` (samples
+///                may differ between decoders);
+///   A.2.1 only:  the A.2.1 image;
+///   CharLS only: INFO 127 `only_charls` and NotImplemented (unsupported),
+///                until a known-defect admission;
+///   neither:     the A.2.1 decode's findings and outcome.
+fn decodeScanChecked(
+    allocator: Allocator,
+    data: []const u8,
+    start: usize,
+    frame: *const FrameInfo,
+    scan: *const ScanInfo,
+    preset: *const PresetParams,
+    lse_at: ?usize,
+    sink: ?*findings_mod.FindingsSink,
+) Error!types.Image {
+    if (!customMaxval(preset.*, frame.P)) return decodeScanReported(allocator, data, start, frame, scan, preset, sink);
+
+    var spec_sink = findings_mod.FindingsSink.init(allocator);
+    defer spec_sink.deinit();
+    var spec_scan = scan.*;
+    spec_scan.derivation = .spec;
+    var spec_err: ?Error = null;
+    var spec_image: ?types.Image = decodeScanReported(allocator, data, start, frame, &spec_scan, preset, &spec_sink) catch |err| switch (err) {
+        error.OutOfMemory, error.NotImplemented => return err,
+        else => blk: {
+            spec_err = err;
+            break :blk null;
+        },
+    };
+    errdefer if (spec_image) |*image| image.deinit(allocator);
+
+    var charls_sink = findings_mod.FindingsSink.init(allocator);
+    defer charls_sink.deinit();
+    var charls_scan = scan.*;
+    charls_scan.derivation = .charls;
+    const charls_clean = if (decodeScanReported(allocator, data, start, frame, &charls_scan, preset, &charls_sink)) |image| blk: {
+        var owned = image;
+        owned.deinit(allocator);
+        break :blk charls_sink.items().len == 0;
+    } else |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => false,
+    };
+    const spec_clean = spec_image != null and spec_sink.items().len == 0;
+
+    if (spec_clean) {
+        if (charls_clean) try emitDerivation(sink, lse_at, "also_charls: the scan also decodes cleanly under CharLS 3.0's RANGE-from-P coding; decoders may give different samples");
+        return spec_image.?;
+    }
+    if (charls_clean) {
+        try emitDerivation(sink, lse_at, "only_charls: the scan decodes only under CharLS 3.0's RANGE-from-P coding of an LSE MAXVAL below 2^P - 1 (T.87 A.2.1 derives RANGE from MAXVAL)");
+        if (spec_image) |*image| image.deinit(allocator);
+        spec_image = null;
+        return error.NotImplemented;
+    }
+    if (sink) |s| for (spec_sink.items()) |f| {
+        if (f.offset_is_exact)
+            s.emitExact(f.severity, f.code, f.offset.?, f.detail) catch return error.OutOfMemory
+        else
+            s.emit(f.severity, f.code, f.offset, f.detail) catch return error.OutOfMemory;
+    };
+    if (spec_image) |image| return image;
+    return spec_err.?;
+}
+
+fn emitDerivation(sink: ?*findings_mod.FindingsSink, lse_at: ?usize, detail: []const u8) Error!void {
+    const s = sink orelse return;
+    if (lse_at) |at|
+        s.emitExact(.info, .jpegls_maxval_derivation, @intCast(at), detail) catch return error.OutOfMemory
+    else
+        s.emit(.info, .jpegls_maxval_derivation, null, detail) catch return error.OutOfMemory;
+}
+
+fn initScanState(state: *codec.ScanState, P: u8, near: u32, preset: PresetParams, derivation: Derivation) void {
+    const bit_max: u32 = (@as(u32, 1) << @intCast(P)) - 1;
+    const maxval: u32 = if (preset.MAXVAL != 0) preset.MAXVAL else bit_max;
+    state.resetMaxval(if (derivation == .spec) maxval else bit_max, near);
+    if (state.MAXVAL != maxval) {
+        // CharLS derivation: the default thresholds still follow the LSE
+        // MAXVAL; only RANGE, qbpp, bpp, LIMIT and the clamp use 2^P - 1.
+        state.MAXVAL = maxval;
+        state.setDefaultThresholds();
+        state.MAXVAL = bit_max;
+    }
     if (preset.T1 != 0) state.T1 = preset.T1;
     if (preset.T2 != 0) state.T2 = preset.T2;
     if (preset.T3 != 0) state.T3 = preset.T3;
     if (preset.RESET != 0) state.RESET = preset.RESET;
 }
 
-/// An LSE ID 1 MAXVAL other than 2^P - 1. CharLS 3.0 derives RANGE,
-/// qbpp and LIMIT from P regardless of it; FFmpeg derives them from the
-/// LSE MAXVAL. Until T.87 A.2.1 settles which a conforming decoder uses,
-/// such scans are NotImplemented rather than decoded by a guess.
+/// An LSE ID 1 MAXVAL other than 2^P - 1: T.87 A.2.1 then derives
+/// RANGE, qbpp, bpp and LIMIT from it, which CharLS 3.0 does not.
 fn customMaxval(preset: PresetParams, P: u8) bool {
     return preset.MAXVAL != 0 and preset.MAXVAL != (@as(u32, 1) << @intCast(P)) - 1;
 }
@@ -669,7 +762,7 @@ fn decodeScanMono(
     const bytes_per_sample: usize = if (P <= 8) 1 else 2;
 
     var state: codec.ScanState = undefined;
-    initScanState(&state, P, scan.NEAR, preset.*);
+    initScanState(&state, P, scan.NEAR, preset.*, scan.derivation);
 
     var br = bitstream.BitReader.init(data);
     defer report.capture(&br);
@@ -960,7 +1053,7 @@ fn decodeScanLine(
     const bytes_per_sample: usize = if (P <= 8) 1 else 2;
 
     var state: codec.ScanState = undefined;
-    initScanState(&state, P, scan.NEAR, preset.*);
+    initScanState(&state, P, scan.NEAR, preset.*, scan.derivation);
 
     var br = bitstream.BitReader.init(data);
     defer report.capture(&br);
@@ -1060,7 +1153,7 @@ fn decodeScanRgb(
     const bytes_per_sample: usize = if (P <= 8) 1 else 2;
 
     var state: codec.ScanState = undefined;
-    initScanState(&state, P, scan.NEAR, preset.*);
+    initScanState(&state, P, scan.NEAR, preset.*, scan.derivation);
 
     var br = bitstream.BitReader.init(data);
     defer report.capture(&br);
@@ -1274,7 +1367,7 @@ test "decodeRun: a run residual past the end of the line is RunModeInvalid (find
     // RUNindex 12 gives J = 3: a 0 bit ends the run, then 3 residual bits.
     // Residual 7 on a 4-sample line overruns it. Bits: 0 111 0000.
     var state: codec.ScanState = undefined;
-    initScanState(&state, 8, 0, .{});
+    initScanState(&state, 8, 0, .{}, .spec);
     state.run_index[0] = 12;
     try std.testing.expectEqual(@as(u8, 3), codec.J_TABLE[12]);
     var br = bitstream.BitReader.init(&.{ 0x70, 0x00, 0x00, 0x00 });
@@ -1297,4 +1390,43 @@ test "every ScanFault is recognized and maps to its finding code" {
         try std.testing.expectEqual(pair[1], faultFinding(fault).code);
     }
     try std.testing.expectEqual(@as(?ScanFault, null), asFault(error.TruncatedStream));
+}
+
+test "resetMaxval follows T.87 A.2.1 for the MAXVAL in force" {
+    var state: codec.ScanState = undefined;
+    // MAXVAL 127: bpp 7, RANGE 128, qbpp 7, LIMIT 2*(7+8) = 30.
+    state.resetMaxval(127, 0);
+    try std.testing.expectEqual(@as(u8, 7), state.bpp);
+    try std.testing.expectEqual(@as(u32, 128), state.RANGE);
+    try std.testing.expectEqual(@as(u8, 7), state.qbpp);
+    try std.testing.expectEqual(@as(u8, 30), state.LIMIT);
+    // MAXVAL 128 needs 8 bits: bpp = ceil(log2(MAXVAL + 1)).
+    state.resetMaxval(128, 0);
+    try std.testing.expectEqual(@as(u8, 8), state.bpp);
+    // MAXVAL 2, NEAR 1: RANGE = (2 + 2) / 3 + 1 = 2, so qbpp = 1 (no floor
+    // of 2); bpp keeps its floor of 2.
+    state.resetMaxval(2, 1);
+    try std.testing.expectEqual(@as(u32, 2), state.RANGE);
+    try std.testing.expectEqual(@as(u8, 1), state.qbpp);
+    try std.testing.expectEqual(@as(u8, 2), state.bpp);
+}
+
+test "initScanState: the CharLS derivation codes from 2^P - 1, thresholds from the LSE MAXVAL" {
+    var spec: codec.ScanState = undefined;
+    var charls: codec.ScanState = undefined;
+    const preset: PresetParams = .{ .MAXVAL = 100 };
+    initScanState(&spec, 8, 0, preset, .spec);
+    initScanState(&charls, 8, 0, preset, .charls);
+    try std.testing.expectEqual(@as(u32, 100), spec.MAXVAL);
+    try std.testing.expectEqual(@as(u32, 101), spec.RANGE);
+    try std.testing.expectEqual(@as(u32, 255), charls.MAXVAL);
+    try std.testing.expectEqual(@as(u32, 256), charls.RANGE);
+    try std.testing.expectEqual(@as(u8, 8), charls.qbpp);
+    // C.2.4.1.1.1 for MAXVAL 100 < 128: FACTOR 256 / 101 = 2, so T1 =
+    // max(2, 3/2) = 2, T2 = max(3, 7/2) = 3, T3 = max(4, 21/2) = 10.
+    for ([_]*const codec.ScanState{ &spec, &charls }) |s| {
+        try std.testing.expectEqual(@as(u32, 2), s.T1);
+        try std.testing.expectEqual(@as(u32, 3), s.T2);
+        try std.testing.expectEqual(@as(u32, 10), s.T3);
+    }
 }

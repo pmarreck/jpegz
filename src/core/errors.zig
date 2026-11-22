@@ -220,6 +220,13 @@ pub const FindingCode = enum(u32) {
     // bits" (unlike T.81's 1-fill, 62). FAIL at the pad byte, detail the
     // bit count.
     jpegls_padding_not_zeros = 123,
+    // Proposed to validate 2026-11-22 (number pending approval). INFO: an
+    // LSE ID 1 MAXVAL below 2^P - 1 scan also, or only, decodes cleanly
+    // under CharLS 3.0's RANGE-from-P coding; T.87 A.2.1 derives RANGE,
+    // qbpp, bpp and LIMIT from MAXVAL. Detail `also_charls` (valid; pixel
+    // values depend on the decoder) or `only_charls` (unsupported). Offset:
+    // the LSE marker.
+    jpegls_maxval_derivation = 127,
 
     // ── JPEG 2000 (140..179) ─────────────────────────────────────
     jp2_invalid_signature = 140,

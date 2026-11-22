@@ -78,10 +78,18 @@ pub const ScanState = struct {
     /// when MAXVAL/NEAR are at the standard 8-bit defaults; for
     /// other configurations they're recomputed per Eq. A.8.
     pub fn reset(self: *ScanState, bpp: u8, near: u32) void {
-        const MAXVAL: u32 = (@as(u32, 1) << @intCast(bpp)) - 1;
+        self.resetMaxval((@as(u32, 1) << @intCast(bpp)) - 1, near);
+    }
+
+    /// T.87 A.2.1 step 1 for the MAXVAL in force (an LSE ID 1 value or
+    /// the default 2^P - 1): RANGE = floor((MAXVAL + 2 NEAR) / (2 NEAR +
+    /// 1)) + 1, qbpp = ceil(log2 RANGE), bpp = max(2, ceil(log2(MAXVAL +
+    /// 1))) and LIMIT from bpp. Default thresholds follow MAXVAL as well.
+    pub fn resetMaxval(self: *ScanState, MAXVAL: u32, near: u32) void {
         const RANGE: u32 = (MAXVAL + 2 * near) / (2 * near + 1) + 1;
         const initial_A: u32 = @max(2, (RANGE + 32) >> 6);
-        const qbpp: u8 = @intCast(@max(2, std.math.log2_int_ceil(u32, RANGE)));
+        const qbpp: u8 = @intCast(std.math.log2_int_ceil(u32, RANGE));
+        const bpp: u8 = @intCast(@max(2, std.math.log2_int_ceil(u32, MAXVAL + 1)));
         self.MAXVAL = MAXVAL;
         self.NEAR = near;
         self.RESET = 64; // T.87 default

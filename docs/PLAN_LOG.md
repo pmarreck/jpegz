@@ -175,3 +175,4 @@ Completed PLAN.md items retired by plan-retire, oldest retirement first.
 ## Retired 2026-11-22
 
 - [x] [Deferred] Inventory remaining T.81/T.87 gaps including DNL, multiscan lossless, differential/hierarchical modes and uncommon component layouts. Done: inventory written; DNL for DCT frames honored (ecf812b); misplaced DNL 72 and differential SOF without DHP 73 shipped with validate approval (0be9de3) (context: docs/plan_context/t81-t87-gap-inventory-2026-11-21.md; done 2026-11-21 13:45 EST).
+- [x] [JPEG-LS conformance] Fix JPEG-LS decode against the T.87 Annex E conformance streams. Done: LSE marker FF F8 (was FF F2), near-lossless k=0 correction, default thresholds above 8 bits; t8nde0/3 and t16e0/3 pass; custom LSE MAXVAL is NotImplemented (commit 29a183d; done 2026-11-21 15:45 EST).
