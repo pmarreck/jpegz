@@ -25,5 +25,14 @@ pub const lossless_gray12 = @embedFile("fixtures/lossless_4x4_gray12.jpg");
 pub const arith_baseline_gray = @embedFile("fixtures/arith_baseline_8x8_gray.jpg");
 pub const arith_baseline_rgb = @embedFile("fixtures/arith_baseline_16x16_rgb_420.jpg");
 pub const arith_progressive_gray = @embedFile("fixtures/arith_progressive_8x8_gray.jpg");
+// JPEG-LS (T.87): mono, sample- and line-interleaved RGB, 16-bit, near-
+// lossless and an LSE ID 4 oversize frame. Restart streams come from the
+// staged charls input (`jpegls_conformance`).
+pub const jpegls_gray8 = @embedFile("fixtures/jpegls_4x4_gray8.jls");
+pub const jpegls_rgb8 = @embedFile("fixtures/jpegls_4x4_rgb8.jls");
+pub const jpegls_rgb8_ilv1 = @embedFile("fixtures/jpegls_4x4_rgb8_ilv1.jls");
+pub const jpegls_gray16 = @embedFile("fixtures/jpegls_4x4_gray16.jls");
+pub const jpegls_near2 = @embedFile("fixtures/jpegls_8x8_gray8_near2.jls");
+pub const jpegls_oversize = @embedFile("fixtures/jpegls_65536x1_gray8.jls");
 /// Bounded-campaign crasher (seed 0x6a706567): AC refinement with Al=15.
 pub const fuzz_progressive_ac_refine_al15 = @embedFile("fixtures/fuzz_progressive_ac_refine_al15.jpg");

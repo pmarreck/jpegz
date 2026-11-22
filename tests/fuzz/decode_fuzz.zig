@@ -55,6 +55,14 @@ const seed_arith_baseline = withLenPrefix(seed.arith_baseline_gray);
 const seed_arith_rgb = withLenPrefix(seed.arith_baseline_rgb);
 const seed_arith_progressive = withLenPrefix(seed.arith_progressive_gray);
 const seed_fuzz_progressive_al15 = withLenPrefix(seed.fuzz_progressive_ac_refine_al15);
+const seed_jls_gray8 = withLenPrefix(seed.jpegls_gray8);
+const seed_jls_rgb8 = withLenPrefix(seed.jpegls_rgb8);
+const seed_jls_rgb8_ilv1 = withLenPrefix(seed.jpegls_rgb8_ilv1);
+const seed_jls_gray16 = withLenPrefix(seed.jpegls_gray16);
+const seed_jls_near2 = withLenPrefix(seed.jpegls_near2);
+const seed_jls_oversize = withLenPrefix(seed.jpegls_oversize);
+// Empty when charls is not built (cross targets): a harmless empty input.
+const seed_jls_restart = withLenPrefix(@import("jpegls_conformance").test16_rm_5);
 
 const seeds = [_][]const u8{
     &seed_baseline_rgb,
@@ -74,6 +82,13 @@ const seeds = [_][]const u8{
     &seed_arith_rgb,
     &seed_arith_progressive,
     &seed_fuzz_progressive_al15,
+    &seed_jls_gray8,
+    &seed_jls_rgb8,
+    &seed_jls_rgb8_ilv1,
+    &seed_jls_gray16,
+    &seed_jls_near2,
+    &seed_jls_oversize,
+    &seed_jls_restart,
 };
 // Saved crash inputs from tests/fuzz/regressions/decode_fuzz/ follow the seeds.
 // Each is the exact byte stream the fuzzer recorded, so it replays here on

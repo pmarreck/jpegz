@@ -678,9 +678,10 @@ pub fn build(b: *std.Build) void {
             \\
         );
     }
-    decode_mod.addImport("jpegls_conformance", b.createModule(.{
+    const jpegls_conformance_mod = b.createModule(.{
         .root_source_file = conformance_files.getDirectory().path(b, "conformance.zig"),
-    }));
+    });
+    decode_mod.addImport("jpegls_conformance", jpegls_conformance_mod);
     const decode_tests = b.addTest(.{
         .name = "decode",
         .root_module = decode_mod,
@@ -815,6 +816,7 @@ pub fn build(b: *std.Build) void {
     decode_fuzz_mod.addImport("jpegz", jpegz_mod);
     linkJpegSystemDeps(decode_fuzz_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
     decode_fuzz_mod.addImport("seed", seed_corpus_mod);
+    decode_fuzz_mod.addImport("jpegls_conformance", jpegls_conformance_mod);
     decode_fuzz_mod.addImport("regressions", fuzz_regressions_mod);
     const decode_fuzz_tests = b.addTest(.{
         .name = "decode_fuzz",
@@ -830,6 +832,7 @@ pub fn build(b: *std.Build) void {
     validate_fuzz_mod.addImport("jpegz", jpegz_mod);
     linkJpegSystemDeps(validate_fuzz_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
     validate_fuzz_mod.addImport("seed", seed_corpus_mod);
+    validate_fuzz_mod.addImport("jpegls_conformance", jpegls_conformance_mod);
     validate_fuzz_mod.addImport("regressions", fuzz_regressions_mod);
     const validate_fuzz_tests = b.addTest(.{
         .name = "validate_fuzz",

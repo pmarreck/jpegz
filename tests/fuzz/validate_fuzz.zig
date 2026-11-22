@@ -34,6 +34,10 @@ const seed_trailing = withLenPrefix(seed.baseline_trailing);
 const seed_progressive = withLenPrefix(seed.progressive_rgb);
 const seed_lossless = withLenPrefix(seed.lossless_gray);
 const seed_arith = withLenPrefix(seed.arith_baseline_gray);
+const seed_jls_gray8 = withLenPrefix(seed.jpegls_gray8);
+const seed_jls_rgb8_ilv1 = withLenPrefix(seed.jpegls_rgb8_ilv1);
+const seed_jls_gray16 = withLenPrefix(seed.jpegls_gray16);
+const seed_jls_restart = withLenPrefix(@import("jpegls_conformance").test16_rm_5);
 
 const seeds = [_][]const u8{
     &seed_baseline_rgb,
@@ -44,6 +48,10 @@ const seeds = [_][]const u8{
     &seed_progressive,
     &seed_lossless,
     &seed_arith,
+    &seed_jls_gray8,
+    &seed_jls_rgb8_ilv1,
+    &seed_jls_gray16,
+    &seed_jls_restart,
 };
 // Saved crash inputs from tests/fuzz/regressions/validate_fuzz/ follow the seeds.
 // Each is the exact byte stream the fuzzer recorded, so it replays here on
