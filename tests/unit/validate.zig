@@ -1436,7 +1436,13 @@ test "sequential SOF sampling nibbles classify the complete byte set" {
 }
 
 test "sampling finding scope and complete component guards classify every frame count" {
-	const allocator = std.testing.allocator;
+	// Leak-checked like std.testing.allocator, without its 10-frame stack
+	// capture per allocation: a frame of 255 bad components yields 510
+	// findings, and across 2,048 validations the unwinding took about 3 s
+	// of this test's 8 (perf, 2026-11-22).
+	var leak_checked: std.heap.DebugAllocator(.{ .stack_trace_frames = 0 }) = .init;
+	defer if (leak_checked.deinit() == .leak) @panic("sampling sweep leaked");
+	const allocator = leak_checked.allocator();
 	for ([_]u8{ 0xc0, 0xc1, 0xc2, 0xc3, 0xc9, 0xca, 0xcb, 0xf7 }) |marker| {
 		for (0..256) |count| {
 			const length = 8 + 3 * count;

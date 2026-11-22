@@ -451,7 +451,11 @@ pub fn build(b: *std.Build) void {
     const check_codes = b.addRunArtifact(gen_codes_exe);
     check_codes.addArg("--check");
     check_codes.addFileArg(b.path("docs/FINDING_CODES.md"));
+    // Run only tests whose names contain this text, in every test binary:
+    // for timing and bisection. The full suite passes none.
+    const test_filters: []const []const u8 = b.option([]const []const u8, "test-filter", "Run only tests whose names contain this text") orelse &.{};
     const provenance_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "finding_provenance",
         .root_module = provenance_mod,
     });
@@ -497,6 +501,7 @@ pub fn build(b: *std.Build) void {
     smoke_mod.addImport("jpegz", jpegz_mod);
     linkJpegSystemDeps(smoke_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
     const smoke_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "smoke",
         .root_module = smoke_mod,
     });
@@ -507,6 +512,7 @@ pub fn build(b: *std.Build) void {
 	// Inspecting the provider's enums also emits its C API exports.
 	if (with_jxl) linkBrotli(jpegz_test_mod, brotli_lib_dir);
     const jpegz_inline_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "jpegz_inline",
         .root_module = jpegz_test_mod,
     });
@@ -520,6 +526,7 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
     });
     const bitstream_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "decode_bitstream",
         .root_module = bitstream_mod,
     });
@@ -532,6 +539,7 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
     });
     const huffman_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "decode_huffman",
         .root_module = huffman_mod,
     });
@@ -544,6 +552,7 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
     });
     const idct_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "decode_idct",
         .root_module = idct_mod,
     });
@@ -556,6 +565,7 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
     });
     const last_error_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "core_last_error",
         .root_module = last_error_mod,
     });
@@ -568,6 +578,7 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
     });
     const arith_coder_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "decode_arith_coder",
         .root_module = arith_coder_mod,
     });
@@ -580,6 +591,7 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
     });
     const jpegls_bitstream_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "decode_jpegls_bitstream",
         .root_module = jpegls_bitstream_mod,
     });
@@ -688,6 +700,7 @@ pub fn build(b: *std.Build) void {
     });
     decode_mod.addImport("jpegls_conformance", jpegls_conformance_mod);
     const decode_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "decode",
         .root_module = decode_mod,
     });
@@ -703,6 +716,7 @@ pub fn build(b: *std.Build) void {
     validate_mod.addImport("jpegz", jpegz_mod);
     linkJpegSystemDeps(validate_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
     const validate_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "validate",
         .root_module = validate_mod,
     });
@@ -720,6 +734,7 @@ pub fn build(b: *std.Build) void {
     if (with_jxl) linkBrotli(facade_validation_test_mod, brotli_lib_dir);
     facade_validation_test_mod.addImport("jpegz", jpegz_validation_mod);
     const facade_validation_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "facade_validation",
         .root_module = facade_validation_test_mod,
     });
@@ -745,6 +760,7 @@ pub fn build(b: *std.Build) void {
     });
     i18n_test_mod.addImport("jpegz", jpegz_validation_mod);
     const i18n_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "i18n",
         .root_module = i18n_test_mod,
     });
@@ -784,6 +800,7 @@ pub fn build(b: *std.Build) void {
     decode_jp2_mod.addImport("jpegz", jpegz_mod);
     linkJpegSystemDeps(decode_jp2_mod, with_libjpeg_oracle, with_jp2_decode, opt_libjpeg_lib, opt_openjpeg_lib);
     const decode_jp2_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "decode_jp2",
         .root_module = decode_jp2_mod,
     });
@@ -824,6 +841,7 @@ pub fn build(b: *std.Build) void {
     decode_fuzz_mod.addImport("jpegls_conformance", jpegls_conformance_mod);
     decode_fuzz_mod.addImport("regressions", fuzz_regressions_mod);
     const decode_fuzz_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "decode_fuzz",
         .root_module = decode_fuzz_mod,
     });
@@ -840,6 +858,7 @@ pub fn build(b: *std.Build) void {
     validate_fuzz_mod.addImport("jpegls_conformance", jpegls_conformance_mod);
     validate_fuzz_mod.addImport("regressions", fuzz_regressions_mod);
     const validate_fuzz_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "validate_fuzz",
         .root_module = validate_fuzz_mod,
     });
@@ -943,6 +962,7 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
     });
     const coverage_tests = b.addTest(.{
+        .filters = test_filters,
         .name = "coverage_stats",
         .root_module = coverage_mod,
     });
