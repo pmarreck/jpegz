@@ -289,6 +289,10 @@ pub const ScanInfo = struct {
     mapping_table: bool = false,
     /// Which MAXVAL drives RANGE, qbpp, bpp and LIMIT (see `Derivation`).
     derivation: Derivation = .spec,
+    /// Point transform Pt (SOS Al, T.87 4.3.2): output samples are Rx << Pt.
+    pt: u4 = 0,
+    /// Offset of the SOS Al:Ah byte, for finding 128.
+    al_at: usize = 0,
 };
 
 /// `spec`: T.87 A.2.1, from the MAXVAL in force. `charls`: CharLS 3.0's
@@ -452,12 +456,16 @@ pub fn decodeWithOptions(
                     const ci = scan.comp_indices[0];
                     if (planes[ci] != null) return error.InvalidMarker;
                     planes[ci] = try decodeScanChecked(allocator, data, pos, &frame.?, &scan, &preset, lse_at, options.findings_sink);
+                    try applyPointTransform(&planes[ci].?, &frame.?, &scan, options.findings_sink);
                     planes_done += 1;
                     if (planes_done == frame.?.num_components) return interleavePlanes(allocator, &frame.?, &planes);
                     pos = endOfScan(data, pos) orelse return error.TruncatedStream;
                     continue;
                 }
-                return decodeScanChecked(allocator, data, pos, &frame.?, &scan, &preset, lse_at, options.findings_sink);
+                var image = try decodeScanChecked(allocator, data, pos, &frame.?, &scan, &preset, lse_at, options.findings_sink);
+                errdefer image.deinit(allocator);
+                try applyPointTransform(&image, &frame.?, &scan, options.findings_sink);
+                return image;
             },
             // Standalone markers we can skip safely (RST, TEM, SOI/EOI
             // shouldn't appear here; treat as no-op).
@@ -588,6 +596,44 @@ fn decodeScanChecked(
     return spec_err.?;
 }
 
+/// T.87 4.3.2: the decoder output is Rx * 2^Pt. A sample whose shifted
+/// value exceeds 2^P - 1 has no P-bit representation: it saturates to
+/// 2^P - 1 and the scan gets one FAIL 128 (validate ruling 2026-11-22) at
+/// the SOS Al byte, naming the first such sample and the count.
+fn applyPointTransform(image: *types.Image, frame: *const FrameInfo, scan: *const ScanInfo, sink: ?*findings_mod.FindingsSink) Error!void {
+    if (scan.pt == 0) return;
+    const max: u32 = (@as(u32, 1) << @intCast(frame.P)) - 1;
+    const channels: usize = image.channels;
+    const wide = frame.P > 8;
+    const samples = @as(usize, image.width) * image.height * channels;
+    var count: usize = 0;
+    var first: usize = 0;
+    var first_rx: u32 = 0;
+    for (0..samples) |i| {
+        const rx: u32 = if (wide) std.mem.readInt(u16, image.pixels[2 * i ..][0..2], native_endian) else image.pixels[i];
+        var v = rx << scan.pt;
+        if (v > max) {
+            if (count == 0) {
+                first = i;
+                first_rx = rx;
+            }
+            count += 1;
+            v = max;
+        }
+        if (wide) std.mem.writeInt(u16, image.pixels[2 * i ..][0..2], @intCast(v), native_endian) else image.pixels[i] = @intCast(v);
+    }
+    if (count == 0) return;
+    const s = sink orelse return;
+    const pixel = first / channels;
+    // One plane per scan for ILV 0; otherwise channels follow frame order.
+    const comp = if (channels == 1) scan.comp_indices[0] else first % channels;
+    var buf: [192]u8 = undefined;
+    const detail = std.fmt.bufPrint(&buf, "component {d}, line {d}, column {d}: Rx {d} << Pt {d} exceeds 2^P - 1 = {d}; {d} sample(s) saturated (T.87 4.3.2)", .{
+        frame.components[comp].id, pixel / image.width, pixel % image.width, first_rx, scan.pt, max, count,
+    }) catch buf[0..0];
+    s.emit(.fail, .jpegls_point_transform_overflow, scan.al_at, detail) catch return error.OutOfMemory;
+}
+
 fn emitDerivation(sink: ?*findings_mod.FindingsSink, lse_at: ?usize, detail: []const u8) Error!void {
     const s = sink orelse return;
     if (lse_at) |at|
@@ -684,6 +730,7 @@ fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
     var info: ScanInfo = undefined;
     info.restart_interval = 0;
     info.mapping_table = false;
+    info.derivation = .spec;
     info.num_components = data[pos + 2];
     if (info.num_components == 0 or info.num_components > 4) return error.InvalidMarker;
     var i: usize = 0;
@@ -705,9 +752,12 @@ fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
         if (!found) return error.InvalidMarker;
     }
     const tail = pos + 3 + info.num_components * 2;
+    if (tail + 2 >= pos + seg_len) return error.InvalidMarker;
     info.NEAR = data[tail];
     info.ILV = data[tail + 1];
-    // Al:Ah byte exists but is unused for JPEG-LS (T.81-compat field).
+    // Al is the point transform Pt (T.87 C.2.3); Ah is ignored.
+    info.pt = @truncate(data[tail + 2]);
+    info.al_at = tail + 2;
     return info;
 }
 

@@ -52,7 +52,11 @@ such a scan is decoded both ways (validate ruling 2026-11-22). INFO 127
 depend on the decoder), and `only_charls` when only CharLS's coding does
 (unsupported, until a known-defect admission). When only A.2.1 decodes
 cleanly, the scan is valid; when neither does, the A.2.1 findings stand.
-Subsampled components are "codec not checked".
+Subsampled components are "codec not checked". The point transform Pt (SOS
+Al, T.87 4.3.2) scales the output to Rx · 2^Pt. A sample whose scaled value
+exceeds 2^P−1 saturates to 2^P−1, and its scan gets one FAIL 128
+`jpegls_point_transform_overflow` at the SOS Al byte (not exact), naming the
+first such sample (component, line, column, Rx, Pt) and the count.
 Multi-component ILV 0 (one scan per component, conformance t8c0e0/3) is
 decoded scan by scan and interleaved; a component coded by two scans is
 `InvalidMarker`. An LSE ID 4 (T.87 C.2.4.1.4) fills a SOF55 dimension left

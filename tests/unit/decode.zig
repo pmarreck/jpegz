@@ -3328,3 +3328,121 @@ test "JPEG-LS DNL with a nonzero SOF55 Y is 72 dnl_misplaced (WARN when NL agree
     try std.testing.expect(std.mem.startsWith(u8, f.detail.?, "with_nonzero_y"));
     try std.testing.expect(f.offset_is_exact and f.offset.? == jlsFirstScanEnd(src));
 }
+
+/// `src` with the Al (point transform Pt) of every SOS set to `pt`. Only
+/// headers are searched: each scan's entropy data is skipped.
+fn jlsWithPt(allocator: std.mem.Allocator, src: []const u8, pt: u4) ![]u8 {
+    const out = try allocator.dupe(u8, src);
+    var from: usize = 0;
+    while (std.mem.indexOfPos(u8, out, from, &.{ 0xff, 0xda })) |sos| {
+        const len = std.mem.readInt(u16, out[sos + 2 ..][0..2], .big);
+        const al = sos + 2 + len - 1;
+        out[al] = (out[al] & 0xf0) | pt;
+        from = sos + jlsFirstScanEnd(out[sos..]);
+    }
+    return out;
+}
+
+fn ptSample(x: usize, y: usize) u8 {
+    return @intCast(((x * 37 + y * 91) ^ (x * y)) % 128);
+}
+
+test "JPEG-LS point transform: output is Rx << Pt (T.87 4.3.2), 127 << 1 fits" {
+    const allocator = std.testing.allocator;
+    const data = try jlsWithPt(allocator, @embedFile("fixtures/jpegls_16x16_gray8_max127.jls"), 1);
+    defer allocator.free(data);
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, data);
+    defer image.deinit(allocator);
+    for (0..16) |y| for (0..16) |x| {
+        try std.testing.expectEqual(ptSample(x, y) * 2, image.pixels[y * 16 + x]);
+    };
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(.decoded, report.codec_check);
+    for (report.findings.items) |f| try std.testing.expect(f.severity == .info);
+}
+
+test "JPEG-LS point transform overflow is FAIL 128 and saturates the sample" {
+    const allocator = std.testing.allocator;
+    const src = @embedFile("fixtures/jpegls_16x16_gray8_one128.jls");
+    // Pt = 0: sample (5, 9) is 128 and the stream is valid.
+    {
+        var image = try jpegz.jpegls_cleanroom_decode(allocator, src);
+        defer image.deinit(allocator);
+        try std.testing.expectEqual(@as(u8, 128), image.pixels[5 * 16 + 9]);
+    }
+    const data = try jlsWithPt(allocator, src, 1);
+    defer allocator.free(data);
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, data);
+    defer image.deinit(allocator);
+    for (0..16) |y| for (0..16) |x| {
+        const want: u8 = if (y == 5 and x == 9) 255 else ptSample(x, y) * 2;
+        try std.testing.expectEqual(want, image.pixels[y * 16 + x]);
+    };
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    const f = onlyFail(report, .jpegls_point_transform_overflow) orelse {
+        dumpFindings("Pt overflow", report);
+        return error.TestUnexpectedResult;
+    };
+    const sos = std.mem.indexOf(u8, data, &.{ 0xff, 0xda }).?;
+    try std.testing.expectEqual(@as(u64, sos + 2 + std.mem.readInt(u16, data[sos + 2 ..][0..2], .big) - 1), f.offset.?);
+    try std.testing.expect(!f.offset_is_exact);
+    try std.testing.expect(std.mem.indexOf(u8, f.detail.?, "line 5, column 9: Rx 128 << Pt 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, f.detail.?, "1 sample(s)") != null);
+}
+
+test "JPEG-LS point transform applies to each ILV 0 scan, with one 128 per overflowing scan" {
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const src = jpegls_conformance.t8c0e0;
+    var plain = try jpegz.jpegls_cleanroom_decode(allocator, src);
+    defer plain.deinit(allocator);
+    const data = try jlsWithPt(allocator, src, 1);
+    defer allocator.free(data);
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, data);
+    defer image.deinit(allocator);
+    var over = [_]bool{ false, false, false };
+    for (plain.pixels, image.pixels, 0..) |rx, got, i| {
+        if (@as(u16, rx) << 1 > 255) over[i % 3] = true;
+        try std.testing.expectEqual(@as(u8, @intCast(@min(@as(u16, rx) << 1, 255))), got);
+    }
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    var fails: usize = 0;
+    for (report.findings.items) |f| if (f.severity == .fail) {
+        try std.testing.expectEqual(jpegz.FindingCode.jpegls_point_transform_overflow, f.code);
+        fails += 1;
+    };
+    var want: usize = 0;
+    for (over) |o| want += @intFromBool(o);
+    try std.testing.expect(want > 0);
+    try std.testing.expectEqual(want, fails);
+}
+
+test "JPEG-LS point transform on a 12-bit scan saturates at 4095 and counts every sample" {
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const src = jpegls_conformance.t16e0;
+    var plain = try jpegz.jpegls_cleanroom_decode(allocator, src);
+    defer plain.deinit(allocator);
+    const data = try jlsWithPt(allocator, src, 4);
+    defer allocator.free(data);
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, data);
+    defer image.deinit(allocator);
+    var over: usize = 0;
+    var i: usize = 0;
+    while (i < plain.pixels.len) : (i += 2) {
+        const rx = std.mem.readInt(u16, plain.pixels[i..][0..2], @import("builtin").cpu.arch.endian());
+        const got = std.mem.readInt(u16, image.pixels[i..][0..2], @import("builtin").cpu.arch.endian());
+        const shifted = @as(u32, rx) << 4;
+        if (shifted > 4095) over += 1;
+        try std.testing.expectEqual(@as(u16, @intCast(@min(shifted, 4095))), got);
+    }
+    try std.testing.expect(over > 0);
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    const f = onlyFail(report, .jpegls_point_transform_overflow) orelse return error.TestUnexpectedResult;
+    var buf: [32]u8 = undefined;
+    try std.testing.expect(std.mem.indexOf(u8, f.detail.?, try std.fmt.bufPrint(&buf, "{d} sample(s)", .{over})) != null);
+}

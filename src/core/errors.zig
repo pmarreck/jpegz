@@ -227,6 +227,11 @@ pub const FindingCode = enum(u32) {
     // values depend on the decoder) or `only_charls` (unsupported). Offset:
     // the LSE marker.
     jpegls_maxval_derivation = 127,
+    // validate-approved 2026-11-22. FAIL: a JPEG-LS sample whose point
+    // transform output Rx * 2^Pt (T.87 4.3.2) exceeds 2^P - 1. The output
+    // saturates to 2^P - 1. One per scan, at the SOS Al byte (not exact);
+    // detail: component, line, column, Rx, Pt and the count.
+    jpegls_point_transform_overflow = 128,
 
     // ── JPEG 2000 (140..179) ─────────────────────────────────────
     jp2_invalid_signature = 140,

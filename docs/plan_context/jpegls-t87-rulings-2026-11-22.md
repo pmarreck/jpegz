@@ -73,3 +73,17 @@ Windows binaries and was not run.
   default MAXVAL is 2^P - 1 whatever Pt is.
 - **Before shipping:** a corpus report and controlled reds, including a
   CharLS-made mapping-table stream.
+
+## Point transform overflow (validate ruling 2026-11-22)
+
+- **128 `jpegls_point_transform_overflow`, FAIL:** a sample with
+  Rx · 2^Pt > 2^P − 1.
+  - The output saturates to 2^P − 1, never wraps.
+  - One record per scan, at the first occurrence, with the count. Offset:
+    the SOS Al byte (not exact), unless the exact bit is tracked.
+  - It applies only to unmapped components, since 125 covers Pt with a
+    mapping table.
+- **No finding** for an LSE MAXVAL above (2^P − 1) >> Pt, because Table
+  C.2's default does the same.
+- **Key fixtures:** Pt = 1 with one overflowing Rx (128 at P = 8), and a
+  control whose largest sample, 127, shifts to 254.

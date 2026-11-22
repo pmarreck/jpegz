@@ -542,7 +542,7 @@ pub fn classicFindingVerdict(code: FindingCode, severity: Severity) StrictVerdic
 		.dct_coefficient_overflow, .progressive_scan_invalid, .adobe_app14_conflicts_jfif, .invalid_dimensions,
 		.entropy_padding_not_ones, .sequential_scan_invalid, .jfif_metadata_invalid, .sof_sampling_invalid,
 		.lossless_predictor_invalid, .lossless_pointtransform_invalid, .jpegls_invalid_run_mode,
-		.jpegls_context_table_invalid, .jpegls_golomb_code_invalid, .jpegls_padding_not_zeros, .jpegls_maxval_derivation, .jp2_invalid_signature, .jp2_invalid_codestream,
+		.jpegls_context_table_invalid, .jpegls_golomb_code_invalid, .jpegls_padding_not_zeros, .jpegls_maxval_derivation, .jpegls_point_transform_overflow, .jp2_invalid_signature, .jp2_invalid_codestream,
 		.jp2_bad_progression_order, .jp2_tile_decode_failed, .jp2_codeblock_decode_failed,
 		.jp2_unsupported_marker_ignored, .jp2_invalid_siz, .jxl_invalid_signature, .jxl_truncated,
 		.jxl_malformed, .jxl_unsupported_feature, .jxl_resource_limit, .jxl_out_of_memory,

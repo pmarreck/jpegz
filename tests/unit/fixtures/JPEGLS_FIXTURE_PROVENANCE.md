@@ -88,3 +88,12 @@ zig c++ -o spec gen.o $O_without_make_scan_codec spec_codec.o
 
 The packs and their verdicts are reported in
 `docs/plan_context/jpegls-t87-rulings-2026-11-22.md`.
+
+## Point transform
+
+`jpegls_16x16_gray8_max127.jls` and `jpegls_16x16_gray8_one128.jls` are
+stock CharLS 3.0.0 streams: 16 × 16, P = 8, NEAR 0, with samples
+`v[y*16+x] = ((x*37 + y*91) ^ (x*y)) % 128`. In `one128`, sample
+(line 5, column 9) is set to 128. CharLS writes Al = 0, and the tests set
+the point transform Pt = 1 in the SOS Al. 127 << 1 = 254 fits in 8 bits;
+128 << 1 = 256 does not (T.87 4.3.2, finding 128).
