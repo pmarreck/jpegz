@@ -293,7 +293,22 @@ pub const ScanInfo = struct {
     pt: u4 = 0,
     /// Offset of the SOS Al:Ah byte, for finding 128.
     al_at: usize = 0,
+    /// Mapping table selector Tmi per scan component, and its byte offset
+    /// (T.87 C.2.3); 0 selects no table.
+    tmi: [4]u8 = .{ 0, 0, 0, 0 },
+    tmi_at: [4]usize = .{ 0, 0, 0, 0 },
 };
+
+/// A mapping table assembled from an LSE ID 2 and its ID 3 continuations
+/// (T.87 C.2.4.1.2-3): `wt` bytes per entry, entries in ascending Rx.
+const MappingTable = struct {
+    lse_at: usize,
+    wt: u8,
+    bytes: std.ArrayList(u8),
+};
+
+/// The most recent mapping-table segment, for the continuation rule.
+const MappingTail = struct { tid: u8, wt: u8, end: usize };
 
 /// `spec`: T.87 A.2.1, from the MAXVAL in force. `charls`: CharLS 3.0's
 /// coding of an LSE ID 1 MAXVAL below 2^P - 1, from 2^P - 1 regardless
@@ -324,6 +339,10 @@ fn restartDue(scan: *const ScanInfo, y: u32) bool {
 /// zero-padded bits past the end, T.87 §A.5.3).
 pub const DecodeOptions = struct {
     findings_sink: ?*findings_mod.FindingsSink = null,
+    /// Apply mapping tables to the output (T.87 clause 7). Validation
+    /// passes false: the table indices are what the scan codes, and the
+    /// checks do not depend on how entries map to samples.
+    map_samples: bool = true,
 };
 
 /// Default-options entry — null sink, silent tolerance.
@@ -357,6 +376,10 @@ pub fn decodeWithOptions(
     var planes: [4]?types.Image = .{ null, null, null, null };
     var planes_done: usize = 0;
     defer for (&planes) |*plane| if (plane.*) |*image| image.deinit(allocator);
+    // Mapping tables by TID (T.87 C.2.4.1.2-3).
+    var tables: [256]?MappingTable = @splat(null);
+    defer for (&tables) |*slot| if (slot.*) |*table| table.bytes.deinit(allocator);
+    var mapping_tail: ?MappingTail = null;
 
     while (pos + 1 < data.len) {
         const skip_start = pos;
@@ -402,7 +425,12 @@ pub fn decodeWithOptions(
                     pos += parseSegmentLength(data, pos);
                     continue;
                 }
-                lse_at = pos - 2;
+                if (pos + 2 < data.len and (data[pos + 2] == 2 or data[pos + 2] == 3)) {
+                    try parseMapping(allocator, data, pos, &tables, &mapping_tail, options.findings_sink);
+                    pos += parseSegmentLength(data, pos);
+                    continue;
+                }
+                if (pos + 2 < data.len and data[pos + 2] == 1) lse_at = pos - 2;
                 try parseLse(data, pos, &preset);
                 pos += parseSegmentLength(data, pos);
             },
@@ -447,9 +475,7 @@ pub fn decodeWithOptions(
                     if (options.findings_sink) |sink| sink.emitExact(.fail, .jpegls_context_table_invalid, @intCast(at), @tagName(which)) catch return error.OutOfMemory;
                     return error.BackendError;
                 };
-                // Applying a mapping table is not implemented; returning the
-                // indices as samples would be a silent mis-decode.
-                if (scan.mapping_table) return error.NotImplemented;
+                if (scan.mapping_table) try checkMapping(&scan, &tables, preset, frame.?.P, options.findings_sink);
                 if (frame.?.num_components > 1 and scan.ILV == 0) {
                     // T.87 A.2: ILV 0 codes each component in its own scan.
                     if (scan.num_components != 1) return error.InvalidMarker;
@@ -457,6 +483,7 @@ pub fn decodeWithOptions(
                     if (planes[ci] != null) return error.InvalidMarker;
                     planes[ci] = try decodeScanChecked(allocator, data, pos, &frame.?, &scan, &preset, lse_at, options.findings_sink);
                     try applyPointTransform(&planes[ci].?, &frame.?, &scan, options.findings_sink);
+                    if (options.map_samples) try applyMapping(&planes[ci].?, &scan, &tables);
                     planes_done += 1;
                     if (planes_done == frame.?.num_components) return interleavePlanes(allocator, &frame.?, &planes);
                     pos = endOfScan(data, pos) orelse return error.TruncatedStream;
@@ -465,6 +492,7 @@ pub fn decodeWithOptions(
                 var image = try decodeScanChecked(allocator, data, pos, &frame.?, &scan, &preset, lse_at, options.findings_sink);
                 errdefer image.deinit(allocator);
                 try applyPointTransform(&image, &frame.?, &scan, options.findings_sink);
+                if (options.map_samples) try applyMapping(&image, &scan, &tables);
                 return image;
             },
             // Standalone markers we can skip safely (RST, TEM, SOI/EOI
@@ -610,6 +638,9 @@ fn applyPointTransform(image: *types.Image, frame: *const FrameInfo, scan: *cons
     var first: usize = 0;
     var first_rx: u32 = 0;
     for (0..samples) |i| {
+        // A mapped component takes no point transform (125 covers the
+        // pair); 128 is for unmapped components (validate ruling).
+        if (channelTmi(scan, channels, i % channels) != 0) continue;
         const rx: u32 = if (wide) std.mem.readInt(u16, image.pixels[2 * i ..][0..2], native_endian) else image.pixels[i];
         var v = rx << scan.pt;
         if (v > max) {
@@ -632,6 +663,121 @@ fn applyPointTransform(image: *types.Image, frame: *const FrameInfo, scan: *cons
         frame.components[comp].id, pixel / image.width, pixel % image.width, first_rx, scan.pt, max, count,
     }) catch buf[0..0];
     s.emit(.fail, .jpegls_point_transform_overflow, scan.al_at, detail) catch return error.OutOfMemory;
+}
+
+/// The Tmi that applies to image channel `channel`: an ILV 0 plane is the
+/// scan's one component; otherwise channels follow frame component order.
+fn channelTmi(scan: *const ScanInfo, channels: usize, channel: usize) u8 {
+    if (channels == 1) return scan.tmi[0];
+    for (0..scan.num_components) |i| if (scan.comp_indices[i] == channel) return scan.tmi[i];
+    return 0;
+}
+
+/// T.87 C.2.4.1.2-3: parse an LSE ID 2 (table specification) or ID 3
+/// (continuation). Segment-local violations are FAIL 126 whether or not a
+/// scan uses the table (validate ruling 2026-11-22).
+fn parseMapping(
+    allocator: Allocator,
+    data: []const u8,
+    pos: usize,
+    tables: *[256]?MappingTable,
+    tail: *?MappingTail,
+    sink: ?*findings_mod.FindingsSink,
+) Error!void {
+    const seg_len = parseSegmentLength(data, pos);
+    if (pos + seg_len > data.len) return error.TruncatedStream;
+    const marker_at = pos - 2;
+    if (seg_len < 5) return mappingFault(sink, pos, "length: Ll < 5 leaves no TID, Wt and entries (T.87 Table C.4)");
+    const id = data[pos + 2];
+    const tid = data[pos + 3];
+    const wt = data[pos + 4];
+    if (tid == 0) return mappingFault(sink, pos + 3, "tid_range: TID 0 (T.87 Table C.4: 1 to 255)");
+    if (wt == 0) return mappingFault(sink, pos + 4, "wt_range: Wt 0 (T.87 Table C.4: 1 to 255)");
+    const body = data[pos + 5 .. pos + seg_len];
+    if (body.len == 0 or body.len % wt != 0) {
+        var buf: [96]u8 = undefined;
+        const detail = std.fmt.bufPrint(&buf, "length: Ll {d} is not 5 + Wt {d} * (entries) (T.87 Table C.4)", .{ seg_len, wt }) catch buf[0..0];
+        return mappingFault(sink, pos, detail);
+    }
+    if (id == 3) {
+        // C.2.4.1.3: a continuation follows an ID 2 or ID 3 segment with
+        // the same TID and Wt; only FF fill may come between.
+        const prev = tail.* orelse return mappingFault(sink, marker_at, "continuation: LSE ID 3 without a preceding mapping table segment (T.87 C.2.4.1.3)");
+        const adjacent = prev.end <= marker_at and for (data[prev.end..marker_at]) |byte| {
+            if (byte != 0xFF) break false;
+        } else true;
+        if (!adjacent or prev.tid != tid or prev.wt != wt)
+            return mappingFault(sink, marker_at, "continuation: LSE ID 3 does not follow a mapping table segment with the same TID and Wt (T.87 C.2.4.1.3)");
+        try tables[tid].?.bytes.appendSlice(allocator, body);
+    } else {
+        // C.2.4.1: a later specification for a TID replaces the earlier one.
+        if (tables[tid]) |*old| old.bytes.deinit(allocator);
+        tables[tid] = .{ .lse_at = marker_at, .wt = wt, .bytes = .empty };
+        try tables[tid].?.bytes.appendSlice(allocator, body);
+    }
+    tail.* = .{ .tid = tid, .wt = wt, .end = pos + seg_len };
+}
+
+fn mappingFault(sink: ?*findings_mod.FindingsSink, offset: usize, detail: []const u8) Error {
+    if (sink) |s| s.emitExact(.fail, .jpegls_mapping_table_invalid, @intCast(offset), detail) catch return error.OutOfMemory;
+    return error.BackendError;
+}
+
+/// T.87 C.2.3 at a scan that selects mapping tables: Tmi with a nonzero
+/// Pt is WARN 125; a Tmi naming no table is FAIL 124; a table whose entry
+/// count is not MAXVAL + 1 for the MAXVAL in force is FAIL 126 `entries`
+/// at its LSE marker (validate rulings 2026-11-22).
+fn checkMapping(scan: *const ScanInfo, tables: *const [256]?MappingTable, preset: PresetParams, P: u8, sink: ?*findings_mod.FindingsSink) Error!void {
+    const maxval: u32 = if (preset.MAXVAL != 0) preset.MAXVAL else (@as(u32, 1) << @intCast(P)) - 1;
+    var buf: [128]u8 = undefined;
+    for (0..scan.num_components) |i| {
+        const tmi = scan.tmi[i];
+        if (tmi == 0) continue;
+        if (scan.pt != 0) if (sink) |s| {
+            const detail = std.fmt.bufPrint(&buf, "Tmi {d} with point transform Pt {d}; all Tmi shall be 0 (T.87 C.2.3)", .{ tmi, scan.pt }) catch buf[0..0];
+            s.emitExact(.warn, .jpegls_mapping_with_point_transform, @intCast(scan.tmi_at[i]), detail) catch return error.OutOfMemory;
+        };
+        const table = tables[tmi] orelse {
+            if (sink) |s| {
+                const detail = std.fmt.bufPrint(&buf, "TID {d} for scan component {d} is not specified (T.87 C.2.3)", .{ tmi, i }) catch buf[0..0];
+                s.emitExact(.fail, .jpegls_mapping_table_undefined, @intCast(scan.tmi_at[i]), detail) catch return error.OutOfMemory;
+            }
+            return error.BackendError;
+        };
+        const entries = table.bytes.items.len / table.wt;
+        if (entries != maxval + 1) {
+            if (sink) |s| {
+                const detail = std.fmt.bufPrint(&buf, "entries: TID {d} has {d} entries, not MAXVAL + 1 = {d}, at the scan at offset {d} (T.87 C.2.4.1.2)", .{ tmi, entries, maxval + 1, scan.tmi_at[i] }) catch buf[0..0];
+                s.emitExact(.fail, .jpegls_mapping_table_invalid, @intCast(table.lse_at), detail) catch return error.OutOfMemory;
+            }
+            return error.BackendError;
+        }
+    }
+}
+
+/// T.87 clause 7: map each decoded sample through its component's table.
+/// T.87 defines no interpretation for entries wider than one byte, so
+/// those return NotImplemented here; validation never maps.
+fn applyMapping(image: *types.Image, scan: *const ScanInfo, tables: *const [256]?MappingTable) Error!void {
+    if (!scan.mapping_table) return;
+    const channels: usize = image.channels;
+    const wide = image.bits_per_sample > 8;
+    for (0..channels) |ch| {
+        const tmi = channelTmi(scan, channels, ch);
+        if (tmi == 0) continue;
+        const table = tables[tmi].?;
+        if (table.wt != 1) return error.NotImplemented;
+        var i = ch;
+        while (i < @as(usize, image.width) * image.height * channels) : (i += channels) {
+            if (wide) {
+                const rx = std.mem.readInt(u16, image.pixels[2 * i ..][0..2], native_endian);
+                std.mem.writeInt(u16, image.pixels[2 * i ..][0..2], table.bytes.items[rx], native_endian);
+            } else {
+                const rx: usize = image.pixels[i];
+                image.pixels[i] = table.bytes.items[rx];
+            }
+        }
+    }
 }
 
 fn emitDerivation(sink: ?*findings_mod.FindingsSink, lse_at: ?usize, detail: []const u8) Error!void {
@@ -731,13 +877,17 @@ fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
     info.restart_interval = 0;
     info.mapping_table = false;
     info.derivation = .spec;
+    info.tmi = .{ 0, 0, 0, 0 };
+    info.tmi_at = .{ 0, 0, 0, 0 };
     info.num_components = data[pos + 2];
     if (info.num_components == 0 or info.num_components > 4) return error.InvalidMarker;
     var i: usize = 0;
     while (i < info.num_components) : (i += 1) {
         const off = pos + 3 + i * 2;
         const cs = data[off];
-        // The second byte is Tdi, the mapping table selector (0 = none).
+        // The second byte is Tmi, the mapping table selector (0 = none).
+        info.tmi[i] = data[off + 1];
+        info.tmi_at[i] = off + 1;
         if (data[off + 1] != 0) info.mapping_table = true;
         // Locate the matching frame component by ID.
         var found: bool = false;

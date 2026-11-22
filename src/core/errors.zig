@@ -220,6 +220,20 @@ pub const FindingCode = enum(u32) {
     // bits" (unlike T.81's 1-fill, 62). FAIL at the pad byte, detail the
     // bit count.
     jpegls_padding_not_zeros = 123,
+    // validate-approved 2026-11-22. FAIL: a JPEG-LS scan's Tmi names a
+    // mapping table not specified by the time the scan is decoded (T.87
+    // C.2.3). Offset: the SOS Tmi byte; detail: TID and scan component.
+    jpegls_mapping_table_undefined = 124,
+    // validate-approved 2026-11-22. WARN: Tmi nonzero with a nonzero
+    // point transform Pt (T.87 C.2.3: "all Tmi shall be zero"). Offset:
+    // the SOS Tmi byte.
+    jpegls_mapping_with_point_transform = 125,
+    // validate-approved 2026-11-22. FAIL: a malformed JPEG-LS mapping table
+    // (T.87 C.2.4.1.2-3, Table C.4); detail token tid_range, wt_range,
+    // length, continuation (offset: the field, or the LSE marker) or
+    // entries (count not MAXVAL + 1 at the referring scan; offset: the LSE
+    // marker, the SOS in the detail).
+    jpegls_mapping_table_invalid = 126,
     // Proposed to validate 2026-11-22 (number pending approval). INFO: an
     // LSE ID 1 MAXVAL below 2^P - 1 scan also, or only, decodes cleanly
     // under CharLS 3.0's RANGE-from-P coding; T.87 A.2.1 derives RANGE,

@@ -1239,23 +1239,183 @@ test "JPEG-LS LSE ID 4 oversize dimensions: 65536x1 and 1x65536" {
     try std.testing.expectError(error.InvalidMarker, jpegz.jpegls_cleanroom_decode(allocator, &conflict));
 }
 
-test "JPEG-LS scans that select a mapping table are unsupported, not indices passed off as samples" {
-    // CharLS 3.0: mapping table 1 (LSE ID 2) selected for the component by
-    // SOS Tdi = 1. Clearing Tdi makes the same entropy data decode, so the
-    // selector alone is what jpegz refuses.
+// CharLS 3.0 mapping-table fixture: LSE ID 2 at 2 (Ll at 4, ID 6, TID 7,
+// Wt 8, 256 entries 255 - i from 9 to 265), SOS at 278 (Tmi at 284, Al at
+// 287). Samples v = ((x*37 + y*91) ^ (x*y)) % 201, mapped to 255 - v.
+const map_src = @embedFile("fixtures/jpegls_16x16_gray8_mapping.jls");
+
+fn mapSample(x: usize, y: usize) u8 {
+    return 255 - @as(u8, @intCast(((x * 37 + y * 91) ^ (x * y)) % 201));
+}
+
+fn expectMapped(image: jpegz.Image) !void {
+    for (0..16) |y| for (0..16) |x| try std.testing.expectEqual(mapSample(x, y), image.pixels[y * 16 + x]);
+}
+
+/// The fixture with its LSE ID 2 replaced by `segments`.
+fn withTables(allocator: std.mem.Allocator, segments: []const []const u8) ![]u8 {
+    var parts: std.ArrayList([]const u8) = .empty;
+    defer parts.deinit(allocator);
+    try parts.append(allocator, map_src[0..2]);
+    try parts.appendSlice(allocator, segments);
+    try parts.append(allocator, map_src[265..]);
+    return std.mem.concat(allocator, u8, parts.items);
+}
+
+/// An LSE mapping segment: FF F8, Ll, ID, TID, Wt, entries.
+fn lseMapping(allocator: std.mem.Allocator, id: u8, tid: u8, wt: u8, entries: []const u8) ![]u8 {
+    const ll: u16 = @intCast(5 + entries.len);
+    return std.mem.concat(allocator, u8, &.{ &.{ 0xff, 0xf8, @intCast(ll >> 8), @truncate(ll), id, tid, wt }, entries });
+}
+
+test "JPEG-LS mapping table (CharLS, TID 1, Wt 1) maps the decoded samples (T.87 clause 7)" {
     const allocator = std.testing.allocator;
-    const src = @embedFile("fixtures/jpegls_16x16_gray8_mapping.jls");
-    try std.testing.expectError(error.NotImplemented, jpegz.jpegls_cleanroom_decode(allocator, src));
-    var report = try jpegz.validate(allocator, src);
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, map_src);
+    defer image.deinit(allocator);
+    try expectMapped(image);
+    var report = try jpegz.validate(allocator, map_src);
     defer report.deinit(allocator);
-    try std.testing.expectEqual(.unsupported, report.codec_check);
-    for (report.findings.items) |f| try std.testing.expect(f.severity != .fail);
-    var plain = src.*;
-    const sos = std.mem.indexOf(u8, &plain, &.{ 0xff, 0xda }).?;
-    try std.testing.expectEqual(@as(u8, 1), plain[sos + 6]);
-    plain[sos + 6] = 0;
-    var image = try jpegz.jpegls_cleanroom_decode(allocator, &plain);
-    image.deinit(allocator);
+    try std.testing.expectEqual(.decoded, report.codec_check);
+    for (report.findings.items) |f| try std.testing.expect(f.severity == .info);
+}
+
+test "JPEG-LS mapping table split into LSE ID 2 and an ID 3 continuation decodes the same" {
+    const allocator = std.testing.allocator;
+    const entries = map_src[9..265];
+    const spec = try lseMapping(allocator, 2, 1, 1, entries[0..100]);
+    defer allocator.free(spec);
+    const cont = try lseMapping(allocator, 3, 1, 1, entries[100..]);
+    defer allocator.free(cont);
+    const data = try withTables(allocator, &.{ spec, &.{ 0xff, 0xff }, cont });
+    defer allocator.free(data);
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, data);
+    defer image.deinit(allocator);
+    try expectMapped(image);
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(.decoded, report.codec_check);
+    for (report.findings.items) |f| try std.testing.expect(f.severity == .info);
+}
+
+test "JPEG-LS scan naming an unspecified mapping table is FAIL 124 at its Tmi byte" {
+    const allocator = std.testing.allocator;
+    const data = try allocator.dupe(u8, map_src);
+    defer allocator.free(data);
+    data[284] = 2;
+    try std.testing.expectError(error.BackendError, jpegz.jpegls_cleanroom_decode(allocator, data));
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    const f = onlyFail(report, .jpegls_mapping_table_undefined) orelse {
+        dumpFindings("124", report);
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expect(f.offset_is_exact and f.offset.? == 284);
+}
+
+test "JPEG-LS mapping table with a point transform is WARN 125; the table applies, Pt does not" {
+    const allocator = std.testing.allocator;
+    const data = try allocator.dupe(u8, map_src);
+    defer allocator.free(data);
+    data[287] = 1;
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, data);
+    defer image.deinit(allocator);
+    try expectMapped(image);
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(.decoded, report.codec_check);
+    var warned = false;
+    for (report.findings.items) |f| {
+        try std.testing.expect(f.severity != .fail);
+        if (f.code == .jpegls_mapping_with_point_transform) {
+            try std.testing.expectEqual(jpegz.Severity.warn, f.severity);
+            try std.testing.expect(f.offset_is_exact and f.offset.? == 284);
+            warned = true;
+        }
+    }
+    try std.testing.expect(warned);
+}
+
+test "JPEG-LS malformed mapping tables are FAIL 126 with one token per rule" {
+    const allocator = std.testing.allocator;
+    const entries = map_src[9..265];
+    const Case = struct { token: []const u8, data: []u8, offset: usize };
+    var cases: std.ArrayList(Case) = .empty;
+    defer {
+        for (cases.items) |c| allocator.free(c.data);
+        cases.deinit(allocator);
+    }
+    {
+        const d = try allocator.dupe(u8, map_src);
+        d[7] = 0;
+        try cases.append(allocator, .{ .token = "tid_range", .data = d, .offset = 7 });
+    }
+    {
+        const d = try allocator.dupe(u8, map_src);
+        d[8] = 0;
+        try cases.append(allocator, .{ .token = "wt_range", .data = d, .offset = 8 });
+    }
+    {
+        // Wt 2 with 255 bytes of entries: not a whole number of entries.
+        const seg = try lseMapping(allocator, 2, 1, 2, entries[0..255]);
+        defer allocator.free(seg);
+        try cases.append(allocator, .{ .token = "length", .data = try withTables(allocator, &.{seg}), .offset = 4 });
+    }
+    {
+        const d = try allocator.dupe(u8, map_src);
+        d[6] = 3;
+        try cases.append(allocator, .{ .token = "continuation", .data = d, .offset = 2 });
+    }
+    {
+        // A continuation whose TID differs from the table before it.
+        const spec = try lseMapping(allocator, 2, 1, 1, entries[0..100]);
+        defer allocator.free(spec);
+        const cont = try lseMapping(allocator, 3, 9, 1, entries[100..]);
+        defer allocator.free(cont);
+        try cases.append(allocator, .{ .token = "continuation", .data = try withTables(allocator, &.{ spec, cont }), .offset = 2 + spec.len });
+    }
+    {
+        // A continuation with another segment (COM) between it and its table.
+        const spec = try lseMapping(allocator, 2, 1, 1, entries[0..100]);
+        defer allocator.free(spec);
+        const cont = try lseMapping(allocator, 3, 1, 1, entries[100..]);
+        defer allocator.free(cont);
+        const com = [_]u8{ 0xff, 0xfe, 0x00, 0x03, 0x41 };
+        try cases.append(allocator, .{ .token = "continuation", .data = try withTables(allocator, &.{ spec, &com, cont }), .offset = 2 + spec.len + com.len });
+    }
+    {
+        // A continuation whose Wt differs from the table before it.
+        const spec = try lseMapping(allocator, 2, 1, 1, entries[0..100]);
+        defer allocator.free(spec);
+        const cont = try lseMapping(allocator, 3, 1, 2, entries[100..]);
+        defer allocator.free(cont);
+        try cases.append(allocator, .{ .token = "continuation", .data = try withTables(allocator, &.{ spec, cont }), .offset = 2 + spec.len });
+    }
+    {
+        // 200 entries where MAXVAL 255 needs 256.
+        const seg = try lseMapping(allocator, 2, 1, 1, entries[0..200]);
+        defer allocator.free(seg);
+        try cases.append(allocator, .{ .token = "entries", .data = try withTables(allocator, &.{seg}), .offset = 2 });
+    }
+    {
+        // A second, unreferenced table with Wt 0 still FAILs.
+        const spec = try lseMapping(allocator, 2, 1, 1, entries);
+        defer allocator.free(spec);
+        const bad = try lseMapping(allocator, 2, 7, 0, &.{0});
+        defer allocator.free(bad);
+        try cases.append(allocator, .{ .token = "wt_range", .data = try withTables(allocator, &.{ spec, bad }), .offset = 2 + spec.len + 6 });
+    }
+    for (cases.items) |c| {
+        var report = try jpegz.validate(allocator, c.data);
+        defer report.deinit(allocator);
+        const f = onlyFail(report, .jpegls_mapping_table_invalid) orelse {
+            dumpFindings(c.token, report);
+            return error.TestUnexpectedResult;
+        };
+        if (!std.mem.startsWith(u8, f.detail.?, c.token) or !f.offset_is_exact or f.offset.? != c.offset) {
+            std.debug.print("{s}: offset {?d} detail {s}\n", .{ c.token, f.offset, f.detail.? });
+            return error.TestUnexpectedResult;
+        }
+    }
 }
 
 fn maxvalDerivation(report: jpegz.ValidationReport) ?jpegz.Finding {
@@ -3445,4 +3605,65 @@ test "JPEG-LS point transform on a 12-bit scan saturates at 4095 and counts ever
     const f = onlyFail(report, .jpegls_point_transform_overflow) orelse return error.TestUnexpectedResult;
     var buf: [32]u8 = undefined;
     try std.testing.expect(std.mem.indexOf(u8, f.detail.?, try std.fmt.bufPrint(&buf, "{d} sample(s)", .{over})) != null);
+}
+
+test "JPEG-LS mapping table specified twice: the later one replaces the earlier" {
+    const allocator = std.testing.allocator;
+    const entries = map_src[9..265];
+    const junk = try lseMapping(allocator, 2, 1, 1, entries[0..10]);
+    defer allocator.free(junk);
+    const real = try lseMapping(allocator, 2, 1, 1, entries);
+    defer allocator.free(real);
+    const data = try withTables(allocator, &.{ junk, real });
+    defer allocator.free(data);
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, data);
+    defer image.deinit(allocator);
+    try expectMapped(image);
+}
+
+test "JPEG-LS mapping table with two-byte entries validates; the decode API cannot map it" {
+    // T.87 defines no interpretation for entries wider than one byte.
+    const allocator = std.testing.allocator;
+    var wide: [512]u8 = undefined;
+    for (0..256) |i| {
+        wide[2 * i] = @intCast(i);
+        wide[2 * i + 1] = 0;
+    }
+    const seg = try lseMapping(allocator, 2, 1, 2, &wide);
+    defer allocator.free(seg);
+    const data = try withTables(allocator, &.{seg});
+    defer allocator.free(data);
+    try std.testing.expectError(error.NotImplemented, jpegz.jpegls_cleanroom_decode(allocator, data));
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(.decoded, report.codec_check);
+    for (report.findings.items) |f| try std.testing.expect(f.severity == .info);
+}
+
+test "JPEG-LS mapping table selected by one ILV 0 scan maps only that component" {
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const src = jpegls_conformance.t8c0e0;
+    var plain = try jpegz.jpegls_cleanroom_decode(allocator, src);
+    defer plain.deinit(allocator);
+    var invert: [256]u8 = undefined;
+    for (&invert, 0..) |*e, i| e.* = @intCast(255 - i);
+    const seg = try lseMapping(allocator, 2, 1, 1, &invert);
+    defer allocator.free(seg);
+    // The table goes before the first SOS; the second SOS selects it.
+    const first = std.mem.indexOf(u8, src, &.{ 0xff, 0xda }).?;
+    const data = try std.mem.concat(allocator, u8, &.{ src[0..first], seg, src[first..] });
+    defer allocator.free(data);
+    const sos2 = std.mem.indexOfPos(u8, data, first + seg.len + jlsFirstScanEnd(data[first + seg.len ..]), &.{ 0xff, 0xda }).?;
+    try std.testing.expectEqual(@as(u8, 1), data[sos2 + 4]);
+    data[sos2 + 6] = 1;
+    var image = try jpegz.jpegls_cleanroom_decode(allocator, data);
+    defer image.deinit(allocator);
+    for (plain.pixels, image.pixels, 0..) |want, got, i| {
+        try std.testing.expectEqual(if (i % 3 == 1) 255 - want else want, got);
+    }
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    try std.testing.expectEqual(.decoded, report.codec_check);
+    for (report.findings.items) |f| try std.testing.expect(f.severity == .info);
 }

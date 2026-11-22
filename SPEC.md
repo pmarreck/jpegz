@@ -66,9 +66,31 @@ still 0 comes from a DNL immediately after the first scan (T.87 C.2.2),
 found by skipping that scan's entropy data with T.87 bit stuffing; with no
 such DNL, or NL = 0, the decoder returns `InvalidMarker` and the frame is
 finding 61. The validator reads the same LSE ID 4 and DNL, so these frames
-are not finding 61, and any other JPEG-LS DNL is finding 72. A scan that selects a
-mapping table (SOS Tdi ≠ 0) is `NotImplemented`: the table is not applied,
-and returning its indices as samples would mis-decode silently.
+are not finding 61, and any other JPEG-LS DNL is finding 72.
+
+JPEG-LS mapping tables (LSE ID 2, continued by ID 3; T.87 C.2.4.1.2-3) are
+applied after decoding (T.87 clause 7), so a scan that selects one (SOS
+Tmi ≠ 0) is decoded and checked like any other. The checks follow validate
+rulings of 2026-11-22:
+
+- **Table segments** that are malformed are FAIL 126
+  `jpegls_mapping_table_invalid`, whether or not a scan uses them. Detail
+  `tid_range` or `wt_range` marks a TID or Wt of 0, at that byte. `length`
+  marks entries that are not a whole positive number of Wt-byte entries, at
+  Ll. `continuation` marks an ID 3 that does not immediately follow an ID 2
+  or ID 3 segment with the same TID and Wt, at the LSE marker.
+- **At the scan:**
+  - a Tmi naming no table is FAIL 124 `jpegls_mapping_table_undefined` at
+    that Tmi byte;
+  - a table whose entry count is not MAXVAL + 1 for the MAXVAL in force is
+    FAIL 126 `entries` at its LSE marker;
+  - a nonzero Tmi beside a nonzero point transform is WARN 125
+    `jpegls_mapping_with_point_transform`. The table applies and the point
+    transform does not.
+- **Decode output:** a later table with the same TID replaces the earlier
+  one. The decode API maps samples through one-byte tables. T.87 defines no
+  interpretation for wider entries, so those return `NotImplemented`.
+  Validation checks the indices and never maps.
 Consumers import jp2z and libjxlz through the facade, preserving one instance
 of each Zig module. Project purpose lives in [INTENT.md](INTENT.md).
 
