@@ -3239,3 +3239,92 @@ test "RGB-signaled three-component frames pass through at 12-bit and in progress
 		}
 	}
 }
+/// The end of the first scan's entropy data: the first FF followed by a
+/// byte of 0x80 or more that is neither FF fill nor RSTm (T.87 bit stuffing).
+fn jlsFirstScanEnd(data: []const u8) usize {
+    const sos = std.mem.indexOf(u8, data, &.{ 0xff, 0xda }).?;
+    var i = sos + 2 + std.mem.readInt(u16, data[sos + 2 ..][0..2], .big);
+    while (i + 1 < data.len) : (i += 1) {
+        if (data[i] != 0xff) continue;
+        const next = data[i + 1];
+        if (next < 0x80 or next == 0xff) continue;
+        if (next >= 0xd0 and next <= 0xd7) {
+            i += 1;
+            continue;
+        }
+        return i;
+    }
+    unreachable;
+}
+
+/// `src` with SOF55 Y set to `y`, and optionally a DNL with NL = `nl`
+/// inserted right after the first scan.
+fn jlsWithDnl(allocator: std.mem.Allocator, src: []const u8, y: u16, nl: ?u16) ![]u8 {
+    const at = jlsFirstScanEnd(src);
+    const dnl: []const u8 = if (nl) |lines| &.{ 0xff, 0xdc, 0x00, 0x04, @intCast(lines >> 8), @truncate(lines) } else &.{};
+    const out = try std.mem.concat(allocator, u8, &.{ src[0..at], dnl, src[at..] });
+    const sof = std.mem.indexOf(u8, out, &.{ 0xff, 0xf7 }).?;
+    std.mem.writeInt(u16, out[sof + 5 ..][0..2], y, .big);
+    return out;
+}
+
+test "JPEG-LS SOF55 Y = 0 takes its height from a DNL after the first scan (T.87 C.2.2)" {
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    // One scan (t8nde0), and ILV 0 with three scans (t8c0e0): the DNL goes
+    // after the first scan only.
+    for ([_][]const u8{ jpegls_conformance.t8nde0, jpegls_conformance.t8c0e0 }) |src| {
+        var want = try jpegz.jpegls_cleanroom_decode(allocator, src);
+        defer want.deinit(allocator);
+        const data = try jlsWithDnl(allocator, src, 0, @intCast(want.height));
+        defer allocator.free(data);
+        var got = try jpegz.jpegls_cleanroom_decode(allocator, data);
+        defer got.deinit(allocator);
+        try std.testing.expectEqual(want.height, got.height);
+        try std.testing.expectEqualSlices(u8, want.pixels, got.pixels);
+        var report = try jpegz.validate(allocator, data);
+        defer report.deinit(allocator);
+        try std.testing.expectEqual(.decoded, report.codec_check);
+        try std.testing.expectEqual(want.height, report.height);
+        for (report.findings.items) |f| {
+            if (f.severity != .info) {
+                dumpFindings("Y=0 + DNL", report);
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+test "JPEG-LS SOF55 Y = 0 with no DNL and no LSE ID 4 has no height (61, InvalidMarker)" {
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    // No DNL at all, and a DNL whose NL is 0 (T.81 B.2.5: NL > 0).
+    for ([_]?u16{ null, 0 }) |nl| {
+        const data = try jlsWithDnl(allocator, jpegls_conformance.t8nde0, 0, nl);
+        defer allocator.free(data);
+        try std.testing.expectError(error.InvalidMarker, jpegz.jpegls_cleanroom_decode(allocator, data));
+        var report = try jpegz.validate(allocator, data);
+        defer report.deinit(allocator);
+        try std.testing.expect(onlyFail(report, .invalid_dimensions) != null);
+    }
+}
+
+test "JPEG-LS DNL with a nonzero SOF55 Y is 72 dnl_misplaced (WARN when NL agrees)" {
+    if (!jpegls_conformance.available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const src = jpegls_conformance.t8nde0;
+    const y = std.mem.readInt(u16, src[std.mem.indexOf(u8, src, &.{ 0xff, 0xf7 }).? + 5 ..][0..2], .big);
+    const data = try jlsWithDnl(allocator, src, y, y);
+    defer allocator.free(data);
+    var report = try jpegz.validate(allocator, data);
+    defer report.deinit(allocator);
+    const f = for (report.findings.items) |f| {
+        if (f.code == .dnl_misplaced) break f;
+    } else {
+        dumpFindings("Y + DNL", report);
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expectEqual(jpegz.Severity.warn, f.severity);
+    try std.testing.expect(std.mem.startsWith(u8, f.detail.?, "with_nonzero_y"));
+    try std.testing.expect(f.offset_is_exact and f.offset.? == jlsFirstScanEnd(src));
+}

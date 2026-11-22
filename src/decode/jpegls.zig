@@ -111,6 +111,36 @@ fn lseViolation(preset: PresetParams, P: u8, near: u32) ?LseConstraint {
 /// Offset of the marker that ends the entropy data starting at `start`:
 /// the first FF followed by a byte of 0x80 or more that is not an RSTm
 /// (T.87 A.1.3 bit stuffing keeps every other FF below 0x80).
+/// T.87 C.2.2: Y = 0 may be defined "in a DNL marker immediately following
+/// the first scan". Walk from `start` to the first SOS, skip its entropy
+/// data (T.87 bit stuffing, RSTm and FF fill), and return NL from a DNL
+/// there (Ld = 4, NL > 0), or null.
+pub fn dnlLines(data: []const u8, start: usize) ?u16 {
+    var pos = start;
+    while (true) {
+        while (pos < data.len and data[pos] != 0xFF) pos += 1;
+        while (pos + 1 < data.len and data[pos + 1] == 0xFF) pos += 1;
+        if (pos + 1 >= data.len) return null;
+        const marker = data[pos + 1];
+        pos += 2;
+        switch (marker) {
+            0x01, 0xD0...0xD7 => continue,
+            0x00, 0xD8, 0xD9, 0xF7 => return null,
+            else => {},
+        }
+        if (pos + 1 >= data.len) return null;
+        const len = parseSegmentLength(data, pos);
+        if (len < 2) return null;
+        pos += len;
+        if (marker == M_SOS) break;
+    }
+    const at = endOfScan(data, pos) orelse return null;
+    if (data[at + 1] != 0xDC or at + 5 >= data.len) return null;
+    if (parseSegmentLength(data, at + 2) != 4) return null;
+    const lines = (@as(u16, data[at + 4]) << 8) | data[at + 5];
+    return if (lines == 0) null else lines;
+}
+
 fn endOfScan(data: []const u8, start: usize) ?usize {
     var i = start;
     while (i + 1 < data.len) : (i += 1) {
@@ -402,8 +432,9 @@ pub fn decodeWithOptions(
                     oversize = null;
                 }
                 if (frame.?.width == 0) return error.InvalidMarker;
-                // Y = 0 defers to a JPEG-LS DNL (T.87 C.2.6), not decoded yet.
-                if (frame.?.height == 0) return error.NotImplemented;
+                // T.87 C.2.2: a Y = 0 that no LSE ID 4 filled comes from a
+                // DNL immediately following the first scan.
+                if (frame.?.height == 0) frame.?.height = dnlLines(data, pos - 2) orelse return error.InvalidMarker;
                 var scan = try parseSos(data, pos, &frame.?);
                 scan.restart_interval = restart_interval;
                 pos += parseSegmentLength(data, pos);

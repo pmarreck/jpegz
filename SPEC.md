@@ -57,9 +57,12 @@ Multi-component ILV 0 (one scan per component, conformance t8c0e0/3) is
 decoded scan by scan and interleaved; a component coded by two scans is
 `InvalidMarker`. An LSE ID 4 (T.87 C.2.4.1.4) fills a SOF55 dimension left
 at 0, for images above 65535 samples in either direction; a nonzero SOF
-value beside a nonzero LSE value is `InvalidMarker` (CharLS's rule), and a
-height still 0 (JPEG-LS DNL) is `NotImplemented`. The validator reads the
-same record, so such frames are not finding 61. A scan that selects a
+value beside a nonzero LSE value is `InvalidMarker` (CharLS's rule). A height
+still 0 comes from a DNL immediately after the first scan (T.87 C.2.2),
+found by skipping that scan's entropy data with T.87 bit stuffing; with no
+such DNL, or NL = 0, the decoder returns `InvalidMarker` and the frame is
+finding 61. The validator reads the same LSE ID 4 and DNL, so these frames
+are not finding 61, and any other JPEG-LS DNL is finding 72. A scan that selects a
 mapping table (SOS Tdi ≠ 0) is `NotImplemented`: the table is not applied,
 and returning its indices as samples would mis-decode silently.
 Consumers import jp2z and libjxlz through the facade, preserving one instance

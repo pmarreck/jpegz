@@ -535,12 +535,15 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                     const precision = data[seg_body_start];
                     const declared_height = readU16BE(data, seg_body_start + 1);
                     const declared_width = readU16BE(data, seg_body_start + 3);
-                    // T.81 B.2.5: Y = 0 defers the line count to a DNL right
-                    // after the first scan, as the DCT decoders resolve it.
-                    const dnl_height: ?u16 = if (declared_height == 0 and variant != .jpegls)
-                        jpeg_markers.dnlLines(data, seg_body_start - 2 + seg_len)
+                    // T.81 B.2.5 and T.87 C.2.2: Y = 0 defers the line count
+                    // to a DNL right after the first scan, as the decoders
+                    // resolve it; JPEG-LS entropy data has its own stuffing.
+                    const dnl_height: ?u16 = if (declared_height != 0)
+                        null
+                    else if (variant == .jpegls)
+                        jpegls.dnlLines(data, seg_body_start - 2 + seg_len)
                     else
-                        null;
+                        jpeg_markers.dnlLines(data, seg_body_start - 2 + seg_len);
                     // T.87 C.2.4.1.4: an LSE ID 4 fills a JPEG-LS dimension the
                     // SOF55 leaves at 0 (sizes above 65535).
                     const oversize: ?jpegls.Oversize = if (variant == .jpegls and (declared_height == 0 or declared_width == 0))
