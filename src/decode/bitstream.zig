@@ -165,7 +165,34 @@ pub const BitReader = struct {
         return self.marker_byte;
     }
 
-    pub const TrailingBytes = struct { count: usize, marker: u8 };
+    /// `first` is the offset in `data` of the first whole byte, `marker_at`
+    /// that of the marker's 0xFF.
+    pub const TrailingBytes = struct { count: usize, marker: u8, first: usize, marker_at: usize };
+
+    /// A position snapshot, cheap enough to take before every code, so a
+    /// fault can name the byte holding the code's first bit (`markOffset`).
+    pub const Mark = struct { byte_pos: usize, bits_valid: u5 };
+
+    pub fn mark(self: *const BitReader) Mark {
+        return .{ .byte_pos = self.byte_pos, .bits_valid = self.bits_valid };
+    }
+
+    /// Offset in `data` of the byte that held the first unconsumed bit at `m`.
+    pub fn markOffset(self: *const BitReader, m: Mark) usize {
+        return self.walkBack(m.byte_pos, (@as(usize, m.bits_valid) + 7) / 8);
+    }
+
+    /// Step back over `payload_bytes` buffered payload bytes ending before
+    /// `from`; a stuffed 0xFF 0x00 is one payload byte.
+    fn walkBack(self: *const BitReader, from: usize, payload_bytes: usize) usize {
+        var pos = from;
+        var n = payload_bytes;
+        while (n > 0 and pos > 0) : (n -= 1) {
+            pos -= 1;
+            if (pos > 0 and self.data[pos] == 0x00 and self.data[pos - 1] == 0xFF) pos -= 1;
+        }
+        return pos;
+    }
 
     /// After `finishHuffmanSegment` reports `InvalidEntropyBoundary`: when the
     /// current byte's remaining pad bits are all 1 and only whole payload
@@ -180,9 +207,11 @@ pub const BitReader = struct {
             if (pad != (@as(u32, 1) << partial) - 1) return null;
         }
         var count: usize = self.bits_valid / 8;
+        var first: ?usize = if (count > 0) self.walkBack(self.byte_pos, count) else null;
         var pos = self.byte_pos;
         while (pos < self.data.len) {
             if (self.data[pos] != 0xFF) {
+                if (first == null) first = pos;
                 count += 1;
                 pos += 1;
                 continue;
@@ -190,11 +219,12 @@ pub const BitReader = struct {
             if (pos + 1 >= self.data.len) return null;
             switch (self.data[pos + 1]) {
                 0x00 => {
+                    if (first == null) first = pos;
                     count += 1;
                     pos += 2;
                 },
                 0xFF => pos += 1,
-                else => |marker| return if (count > 0) .{ .count = count, .marker = marker } else null,
+                else => |marker| return if (count > 0) .{ .count = count, .marker = marker, .first = first.?, .marker_at = pos } else null,
             }
         }
         return null;

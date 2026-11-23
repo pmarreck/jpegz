@@ -379,6 +379,18 @@ An SOS Td or Ta outside T.81 Table B.3 is finding 75
 - **Undefined table:** a selector naming one keeps finding 69.
 - **Lossless:** Ta is not judged.
 
+Sequential Huffman data faults are typed exactly at the code (validate,
+2026-11-22):
+- **74 (`entropy_decode_invalid`):** a code that matches no entry of its
+  table (T.81 allows incomplete tables), and an AC zero run past Se.
+- **58:** a decoded DC or AC category past the precision bound.
+- **FAIL 8:** whole bytes after valid padding, at a restart boundary or at
+  the end of a scan. Lenient decoding skips them to the marker, as libjpeg
+  does.
+- **Restarts:** a consumed RSTm restarts decoding after truncated data.
+- **`insufficient_data`:** reported at its file offset.
+- **Still to come:** progressive and lossless parity; see PLAN.md.
+
 Sequential Huffman frames reject an additional SOS after all components have
 been coded, with exact finding 55 at its first selector. The post-coverage
 walk skips length-delimited metadata and stops at the first EOI. It commits

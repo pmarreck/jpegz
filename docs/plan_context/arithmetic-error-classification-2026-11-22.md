@@ -90,3 +90,55 @@ so 53 (DAC content) and 59/64 (process-specific Ss, Se, Ah, Al) do not fit.
 - **Not covered:** lossless Ta (Table B.3 gives 0); report counts if seen.
 - **Before shipping:** a producer check.
 - **Huffman:** these cases move off 51 now; leave them out of the 51 list.
+
+## Huffman-path ruling (validate, 2026-11-22, registry rulings F)
+
+### Data faults: accepted
+
+| # | Fault | Code | Location |
+|---|---|---|---|
+| 1 | Code matches no entry of a valid table | 74 | the code's first byte, exact |
+| 2 | AC zero run past Se | 74 | exact |
+| 3 | EOB run past the scan's remaining blocks | 74 | the EOBRUN code, exact (see below) |
+| 4 | Refinement symbol with size other than 1 | 74 | exact |
+| 5 | Whole bytes after valid padding | FAIL 8 | as on the other paths |
+| 6 | Lossless scan data running into a marker | `insufficient_data` | at the marker |
+| 7 | RSTm after the final unit of a progressive scan | 57 | at the RSTm |
+| 8 | File ends with no marker after a progressive scan | `truncated_stream` | at the end of the file |
+
+- **Item 1:** T.81 allows incomplete code tables, so a code with no entry
+  is a data fault, not a table fault.
+- **Item 3:** report exact at the EOBRUN code when the decoder tracks its
+  position. Otherwise report at the scan end, labeled as the scan end.
+- **Item 4:** G.1.2.3 allows only size 1 here.
+- **Item 5:** this reclassifies audit row 51b.
+
+### Item 9 and your question: neither option as proposed
+
+- **58 at decode:** report it exact at the code. Huffman knows the bit
+  position; the interval rule was for arithmetic only, because the Q-coder
+  can't localize. So Huffman 58 fires on the decoded value.
+- **The DHT symbol check needs producer evidence first.** A DHT carrying
+  symbol values past the precision bound but never decoding them may be a
+  writer pattern. For example, a writer could ship a generic 12-bit table
+  in an 8-bit file. Grading that 51 FAIL could false-fail real files.
+  - Please count DHT symbol values past the bound over your producer set
+    and the corpus, and send the counts with the producers that wrote
+    them.
+  - If none are found, it is damage: FAIL 51, exact at the symbol byte.
+  - If a producer does it, it is a writer pattern and we grade it then.
+
+### Table and header faults
+
+- **DHT counts overrunning the segment:** stay 51. The walker catches them
+  exact at the count byte.
+- **Bad Tc/Th and invalid code sets:** stay 51.
+- **SOS Ns of 0 or above 4 in a later scan:** use the code the walker gives
+  the same field in a first scan, for parity.
+- **A scan naming an undefined AC table:** use the code the sequential path
+  gives an undefined table, at the Td/Ta byte.
+
+Recorded in validate's finding_code_registry.md (rulings F). Ship items
+1-9 with your usual corpus report and reds. Validate maps them at the next
+repin.
+

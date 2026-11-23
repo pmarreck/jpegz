@@ -62,8 +62,10 @@ fn emitFinding(
 /// absolute offset. All-zero pad bits are an admitted encoder defect (Intel
 /// JPEG Library 1.51, Olympus camera firmware): `entropy_padding_zero_bits` at
 /// severity `known_defect`. Mixed bits look like
-/// damage: FAIL `entropy_padding_not_ones`. A whole extra entropy byte stays
-/// `huffman_table_corrupt`. `base` is the file offset of `br.data[0]`.
+/// damage: FAIL `entropy_padding_not_ones`. Whole bytes after valid padding are
+/// FAIL 8, exact at the first (validate, 2026-11-22; formerly audit row 51b's
+/// 51). Anything else stays `huffman_table_corrupt`. `base` is the file
+/// offset of `br.data[0]`.
 fn reportEntropyBoundary(
     br: *const bitstream.BitReader,
     err: anyerror,
@@ -76,6 +78,13 @@ fn reportEntropyBoundary(
     } else if (err == error.PaddingNotOnes) {
         try emitFinding(options, .fail, .entropy_padding_not_ones, base + br.padByteOffset(),
             "pad bits before the marker are not all 1 (T.81 F.1.2.3)");
+    } else if (err == error.InvalidEntropyBoundary and br.trailingBytesAfterPadding() != null) {
+        const trailing = br.trailingBytesAfterPadding().?;
+        var buf: [96]u8 = undefined;
+        const detail = std.fmt.bufPrint(&buf, "{d} whole {s} after valid padding before marker 0x{X:0>2}", .{
+            trailing.count, if (trailing.count == 1) "byte" else "bytes", trailing.marker,
+        }) catch buf[0..0];
+        try emitFinding(options, .fail, .extraneous_bytes_before_marker, base + trailing.first, detail);
     } else {
         try emitFinding(options, .fail, .huffman_table_corrupt, base + br.byte_pos, context);
     }
@@ -98,6 +107,7 @@ fn handleRstResync(
     prev_dc: *[4]i32,
     mcus_since_rst: *u32,
     options: DecodeOptions,
+    truncation_seen: *bool,
 ) errors.DecodeError!void {
     // Preserve opt-in pixel recovery, but never hide discarded entropy from
     // a validator. Check a copy so lenient resynchronization retains its input.
@@ -107,6 +117,11 @@ fn handleRstResync(
             "invalid Huffman entropy or padding at restart boundary");
         if (!options.lenient and err != error.PaddingZeroBits)
             return fail("rst_entropy_boundary", error.BackendError);
+        // Like libjpeg, skip whole extraneous bytes to the marker (already
+        // reported as FAIL 8) and resynchronize there.
+        if (err == error.InvalidEntropyBoundary) if (boundary.trailingBytesAfterPadding()) |trailing| {
+            br.byte_pos = trailing.marker_at;
+        };
     }
     // Force the reader to look ahead for the marker — the bit
     // buffer may still hold padding bits that haven't triggered a
@@ -147,6 +162,9 @@ fn handleRstResync(
             // Resync expected_rst to the cycle after what we just saw.
             expected_rst.* = 0xD0 + ((br.marker_byte - 0xD0 + 1) & 0x07);
             br.skipPastMarker();
+            // A consumed RSTm restarts decoding (libjpeg clears its
+            // insufficient-data flag at every restart).
+            truncation_seen.* = false;
             return;
         }
         if (br.marker_byte == 0xD9) {
@@ -162,6 +180,7 @@ fn handleRstResync(
     mcus_since_rst.* = 0;
     expected_rst.* = 0xD0 + ((expected_rst.* - 0xD0 + 1) & 0x07);
     br.skipPastMarker();
+    truncation_seen.* = false;
 }
 
 /// JPEG zig-zag scan order (T.81 Figure A.6). Maps zig-zag index
@@ -685,6 +704,7 @@ fn decodeScanEntropy(
     var lenient_state: LenientState = .{
         .lenient = options.lenient,
         .sink = options.findings_sink,
+        .base = base,
     };
     const restart_interval = tables.restart_interval.*;
 
@@ -694,7 +714,7 @@ fn decodeScanEntropy(
             var mcu_x: u32 = 0;
             while (mcu_x < grid.mcu_cols) : (mcu_x += 1) {
                 if (restart_interval > 0 and mcus_since_rst == restart_interval) {
-                    try handleRstResync(&br, base, &expected_rst, &prev_dc, &mcus_since_rst, options);
+                    try handleRstResync(&br, base, &expected_rst, &prev_dc, &mcus_since_rst, options, &lenient_state.truncation_seen);
                 }
                 for (scan.comp[0..scan.count]) |ci| {
                     const comp = &frame.components[ci];
@@ -728,7 +748,7 @@ fn decodeScanEntropy(
             var bx: u32 = 0;
             while (bx < xi) : (bx += 1) {
                 if (restart_interval > 0 and mcus_since_rst == restart_interval) {
-                    try handleRstResync(&br, base, &expected_rst, &prev_dc, &mcus_since_rst, options);
+                    try handleRstResync(&br, base, &expected_rst, &prev_dc, &mcus_since_rst, options, &lenient_state.truncation_seen);
                 }
                 const linear: usize = (@as(usize, by) * @as(usize, grid.blocks_w[ci]) + @as(usize, bx)) * 64;
                 try decodeBlockCoefficients(&br, ci, comp, tables.dc, tables.ac, tables.quant,
@@ -742,16 +762,8 @@ fn decodeScanEntropy(
     // truncation already has an insufficient_data finding in the legacy API.
     if (!lenient_state.truncation_seen) {
         const marker = br.finishHuffmanSegment() catch |err| recovered: {
-            // Audit row 51b: name whole bytes after valid padding apart from
-            // invalid entropy. The finding and its class are unchanged.
-            var reason_buf: [96]u8 = undefined;
-            const reason = if (err == error.InvalidEntropyBoundary) if (br.trailingBytesAfterPadding()) |trailing|
-                std.fmt.bufPrint(&reason_buf, "{d} whole {s} after valid padding before marker 0x{X:0>2}", .{
-                    trailing.count, if (trailing.count == 1) "byte" else "bytes", trailing.marker,
-                }) catch unreachable
-            else
-                "invalid Huffman entropy or padding at end of scan" else "invalid Huffman entropy or padding at end of scan";
-            try reportEntropyBoundary(&br, err, base, options, reason);
+            // Whole bytes after valid padding are FAIL 8 (reportEntropyBoundary).
+            try reportEntropyBoundary(&br, err, base, options, "invalid Huffman entropy or padding at end of scan");
             // Pad bits carry no image data: lenient decoding keeps going when a
             // marker follows them, as it does at restart boundaries. Every
             // decode accepts the known all-zero pattern.
@@ -1149,13 +1161,25 @@ fn transformBlockRow(
 const LenientState = struct {
     lenient: bool,
     sink: ?*findings_mod.FindingsSink,
+    /// File offset of the scan's `br.data[0]`.
+    base: usize = 0,
     truncation_seen: bool = false,
+
+    /// An exact FAIL at `byte_pos` within the scan data (validate rulings
+    /// 2026-11-22: 74 for a code with no valid decode, 58 for a category past
+    /// the precision bound, both at the code's first byte).
+    fn fault(self: *const LenientState, code: errors.FindingCode, byte_pos: usize, comptime fmt: []const u8, args: anytype) Error!void {
+        const s = self.sink orelse return;
+        var buf: [128]u8 = undefined;
+        const detail = std.fmt.bufPrint(&buf, fmt, args) catch buf[0..0];
+        s.emitExact(.fail, code, @intCast(self.base + byte_pos), detail) catch return error.OutOfMemory;
+    }
 
     inline fn emitOnce(self: *LenientState, byte_pos: usize) Error!void {
         if (self.truncation_seen) return;
         self.truncation_seen = true;
         if (self.sink) |s| {
-            s.emit(.warn, .insufficient_data, @intCast(byte_pos),
+            s.emit(.warn, .insufficient_data, @intCast(self.base + byte_pos),
                 "Corrupt JPEG data: premature end of data segment") catch
                 return error.OutOfMemory;
         }
@@ -1202,15 +1226,22 @@ fn decodeBlockCoefficients(
     var zz: [64]i32 = .{0} ** 64;
 
     // ── DC coefficient (T.81 §F.2.2.1) ─────────────────────────
+    const dc_mark = br.mark();
     const dc_size: u8 = dc_t.decode(br) catch {
         if (lenient.lenient and br.marker_seen) {
             try lenient.emitOnce(br.byte_pos);
             @memset(out, 0);
             return;
         }
+        if (!br.marker_seen) try lenient.fault(.entropy_decode_invalid, br.markOffset(dc_mark),
+            "DC Huffman code matches no table entry", .{});
         return fail("dc_huffman_decode_failed", error.BackendError);
     };
-    if (dc_size > max_dc_size) return fail("dc_size_too_large", error.BackendError);
+    if (dc_size > max_dc_size) {
+        try lenient.fault(.dct_coefficient_overflow, br.markOffset(dc_mark),
+            "DC difference category {d} exceeds {d} for {d}-bit samples (T.81 F.1.2.1)", .{ dc_size, max_dc_size, precision });
+        return fail("dc_size_too_large", error.BackendError);
+    }
     var dc_diff: i32 = 0;
     if (dc_size > 0) {
         const bits = br.readBits(@intCast(dc_size)) catch {
@@ -1229,25 +1260,41 @@ fn decodeBlockCoefficients(
     // ── 63 AC coefficients (T.81 §F.2.2.2) ─────────────────────
     var k: usize = 1;
     while (k < 64) {
+        const ac_mark = br.mark();
         const rs: u8 = ac_t.decode(br) catch {
             if (lenient.lenient and br.marker_seen) {
                 try lenient.emitOnce(br.byte_pos);
                 @memset(out, 0);
                 return;
             }
+            if (!br.marker_seen) try lenient.fault(.entropy_decode_invalid, br.markOffset(ac_mark),
+                "AC Huffman code matches no table entry", .{});
             return fail("ac_huffman_decode_failed", error.BackendError);
         };
         if (rs == 0x00) break; // EOB — rest of block is zero
         if (rs == 0xF0) {
             k += 16; // ZRL — 16 zeros (already zeroed; just advance)
-            if (k > 64) return fail("ac_k_overflow", error.BackendError);
+            if (k > 64) {
+                try lenient.fault(.entropy_decode_invalid, br.markOffset(ac_mark), "AC zero run past Se=63", .{});
+                return fail("ac_k_overflow", error.BackendError);
+            }
             continue;
         }
         const run: u8 = rs >> 4;
         const size: u8 = rs & 0x0F;
-        if (size == 0 or size > max_ac_size) return fail("ac_bad_size", error.BackendError);
+        // Size 0 with a run other than 0 or 15 is a symbol T.81 leaves
+        // undefined: table content, which stays 51.
+        if (size == 0) return fail("ac_bad_size", error.BackendError);
+        if (size > max_ac_size) {
+            try lenient.fault(.dct_coefficient_overflow, br.markOffset(ac_mark),
+                "AC coefficient category {d} exceeds {d} for {d}-bit samples (T.81 F.1.2.2)", .{ size, max_ac_size, precision });
+            return fail("ac_bad_size", error.BackendError);
+        }
         k += run;
-        if (k >= 64) return fail("ac_k_overflow", error.BackendError);
+        if (k >= 64) {
+            try lenient.fault(.entropy_decode_invalid, br.markOffset(ac_mark), "AC zero run past Se=63", .{});
+            return fail("ac_k_overflow", error.BackendError);
+        }
         const bits = br.readBits(@intCast(size)) catch {
             if (lenient.lenient) {
                 try lenient.emitOnce(br.byte_pos);

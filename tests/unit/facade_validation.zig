@@ -971,7 +971,8 @@ test "classic facade rejects recovered entropy damage but accepts legal fill" {
 		.{ .bytes = progressive, .verdict = .valid },
 		.{ .bytes = &progressive_truncated, .verdict = .corrupt, .finding = .insufficient_data },
 		.{ .bytes = &wrong_restart, .verdict = .corrupt, .finding = .restart_marker_unexpected },
-		.{ .bytes = &missing_restart, .verdict = .corrupt, .finding = .restart_marker_missing },
+		// The RST is replaced by junk: whole bytes before the next RSTm (FAIL 8).
+		.{ .bytes = &missing_restart, .verdict = .corrupt, .finding = .extraneous_bytes_before_marker },
 	};
 	for (cases) |case| {
 		var legacy = try jpegz.validate(allocator, case.bytes);

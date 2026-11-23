@@ -2646,51 +2646,71 @@ test "cleanroom lenient: RST cycle mismatch emits Finding(.warn, .restart_marker
     try std.testing.expect(found);
 }
 
-test "cleanroom lenient: RST missing emits Finding(.warn, .restart_marker_missing) + recovers" {
+test "cleanroom lenient: an RST replaced by junk is FAIL 8 then 57 at the next RSTm" {
     const allocator = std.testing.allocator;
 
-    // Same fixture; replace FFD0 (first RST) with AA BB so seekToMarker
-    // can't see a marker. Strict mode → InvalidMarker; lenient + sink →
-    // warn + reset DC predictors + continue from current byte.
-    //
-    // NB: the AA BB bytes will be consumed as garbage entropy data by
-    // the in-flight scan, producing nonsense pixels in that MCU's
-    // neighborhood — but the decoder MUST NOT crash, and a single warn
-    // MUST surface.
+    // Same fixture; replace FFD0 (the first RST) with AA BB. The interval
+    // ends with valid padding, so AA BB and the next interval's bytes are
+    // whole bytes before the next marker, RST1: FAIL 8 at 652 (validate,
+    // 2026-11-22). Like libjpeg, lenient decoding skips them to RST1, which
+    // is out of order (57), and resynchronizes; it does not yet count the
+    // skipped interval, so it may stop at EOI (PLAN). Strict decoding fails.
     const src = fixture_baseline_128x128_dri4;
     var corrupted = try allocator.alloc(u8, src.len);
     defer allocator.free(corrupted);
     @memcpy(corrupted, src);
+    try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xd0 }, src[652..654]);
     corrupted[652] = 0xAA;
     corrupted[653] = 0xBB;
+    const rst1 = std.mem.indexOfPos(u8, corrupted, 654, &.{ 0xff, 0xd1 }).?;
 
     var sink = jpegz.FindingsSink.init(allocator);
     defer sink.deinit();
-
-    // Lenient path. May complete OR may surface a different error
-    // (e.g. TruncatedStream if entropy desyncs too badly). What's
-    // required is: IF it completes successfully, the warn is present.
-    if (jpegz.internal.cleanroomDecodeLenientWithFindings(allocator, corrupted, &sink)) |img| {
-        var img_mut = img;
-        defer img_mut.deinit(allocator);
-        var found = false;
-        for (sink.items()) |f| {
-            if (f.severity == .warn and f.code == .restart_marker_missing) {
-                found = true;
-            }
+    if (jpegz.internal.cleanroomDecodeLenientWithFindings(allocator, corrupted, &sink)) |image| {
+        var img = image;
+        img.deinit(allocator);
+    } else |_| {}
+    var extraneous: usize = 0;
+    var unexpected: usize = 0;
+    for (sink.items()) |f| {
+        try std.testing.expect(f.code != .huffman_table_corrupt);
+        if (f.code == .extraneous_bytes_before_marker) {
+            extraneous += 1;
+            try std.testing.expect(f.severity == .fail and f.offset_is_exact and f.offset.? == 652);
         }
-        try std.testing.expect(found);
-    } else |_| {
-        // Some lenient runs error downstream — still acceptable as
-        // long as the warn was emitted before the error.
-        var found = false;
-        for (sink.items()) |f| {
-            if (f.severity == .warn and f.code == .restart_marker_missing) {
-                found = true;
-            }
+        if (f.code == .restart_marker_unexpected) {
+            unexpected += 1;
+            try std.testing.expectEqual(@as(?u64, rst1), f.offset);
         }
-        try std.testing.expect(found);
     }
+    try std.testing.expectEqual(@as(usize, 1), extraneous);
+    try std.testing.expectEqual(@as(usize, 1), unexpected);
+    try std.testing.expectError(error.BackendError, jpegz.internal.cleanroomDecode(allocator, corrupted));
+}
+
+test "lenient Huffman decoding resumes after a restart that follows truncated data" {
+    // Three bytes cut from the end of the first restart interval: its data
+    // runs into RST0 (insufficient_data). RST0 restarts decoding, as
+    // libjpeg clears its insufficient-data flag, so every later interval
+    // decodes exactly as in the pristine file.
+    const allocator = std.testing.allocator;
+    const src = fixture_baseline_128x128_dri4;
+    try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xd0 }, src[652..654]);
+    const cut = try std.mem.concat(allocator, u8, &.{ src[0..649], src[652..] });
+    defer allocator.free(cut);
+    var sink = jpegz.FindingsSink.init(allocator);
+    defer sink.deinit();
+    var damaged = try jpegz.internal.cleanroomDecodeLenientWithFindings(allocator, cut, &sink);
+    defer damaged.deinit(allocator);
+    var pristine = try jpegz.decode(allocator, src);
+    defer pristine.deinit(allocator);
+    var insufficient: usize = 0;
+    for (sink.items()) |f| insufficient += @intFromBool(f.code == .insufficient_data);
+    try std.testing.expectEqual(@as(usize, 1), insufficient);
+    // The bottom 16 rows lie far past the damaged first interval.
+    const row = @as(usize, pristine.width) * pristine.channels;
+    const tail = row * 16;
+    try std.testing.expectEqualSlices(u8, pristine.pixels[pristine.pixels.len - tail ..], damaged.pixels[damaged.pixels.len - tail ..]);
 }
 
 test "cleanroom emits Finding(.warn, .entropy_fill_bytes) for extra 0xFF in marker prefix" {

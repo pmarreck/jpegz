@@ -1499,7 +1499,8 @@ test "sampling finding scope and complete component guards classify every frame 
 test "whole bytes after valid padding at the end of a scan have their own reason" {
 	// Validate, 2026-11-05 (audit row 51b): libjpeg's "N extraneous bytes
 	// before marker 0xd9" writer pattern must be told apart from invalid
-	// entropy. Detection and class are unchanged: FAIL 51 either way. One 8x8
+	// entropy. Since 2026-11-22 (validate) whole bytes after valid padding are
+	// FAIL 8, exact at the first of them; invalid entropy stays 51. One 8x8
 	// gray block: DC code 0 then AC EOB 000, so 0x0f ends with four 1 pad bits.
 	const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++
 		([_]u8{1} ** 64) ++
@@ -1525,7 +1526,11 @@ test "whole bytes after valid padding at the end of a scan have their own reason
 		var huffman: usize = 0;
 		for (report.findings.items) |finding| {
 			if (finding.severity != .fail) continue;
-			try std.testing.expectEqual(jpegz.FindingCode.huffman_table_corrupt, finding.code);
+			if (case.trailing != null) {
+				try std.testing.expectEqual(jpegz.FindingCode.extraneous_bytes_before_marker, finding.code);
+				try std.testing.expect(finding.offset_is_exact);
+				try std.testing.expectEqual(@as(?u64, header.len + 1), finding.offset);
+			} else try std.testing.expectEqual(jpegz.FindingCode.huffman_table_corrupt, finding.code);
 			huffman += 1;
 			const expected = case.trailing orelse "invalid Huffman entropy or padding at end of scan";
 			errdefer std.debug.print("expected {s}, got {s}\n", .{ expected, finding.detail.? });
@@ -1935,6 +1940,100 @@ test "SOS table selectors outside T.81 Table B.3 are finding 75 (validate 2026-1
 			defer report.deinit(allocator);
 			try std.testing.expectEqual(case.fails, try countCode(report, .sos_table_selector_invalid, .fail, sel_ll));
 		}
+	}
+}
+
+test "Huffman data faults are 74, 58 and 8 exact at the code, not 51 (validate 2026-11-22)" {
+	// One 8x8 gray block. DC table: code 0 -> category 0. AC table: three-bit
+	// codes 000 EOB, 001 ZRL, 010 0xE1, 011 0xF1; codes 1xx match nothing,
+	// which T.81 allows (incomplete tables).
+	const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++
+		([_]u8{1} ** 64) ++
+		[_]u8{ 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 23, 0x10, 0, 0, 4 } ++ ([_]u8{0} ** 13) ++
+		[_]u8{ 0, 0xf0, 0xe1, 0xf1 } ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0 };
+	const dc_value = std.mem.indexOf(u8, &header, &.{ 0xff, 0xc4, 0, 20 }).? + 21;
+	const e1_value = std.mem.indexOf(u8, &header, &.{ 0xf0, 0xe1 }).? + 1;
+	const Case = struct { patch_at: ?usize = null, patch: u8 = 0, entropy: []const u8, code: jpegz.FindingCode, at: usize, detail: []const u8 };
+	const allocator = std.testing.allocator;
+	for ([_]Case{
+		// DC code 1: no entry.
+		// Bytes after the bad code keep the reader's lookahead off the EOI.
+		.{ .entropy = &.{ 0x80, 0x00, 0x00, 0x00, 0x00 }, .code = .entropy_decode_invalid, .at = 0, .detail = "DC Huffman code matches no table entry" },
+		// DC 0, then AC code 100: no entry.
+		.{ .entropy = &.{ 0x40, 0x00, 0x00, 0x00, 0x00 }, .code = .entropy_decode_invalid, .at = 0, .detail = "AC Huffman code matches no table entry" },
+		// DC 0, four ZRLs: 1 -> 17 -> 33 -> 49 -> 65; the fourth starts in byte 1.
+		.{ .entropy = &.{ 0x12, 0x4f }, .code = .entropy_decode_invalid, .at = 1, .detail = "AC zero run past Se=63" },
+		// DC 0, four 0xF1 (run 15, size 1): the fourth run reaches k = 64; it
+		// starts in byte 1. The trailing 1 bit and padding form a stuffed FF.
+		.{ .entropy = &.{ 0x3b, 0xbb, 0xff, 0x00 }, .code = .entropy_decode_invalid, .at = 1, .detail = "AC zero run past Se=63" },
+		// The DC code decodes category 12: past 11 at 8 bits.
+		.{ .patch_at = dc_value, .patch = 12, .entropy = &.{ 0x0f }, .code = .dct_coefficient_overflow, .at = 0,
+			.detail = "DC difference category 12 exceeds 11 for 8-bit samples (T.81 F.1.2.1)" },
+		// AC code 010 decodes 0x1B: category 11, past 10.
+		.{ .patch_at = e1_value, .patch = 0x1b, .entropy = &.{ 0x2f }, .code = .dct_coefficient_overflow, .at = 0,
+			.detail = "AC coefficient category 11 exceeds 10 for 8-bit samples (T.81 F.1.2.2)" },
+	}) |case| {
+		var head = header;
+		if (case.patch_at) |at| head[at] = case.patch;
+		const data = try std.mem.concat(allocator, u8, &.{ &head, case.entropy, &.{ 0xff, 0xd9 } });
+		defer allocator.free(data);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		errdefer for (report.findings.items) |f| std.debug.print("  {t} {?d} {s}\n", .{ f.code, f.offset, f.detail orelse "" });
+		var hits: usize = 0;
+		for (report.findings.items) |f| {
+			try std.testing.expect(f.code != .huffman_table_corrupt);
+			if (f.code != case.code) continue;
+			hits += 1;
+			try std.testing.expect(f.severity == .fail and f.offset_is_exact);
+			try std.testing.expectEqual(@as(?u64, header.len + case.at), f.offset);
+			try std.testing.expectEqualStrings(case.detail, f.detail.?);
+		}
+		try std.testing.expectEqual(@as(usize, 1), hits);
+	}
+}
+
+test "Huffman insufficient_data and restart-boundary whole bytes report file offsets" {
+	const allocator = std.testing.allocator;
+	{
+		// Entropy cut 40 bytes in, then EOI: insufficient_data at the EOI,
+		// a file offset (it was once reported relative to the scan).
+		const src = @embedFile("fixtures/baseline_16x16_rgb12_420.jpg");
+		const sos = findMarker(src, 0xda).?;
+		const cut = sos + 2 + (@as(usize, src[sos + 2]) << 8 | src[sos + 3]) + 40;
+		const data = try std.mem.concat(allocator, u8, &.{ src[0..cut], &.{ 0xff, 0xd9 } });
+		defer allocator.free(data);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		var seen = false;
+		for (report.findings.items) |f| if (f.code == .insufficient_data) {
+			seen = true;
+			try std.testing.expectEqual(@as(?u64, cut), f.offset);
+		};
+		try std.testing.expect(seen);
+	}
+	{
+		// Two bytes inserted after a restart interval's valid padding: FAIL 8
+		// at the first of them, not 51.
+		const src = @embedFile("fixtures/baseline_128x128_dri4.jpg");
+		const rst = findMarker(src, 0xd0).?;
+		const data = try std.mem.concat(allocator, u8, &.{ src[0..rst], &.{ 0x12, 0x34 }, src[rst..] });
+		defer allocator.free(data);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		var hits: usize = 0;
+		for (report.findings.items) |f| {
+			try std.testing.expect(f.code != .huffman_table_corrupt);
+			if (f.code != .extraneous_bytes_before_marker or f.severity != .fail) continue;
+			hits += 1;
+			try std.testing.expect(f.offset_is_exact);
+			try std.testing.expectEqual(@as(?u64, rst), f.offset);
+			try std.testing.expectEqualStrings("2 whole bytes after valid padding before marker 0xD0", f.detail.?);
+		}
+		try std.testing.expectEqual(@as(usize, 1), hits);
 	}
 }
 
