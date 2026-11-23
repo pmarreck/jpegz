@@ -44,7 +44,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## JPEG-LS conformance
 
-- [x] Validate JPEG-LS mapping tables per T.87 C.2.3/C.2.4.1.2-3 with validate's codes 124 (undefined table, FAIL), 125 (Tmi with Pt, WARN) and 126 (malformed table, FAIL; tokens tid_range, wt_range, length, continuation, entries) instead of refusing the scan; one-byte tables map in the decode API, wider ones are NotImplemented there and validate on indices; CharLS fixture plus byte-edited variants, an ID 2 + ID 3 split, replacement and ILV 0 cases; fifteen mutants killed (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md; done 2026-11-22 10:15 EST).
 - [ ] Owner decision: admit CharLS 3.0's RANGE-from-P coding of LSE MAXVAL < 2^P-1 (127 only_charls) as known_defect now, keep it unsupported until real-world files appear, or admit after checking CharLS 2.x and the latest release; validate queued it and recommends the version check if cheap (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md).
 - [x] Decode JPEG-LS subsampled components: line-interleaved scans decode per T.87 B.2/B.4 (Vi lines per component per MCU, per-component plane sizes, padding lines dropped); t8sse0 matches the HP reference planes test8r/test8gr4/test8bs2 exactly and t8sse3 within NEAR 3, and both now validate as decoded; restarts, point transform, mapping tables, the dual MAXVAL decode and ILV 0/2 stay NotImplemented for unequal planes; seven mutants killed (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md; done 2026-11-22 11:20 EST).
 - [ ] Owner decision: how the JPEG-LS decode API should return components of unequal size (t8sse0/3): keep NotImplemented (validation and jpegls_cleanroom_decode_planes already work), upsample to full size by replication, or expose planes through the public API (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md).
@@ -53,7 +52,8 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Build and CLI
 
 - [x] Measure fresh test execution separately from admission, dependency setup, evaluation and compilation; preserve complete coverage and report the one-second target/five-second budget. Answer: run steps with compiles cached took 10.6 s, 85% in one exhaustive validate sweep; a frame-free leak-checked allocator (524d1ac) and validate's per-SOF finding 66 (aeb75d2) bring execution to about 4.1 s with full coverage, inside the 5 s budget but not the 1 s target; facade_validation (1-2 s) is the largest remaining share; -Dtest-filter=TEXT added for bisection (context: docs/measurements/test-timing-2026-11-22.md; done 2026-11-22 16:10 EST).
-- [ ] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks; coordinate the unnecessary encoder linkage with libjxlz.
+- [x] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks. Answer: build.zig compiles the pinned brotliSrc (common, dec, enc) with Zig for each target via -Dbrotli-src/BROTLI_SRC, which every Nix build and the dev shell set; the Windows cross checks now link JXL; system libraries remain the fallback when no source is given (done 2026-11-23 11:45 EST).
+- [ ] Track libjxlz's validator exports pulling the Brotli encoder into the link (FYI sent earlier); the vendored Brotli compiles the encoder until libjxlz drops that dependency.
 - [ ] Add U5b progress controls and pure timestamp-injected rendering; verify rendered output with Peter and test terminal/width degradation.
 
 ## Deferred

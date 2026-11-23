@@ -44,8 +44,24 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const brotli_include_dir = b.graph.environ_map.get("BROTLI_INCLUDE_DIR");
-    const brotli_lib_dir = b.graph.environ_map.get("BROTLI_LIB_DIR");
+    // Brotli (libjxlz reads Brotli-compressed JXL container metadata and its
+    // validator exports reach the encoder too). With `-Dbrotli-src=PATH` or
+    // BROTLI_SRC, the pinned source is compiled here with Zig's clang, as
+    // charls is, so every target links the same static Brotli; the flake
+    // always passes it. Without it, BROTLI_INCLUDE_DIR / BROTLI_LIB_DIR name
+    // system libraries, for consumers that provide their own.
+    const brotli_src_path: ?[]const u8 = b.option(
+        []const u8,
+        "brotli-src",
+        "Path to a Brotli source tree (with c/common, c/dec, c/enc, c/include); compiled with Zig",
+    ) orelse b.graph.environ_map.get("BROTLI_SRC");
+    const brotli_include_dir: ?[]const u8 = if (brotli_src_path) |src|
+        b.fmt("{s}/c/include", .{src})
+    else
+        b.graph.environ_map.get("BROTLI_INCLUDE_DIR");
+    const brotli_link: BrotliLink = if (brotli_src_path) |src| .{ .vendored = vendoredBrotli(b, src, target, optimize) } else .{
+        .system = b.graph.environ_map.get("BROTLI_LIB_DIR"),
+    };
 
     const addBrotliIncludes = struct {
         fn apply(mod: *std.Build.Module, include_dir: ?[]const u8) void {
@@ -53,11 +69,16 @@ pub fn build(b: *std.Build) void {
         }
     }.apply;
     const linkBrotli = struct {
-        fn apply(mod: *std.Build.Module, lib_dir: ?[]const u8) void {
-            if (lib_dir) |path| mod.addLibraryPath(.{ .cwd_relative = path });
-            mod.linkSystemLibrary("brotlienc", .{});
-            mod.linkSystemLibrary("brotlidec", .{});
-            mod.linkSystemLibrary("brotlicommon", .{});
+        fn apply(mod: *std.Build.Module, link: BrotliLink) void {
+            switch (link) {
+                .vendored => |lib| mod.linkLibrary(lib),
+                .system => |lib_dir| {
+                    if (lib_dir) |path| mod.addLibraryPath(.{ .cwd_relative = path });
+                    mod.linkSystemLibrary("brotlienc", .{});
+                    mod.linkSystemLibrary("brotlidec", .{});
+                    mod.linkSystemLibrary("brotlicommon", .{});
+                },
+            }
         }
     }.apply;
 
@@ -84,22 +105,13 @@ pub fn build(b: *std.Build) void {
 
     // -Dwith-jxl=false drops the JPEG XL leg of the validation facade.
     //
-    // It exists for one reason: libjxlz reads Brotli-compressed JXL container
-    // metadata through `@cImport(<brotli/decode.h>)`, and nixpkgs has no
-    // working Brotli for the mingw-w64 target — the dynamic build ships only
-    // `.dll.a` import libraries (Zig looks for `libbrotli*.a`) and the static
-    // build fails to compile. Windows therefore cannot link the JXL leg today.
-    //
-    // This is NOT a capability regression: before the facade existed, Windows
-    // compiled no JXL path at all (see the facade test's Windows exclusion
-    // below). The difference is that jpegz now SAYS so — a JXL file on a
-    // build without this leg validates as `indeterminate` with
-    // `jxl_validator_unavailable`, which is exactly what that verdict is for.
-    // Sniffing still identifies the format, since that is pure byte matching.
-    //
-    // Removing this option means vendoring Brotli's source and compiling it
-    // with Zig, the same way charls is handled — the honest fix, and the one
-    // that would let a single static Windows binary validate JXL.
+    // It is for consumers that do not want Brotli at all: libjxlz reads
+    // Brotli-compressed JXL container metadata through
+    // `@cImport(<brotli/decode.h>)`. A JXL file on a build without this leg
+    // validates as `indeterminate` with `jxl_validator_unavailable`; sniffing
+    // still identifies the format. Windows used to need it, since nixpkgs has
+    // no mingw-w64 Brotli Zig can link; Brotli is now compiled from pinned
+    // source (`-Dbrotli-src`, below), so every target can carry JXL.
     const with_jxl = b.option(
         bool,
         "with-jxl",
@@ -510,7 +522,7 @@ pub fn build(b: *std.Build) void {
 
     // (2) Inline tests in the core module itself.
 	// Inspecting the provider's enums also emits its C API exports.
-	if (with_jxl) linkBrotli(jpegz_test_mod, brotli_lib_dir);
+	if (with_jxl) linkBrotli(jpegz_test_mod, brotli_link);
     const jpegz_inline_tests = b.addTest(.{
         .filters = test_filters,
         .name = "jpegz_inline",
@@ -731,7 +743,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = test_optimize,
     });
-    if (with_jxl) linkBrotli(facade_validation_test_mod, brotli_lib_dir);
+    if (with_jxl) linkBrotli(facade_validation_test_mod, brotli_link);
     facade_validation_test_mod.addImport("jpegz", jpegz_validation_mod);
     const facade_validation_tests = b.addTest(.{
         .filters = test_filters,
@@ -782,7 +794,7 @@ pub fn build(b: *std.Build) void {
     validation_probe_mod.addAnonymousImport("jxl_fixture", .{
         .root_source_file = b.path("tests/unit/fixtures/jxl_delta_palette_valid.jxl"),
     });
-    if (with_jxl) linkBrotli(validation_probe_mod, brotli_lib_dir);
+    if (with_jxl) linkBrotli(validation_probe_mod, brotli_link);
     const validation_probe = b.addExecutable(.{
         .name = "jpegz-validator-proof",
         .root_module = validation_probe_mod,
@@ -887,7 +899,7 @@ pub fn build(b: *std.Build) void {
     // reaches libjxlz's Brotli calls for container metadata. This suite is the
     // one place that exercises BOTH ABI halves against one library, so it is
     // the gate that would catch the two archives' symbol sets diverging.
-    if (with_jxl) linkBrotli(c_smoke_mod, brotli_lib_dir);
+    if (with_jxl) linkBrotli(c_smoke_mod, brotli_link);
     if (opt_libjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
     if (opt_openjpeg_lib) |p| c_smoke_mod.addLibraryPath(.{ .cwd_relative = p });
     const c_smoke = b.addExecutable(.{
@@ -927,7 +939,7 @@ pub fn build(b: *std.Build) void {
     // one C dependency it keeps, because libjxlz reads Brotli-compressed JXL
     // container metadata. Linking the full `lib` here instead would drag in
     // the nested system archives that LLD refuses and Zig then fails on.
-    if (with_jxl) linkBrotli(cli_mod, brotli_lib_dir);
+    if (with_jxl) linkBrotli(cli_mod, brotli_link);
     cli_mod.addCSourceFile(.{
         .file = b.path("src/cli/jpegz.c"),
         // Zig leaves NDEBUG undefined in ReleaseSafe, so the debug banner keys
@@ -1128,4 +1140,41 @@ fn fuzzRegressions(b: *std.Build, harnesses: []const []const u8) *std.Build.Modu
         index.appendSlice(b.allocator, "};\n") catch @panic("OOM");
     }
     return b.createModule(.{ .root_source_file = files.add("regressions.zig", index.items) });
+}
+
+/// How executables and tests get Brotli: compiled from the pinned source,
+/// or system libraries in an optional directory.
+const BrotliLink = union(enum) {
+    vendored: *std.Build.Step.Compile,
+    system: ?[]const u8,
+};
+
+/// Brotli's common, decoder and encoder sources (google/brotli c/), as one
+/// static library built by Zig for `target`. The list is explicit so that a
+/// source bump which adds or drops a file fails here instead of linking a
+/// partial library.
+fn vendoredBrotli(
+    b: *std.Build,
+    src: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step.Compile {
+    const mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
+    mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/c/include", .{src}) });
+    const flags: []const []const u8 = &.{ "-std=c99", "-Wno-unused-parameter" };
+    mod.addCSourceFiles(.{ .root = .{ .cwd_relative = b.fmt("{s}/c/common", .{src}) }, .flags = flags, .files = &.{
+        "constants.c", "context.c", "dictionary.c", "platform.c", "shared_dictionary.c", "transform.c",
+    } });
+    mod.addCSourceFiles(.{ .root = .{ .cwd_relative = b.fmt("{s}/c/dec", .{src}) }, .flags = flags, .files = &.{
+        "bit_reader.c", "decode.c", "huffman.c", "prefix.c", "state.c", "static_init.c",
+    } });
+    mod.addCSourceFiles(.{ .root = .{ .cwd_relative = b.fmt("{s}/c/enc", .{src}) }, .flags = flags, .files = &.{
+        "backward_references.c", "backward_references_hq.c", "bit_cost.c",         "block_splitter.c",
+        "brotli_bit_stream.c",   "cluster.c",                "command.c",          "compound_dictionary.c",
+        "compress_fragment.c",   "compress_fragment_two_pass.c", "dictionary_hash.c", "encode.c",
+        "encoder_dict.c",        "entropy_encode.c",         "fast_log.c",         "histogram.c",
+        "literal_cost.c",        "memory.c",                 "metablock.c",        "static_dict.c",
+        "static_dict_lut.c",     "static_init.c",            "utf8_util.c",
+    } });
+    return b.addLibrary(.{ .name = "brotli", .root_module = mod, .linkage = .static });
 }

@@ -132,14 +132,17 @@ Add `--rebuild` to request fresh execution instead of a cached Nix result.
 Build options and memory ownership are documented in [SPEC.md](SPEC.md).
 
 The full suite also links the test graph for ARM64 Linux, ARM64 macOS, and
-x86-64/ARM64 Windows. Those foreign-target checks disable JXL and the external
-oracles; they do not run target binaries. Native Linux tests retain the full
-enabled feature set.
+x86-64/ARM64 Windows. Those foreign-target checks include JXL validation, with
+Brotli compiled from pinned source by Zig for each target, and disable the
+external oracles; they do not run target binaries. Native Linux tests retain
+the full enabled feature set.
 
 The libjpeg-turbo and CharLS oracles are optional. Disabling JP2 pixel decoding
 with `-Dwith-jp2-decode=false` removes OpenJPEG while retaining JP2 validation.
-Windows JXL validation remains disabled in the cross check pending Brotli
-vendoring; unavailable JXL validation returns indeterminate.
+Brotli, needed for JXL validation, is built from source given by
+`-Dbrotli-src` (or `BROTLI_SRC`), which the Nix builds always set. Without it,
+`BROTLI_INCLUDE_DIR` and `BROTLI_LIB_DIR` name system libraries. A build with
+`-Dwith-jxl=false` returns indeterminate for JXL.
 
 ## Goals
 

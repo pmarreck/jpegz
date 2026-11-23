@@ -128,12 +128,9 @@
           builtins.deepSeq (map (package: package.meta.changelog or null)
             [ libjpegTurbo openjpegPkg brotliPkg ])
           (pkgs.writeText "jpegz-dependency-compatibility" "Codec metadata and patch-list controls passed.\n");
-        # NOTE: there is deliberately no mingw-w64 Brotli here. Both nixpkgs
-        # candidates were tried and neither works: `pkgsCross.mingwW64.brotli`
-        # ships only `.dll.a` import libraries (Zig searches for
-        # `brotli*.dll` / `brotli*.lib` / `libbrotli*.a` and finds none), and
-        # `pkgsCross.mingwW64.pkgsStatic.brotli` fails to build. The Windows
-        # cross check therefore passes `-Dwith-jxl=false`; see build.zig.
+        # No mingw-w64 Brotli from nixpkgs: `pkgsCross.mingwW64.brotli` ships
+        # only `.dll.a` import libraries and its pkgsStatic build fails. Instead
+        # build.zig compiles `brotliSrc` with Zig for every target (BROTLI_SRC).
         # charls — BSD-3, JPEG-LS (T.87) reference codec. We vendor the
         # source (not a binary package) and compile it via Zig's own
         # bundled clang + libc++. Two attempts at consuming the binary
@@ -262,8 +259,7 @@
             dontConfigure = true;
             buildPhase = ''
               export HOME=$TMPDIR
-              export BROTLI_INCLUDE_DIR=${brotliPkg.dev}/include
-              export BROTLI_LIB_DIR=${brotliPkg.lib}/lib
+              export BROTLI_SRC=${brotliSrc}
               export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
               mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
               # Seed the cache with the pre-fetched vendored deps (openjpeg
@@ -292,8 +288,7 @@
           dontConfigure = true;
           buildPhase = ''
             export HOME=$TMPDIR
-            export BROTLI_INCLUDE_DIR=${brotliPkg.dev}/include
-            export BROTLI_LIB_DIR=${brotliPkg.lib}/lib
+            export BROTLI_SRC=${brotliSrc}
             export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
             mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
             # Seed the cache with pre-fetched vendored deps (see mkJpegzPackage
@@ -369,7 +364,7 @@
 				export XDG_RUNTIME_DIR=$HOME/runtime ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
 				mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR" "$ZIG_GLOBAL_CACHE_DIR"
 				chmod 700 "$XDG_RUNTIME_DIR"
-				export BROTLI_INCLUDE_DIR=${brotliPkg.dev}/include BROTLI_LIB_DIR=${brotliPkg.lib}/lib
+				export BROTLI_SRC=${brotliSrc}
 				cp -r ${zigDeps}/* "$ZIG_GLOBAL_CACHE_DIR/"
 				chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
 				driver_status=0
@@ -392,11 +387,10 @@
         # lets jpegz cross-compile where system openjp2/libjpeg are unavailable.
         # test-build compiles and links every test executable but does not run
         # it. The link step is where missing opj_* symbols surface. CharLS and
-        # the libjpeg oracle are off. JXL stays off because no target-built
-        # Brotli is supplied: nixpkgs has no usable mingw-w64 Brotli that Zig
-        # can link, and a native Brotli would make a foreign gate pass while
-        # producing an artifact that cannot run. Those builds report JPEG XL
-        # as indeterminate / jxl_validator_unavailable. Native tests cover JXL.
+        # the libjpeg oracle are off. JXL is on: build.zig compiles the
+        # pinned Brotli source for the foreign target with Zig, so the link
+        # resolves target-built Brotli (nixpkgs has no mingw-w64 Brotli Zig
+        # can link). This is a link gate; native tests run JXL.
         mkCrossLinkCheck = crossTarget: pkgs.stdenv.mkDerivation {
           pname = "jpegz-cross-${crossTarget}";
           version = "0.0.1";
@@ -409,12 +403,13 @@
             mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
             cp -r ${zigDeps}/* "$ZIG_GLOBAL_CACHE_DIR/"
             chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
+            export BROTLI_SRC=${brotliSrc}
             zig build test-build -j2 -Dtarget=${crossTarget} \
-              -Dwith-charls=false -Dwith-libjpeg-oracle=false -Dwith-jxl=false
+              -Dwith-charls=false -Dwith-libjpeg-oracle=false
           '';
           installPhase = ''
             mkdir -p $out
-            echo "${crossTarget} cross-link ok (JXL and external oracles disabled; not a runtime test)" > $out/result
+            echo "${crossTarget} cross-link ok (JXL with vendored Brotli; external oracles disabled; not a runtime test)" > $out/result
           '';
         };
 
@@ -427,8 +422,7 @@
           dontConfigure = true;
           buildPhase = ''
             export HOME=$TMPDIR
-            export BROTLI_INCLUDE_DIR=${brotliPkg.dev}/include
-            export BROTLI_LIB_DIR=${brotliPkg.lib}/lib
+            export BROTLI_SRC=${brotliSrc}
             export ZIG_GLOBAL_CACHE_DIR=$TMPDIR/zig-cache
             mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
             cp -r ${zigDeps}/* "$ZIG_GLOBAL_CACHE_DIR/"
@@ -500,8 +494,8 @@
           packages = [ zigPkg pkgs.bash pkgs.coreutils pkgs.git pkgs.cacert libjpegNativePkg openjpegNativePkg brotliNativePkg pkgs.hyperfine pkgs.pkg-config ]
 		    ++ pkgs.lib.optionals isLinux [ pkgs.bubblewrap ];
           CHARLS_SRC = charlsSrc;
-          BROTLI_INCLUDE_DIR = "${brotliNativePkg.dev}/include";
-          BROTLI_LIB_DIR = "${brotliNativePkg.lib}/lib";
+          # Brotli is compiled from this pinned source by build.zig.
+          BROTLI_SRC = brotliSrc;
           shellHook = ''
             # Zig cannot authenticate a private archive URL itself. Seed the
             # locked package once; repeating the fetch rewrites the same

@@ -497,7 +497,10 @@ system archives are not bundled as nested members.
   requesting JP2 pixels returns `NotImplemented`.
 - `-Dwith-jxl=false` disables JXL validation. Sniffing still recognizes JXL,
   with an indeterminate verdict and `jxl_validator_unavailable`.
-  The Windows cross check currently uses this until Brotli is vendored.
+- `-Dbrotli-src=PATH` (or `BROTLI_SRC`) compiles Brotli from that source tree
+  with Zig for the target. The Nix builds always pass the pinned source, so
+  every target, Windows included, links the same static Brotli. Without it,
+  `BROTLI_INCLUDE_DIR` and `BROTLI_LIB_DIR` select system libraries.
 
 Exact leaf versions belong in [build.zig.zon](build.zig.zon).
 Historical classifier and closure measurements are dated in
