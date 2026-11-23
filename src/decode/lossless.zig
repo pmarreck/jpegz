@@ -342,7 +342,19 @@ fn validateEntropy(data: []const u8, start: usize, frame: *const FrameInfo, scan
 		if (restart != 0 and mcu != 0 and mcu % restart == 0) {
 			const marker = br.finishHuffmanSegment() catch |err| try zeroPadMarker(&br, err, start, sink);
 			if (marker == 0xdc) return error.NotImplemented;
-			if (marker != expected_rst) return error.InvalidMarker;
+			// As on the sequential path: a wrong RSTm is 57, another marker 56.
+			if (marker != expected_rst) {
+				var buf: [64]u8 = undefined;
+				const at = start + br.byte_pos;
+				if (marker >= 0xd0 and marker <= 0xd7) {
+					try sink.emitExact(.fail, .restart_marker_unexpected, at, std.fmt.bufPrint(&buf,
+						"expected RST{d} (0x{x:0>2}) but got RST{d} (0x{x:0>2})", .{ expected_rst - 0xd0, expected_rst, marker - 0xd0, marker }) catch buf[0..0]);
+				} else {
+					try sink.emitExact(.fail, .restart_marker_missing, at, std.fmt.bufPrint(&buf,
+						"marker 0x{x:0>2} where RST{d} belongs", .{ marker, expected_rst - 0xd0 }) catch buf[0..0]);
+				}
+				return error.InvalidMarker;
+			}
 			br.skipPastMarker();
 			expected_rst = 0xd0 + ((expected_rst - 0xd0 + 1) & 7);
 		}
@@ -350,19 +362,50 @@ fn validateEntropy(data: []const u8, start: usize, frame: *const FrameInfo, scan
 			const comp = frame.components[ci];
 			const count = if (interleaved) @as(usize, comp.h_factor) * comp.v_factor else 1;
 			for (0..count) |_| {
-				const category = tables[comp.dc_table].?.decode(&br) catch return entropyError(&br);
-				if (category > 16) return error.BackendError;
+				const code_mark = br.mark();
+				const category = tables[comp.dc_table].?.decode(&br) catch return dataFault(&br, start, sink, code_mark);
+				if (category > 16) {
+					// Validate 2026-11-22: 58, exact at the code.
+					var buf: [80]u8 = undefined;
+					try sink.emitExact(.fail, .dct_coefficient_overflow, start + br.markOffset(code_mark),
+						std.fmt.bufPrint(&buf, "difference category {d} exceeds 16 (T.81 H.1.2.2)", .{category}) catch buf[0..0]);
+					return error.BackendError;
+				}
 				// H.1.2.2: category16 carries no amplitude; other nonzero
 				// categories carry that many bits. Predictor4 can exceed P.
 				if (category > 0 and category < 16)
-					_ = br.readBits(@intCast(category)) catch return entropyError(&br);
+					_ = br.readBits(@intCast(category)) catch return dataFault(&br, start, sink, null);
 			}
 		}
 	}
 	const marker = br.finishHuffmanSegment() catch |err| try zeroPadMarker(&br, err, start, sink);
 	if (marker == 0xdc) return error.NotImplemented;
-	if (marker >= 0xd0 and marker <= 0xd7) return error.InvalidMarker;
+	if (marker >= 0xd0 and marker <= 0xd7) {
+		try sink.emitExact(.fail, .restart_marker_unexpected, start + br.byte_pos, "restart marker after the final MCU of the scan");
+		return error.InvalidMarker;
+	}
 	return start + br.byte_pos;
+}
+
+/// A difference that cannot be decoded (validate rulings 2026-11-22). Data
+/// that runs into a marker is `insufficient_data` at the marker; a code that
+/// matches no table entry (`mark` is where it began) is 74, exact. A DNL
+/// stays unsupported, and data that simply ends is left to the marker walk.
+fn dataFault(br: *const bitstream.BitReader, start: usize, sink: *findings_mod.FindingsSink, mark: ?bitstream.BitReader.Mark) Error {
+	var boundary = br.*;
+	if (boundary.marker_seen) {
+		boundary.seekToMarker();
+		if (boundary.marker_seen and boundary.marker_byte == 0xdc) return error.NotImplemented;
+		// This path stops here rather than recovering, so the report's FAIL is
+		// emitted directly.
+		sink.emit(.fail, .insufficient_data, @intCast(start + br.byte_pos),
+			"Corrupt JPEG data: premature end of data segment") catch return error.OutOfMemory;
+		return error.BackendError;
+	}
+	if (br.byte_pos >= br.data.len) return error.TruncatedStream;
+	if (mark) |m| sink.emitExact(.fail, .entropy_decode_invalid, start + br.markOffset(m),
+		"difference Huffman code matches no table entry") catch return error.OutOfMemory;
+	return error.BackendError;
 }
 
 /// All-zero pad bits are a known encoder defect (finding 63, T.81 §F.1.2.3):
@@ -377,13 +420,13 @@ fn zeroPadMarker(br: *bitstream.BitReader, err: anyerror, base: usize, sink: *fi
 	}
 	if (err == error.InvalidEntropyBoundary) {
 		// Whole bytes after valid padding (libjpeg's "extraneous bytes
-		// before marker"): name them, as baseline does. Same code and class.
+		// before marker"): FAIL 8 at the first (validate, 2026-11-22).
 		if (br.trailingBytesAfterPadding()) |trailing| {
 			var buf: [96]u8 = undefined;
 			const detail = std.fmt.bufPrint(&buf, "{d} whole {s} after valid padding before marker 0x{X:0>2}", .{
 				trailing.count, if (trailing.count == 1) "byte" else "bytes", trailing.marker,
 			}) catch unreachable;
-			try sink.emit(.fail, .huffman_table_corrupt, base + br.byte_pos, detail);
+			try sink.emitExact(.fail, .extraneous_bytes_before_marker, base + trailing.first, detail);
 			return error.BackendError;
 		}
 	}

@@ -2218,6 +2218,70 @@ test "progressive ZRL past Se is 74, and a file ending in unread bytes is trunca
 	}
 }
 
+/// Two-sample 8-bit lossless (SOF3, predictor 1) frame with DC table 0
+/// coded by `bits` and `values`; entropy data follows.
+fn losslessHead(comptime bits: [16]u8, comptime values: []const u8) [2 + 13 + 5 + 16 + values.len + 10]u8 {
+	return [_]u8{ 0xff, 0xd8, 0xff, 0xc3, 0, 11, 8, 0, 1, 0, 2, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 2 + 1 + 16 + values.len, 0x00 } ++ bits ++ values[0..values.len].* ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0x00, 1, 0, 0 };
+}
+
+test "lossless data faults are typed: 74, 58, insufficient_data and restart 57 (validate 2026-11-22)" {
+	const allocator = std.testing.allocator;
+	// Codes: 0 -> category 0, 10 -> category 17 (past 16), or only code 0.
+	const two = comptime losslessHead(.{ 1, 1 } ++ ([_]u8{0} ** 14), &.{ 0, 17 });
+	const one = comptime losslessHead(.{1} ++ ([_]u8{0} ** 15), &.{0});
+	const eight = comptime losslessHead(.{ 1, 1 } ++ ([_]u8{0} ** 14), &.{ 0, 8 });
+	const Case = struct { data: []const u8, code: jpegz.FindingCode, offset: usize, exact: bool, detail: []const u8 };
+	const cat17 = two ++ [_]u8{ 0xbf, 0xff, 0xd9 };
+	const unmatched = one ++ [_]u8{ 0x80, 0x00, 0x00, 0x00, 0xff, 0xd9 };
+	// Category 8 needs eight more bits; only six precede EOI.
+	const short = eight ++ [_]u8{ 0xbf, 0xff, 0xd9 };
+	for ([_]Case{
+		.{ .data = &cat17, .code = .dct_coefficient_overflow, .offset = two.len, .exact = true, .detail = "difference category 17 exceeds 16 (T.81 H.1.2.2)" },
+		.{ .data = &unmatched, .code = .entropy_decode_invalid, .offset = one.len, .exact = true, .detail = "difference Huffman code matches no table entry" },
+		.{ .data = &short, .code = .insufficient_data, .offset = eight.len + 1, .exact = false, .detail = "Corrupt JPEG data: premature end of data segment" },
+	}) |case| {
+		var report = try jpegz.validate(allocator, case.data);
+		defer report.deinit(allocator);
+		errdefer for (report.findings.items) |f| std.debug.print("  {t} {?d} {s}\n", .{ f.code, f.offset, f.detail orelse "" });
+		var hits: usize = 0;
+		for (report.findings.items) |f| {
+			try std.testing.expect(f.code != .huffman_table_corrupt);
+			if (f.code != case.code) continue;
+			hits += 1;
+			try std.testing.expect(f.offset_is_exact == case.exact);
+			try std.testing.expectEqual(@as(?u64, case.offset), f.offset);
+			try std.testing.expectEqualStrings(case.detail, f.detail.?);
+		}
+		try std.testing.expectEqual(@as(usize, 1), hits);
+		try std.testing.expect(!report.isValid());
+	}
+	const dri = @embedFile("fixtures/lossless_16x16_gray_dri.jpg");
+	const rst = findMarker(dri, 0xd0).?;
+	const eoi = dri.len - 2;
+	var wrong = dri.*;
+	wrong[rst + 1] = 0xd4;
+	const final_rst = dri[0..eoi].* ++ [_]u8{ 0xff, 0xd7 } ++ dri[eoi..].*;
+	for ([_]Case{
+		.{ .data = &wrong, .code = .restart_marker_unexpected, .offset = rst, .exact = true, .detail = "expected RST0 (0xd0) but got RST4 (0xd4)" },
+		.{ .data = &final_rst, .code = .restart_marker_unexpected, .offset = eoi, .exact = true, .detail = "restart marker after the final MCU of the scan" },
+	}) |case| {
+		var report = try jpegz.validate(allocator, case.data);
+		defer report.deinit(allocator);
+		errdefer for (report.findings.items) |f| std.debug.print("  {t} {?d} {s}\n", .{ f.code, f.offset, f.detail orelse "" });
+		var hits: usize = 0;
+		for (report.findings.items) |f| {
+			try std.testing.expect(f.code != .huffman_table_corrupt);
+			if (f.code != case.code) continue;
+			hits += 1;
+			try std.testing.expect(f.offset_is_exact and f.offset.? == case.offset);
+			try std.testing.expectEqualStrings(case.detail, f.detail.?);
+		}
+		try std.testing.expectEqual(@as(usize, 1), hits);
+	}
+}
+
 test "validate: progressive_scan_count is INFO on progressive, absent on baseline" {
     const allocator = std.testing.allocator;
 
@@ -2807,8 +2871,9 @@ test "SOF1 accepts every component ID and all four Huffman destinations" {
 
 test "lossless scans name whole bytes after valid padding instead of a generic decoder error" {
 	// tiffz observation 2026-11-06: one stray byte before EOI read as
-	// huffman_table_corrupt "BackendError". Same code and class as the
-	// baseline reason (f8a1e57); only the detail is narrower.
+	// huffman_table_corrupt "BackendError". Since 2026-11-22 (validate) whole
+	// bytes after valid padding are FAIL 8, exact at the first, as on the
+	// sequential path.
 	const allocator = std.testing.allocator;
 	const good = @embedFile("fixtures/lossless_4x4_gray8.jpg");
 	const body = good[0 .. good.len - 2];
@@ -2826,8 +2891,10 @@ test "lossless scans name whole bytes after valid padding instead of a generic d
 		try std.testing.expect(!result.isValid());
 		var named: usize = 0;
 		for (result.findings.items) |finding| {
-			if (finding.code != .huffman_table_corrupt) continue;
+			try std.testing.expect(finding.code != .huffman_table_corrupt);
+			if (finding.code != .extraneous_bytes_before_marker) continue;
 			try std.testing.expectEqual(jpegz.Severity.fail, finding.severity);
+			try std.testing.expect(finding.offset_is_exact and finding.offset.? == body.len);
 			const detail = finding.detail orelse return error.TestExpectedDetail;
 			if (!std.mem.eql(u8, detail, case.detail)) {
 				std.debug.print("extra {x}: got detail '{s}', want '{s}'\n", .{ case.extra, detail, case.detail });

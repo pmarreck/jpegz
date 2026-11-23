@@ -396,7 +396,13 @@ Sequential Huffman data faults are typed exactly at the code (validate,
   - 57 for an RSTm after a scan's final unit;
   - `truncated_stream` when the file ends after a scan;
   - restart findings at their file offsets.
-- **Still to come:** lossless parity; see PLAN.md.
+- **Lossless validation:**
+  - 74 for a difference code with no table entry;
+  - 58 for a category above 16 (T.81 H.1.2.2);
+  - `insufficient_data` where the data runs into a marker;
+  - FAIL 8 for whole bytes after valid padding;
+  - 57 for a wrong RSTm or one after the final MCU, 56 for another marker
+    where an RSTm belongs.
 
 Sequential Huffman frames reject an additional SOS after all components have
 been coded, with exact finding 55 at its first selector. The post-coverage
