@@ -907,8 +907,26 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                             // at the first violation. An AC scan needs the
                             // component's DC first scan; a scan coding coefficient k
                             // needs Ah equal to the last Al for k (0 if uncoded).
-                            if (bad) history_known = false;
-                            if (!bad and history_known) {
+                            // Validate rulings I (2026-11-23): a refinement scan
+                            // (Ah > 0) needs Al = Ah - 1, and an AC scan needs
+                            // Ns = 1 (T.81 G.1.1.1.1). One record per scan.
+                            const refine_bad = !bad and ah != 0 and al + 1 != ah;
+                            const ac_ns_bad = !bad and !refine_bad and ss != 0 and ns2 != 1;
+                            if (refine_bad) {
+                                const detail = try std.fmt.allocPrint(allocator,
+                                    "refinement scan has Ah={d} and Al={d}; Al must be Ah - 1 (T.81 G.1.1.1.1)", .{ ah, al });
+                                defer allocator.free(detail);
+                                try addExactFinding(&report, allocator, .progressive_scan_invalid, spec_off + 2, detail);
+                            }
+                            if (ac_ns_bad) {
+                                const detail = try std.fmt.allocPrint(allocator,
+                                    "AC scan (Ss={d}) has Ns={d}; AC scans code one component (T.81 G.1.1.1.1)", .{ ss, ns2 });
+                                defer allocator.free(detail);
+                                try addExactFinding(&report, allocator, .progressive_scan_invalid, seg_body_start, detail);
+                            }
+                            const scan_bad = bad or refine_bad or ac_ns_bad;
+                            if (scan_bad) history_known = false;
+                            if (!scan_bad and history_known) {
                                 for (0..ns2) |j| {
                                     const cs = data[seg_body_start + 1 + 2 * j];
                                     const coded = &coef_al[cs];

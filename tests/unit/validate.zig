@@ -2524,6 +2524,45 @@ test "progressive scan history is FAIL 59, one record per scan (validate rulings
 	}
 }
 
+test "progressive per-scan rules: refinement Al = Ah - 1 and AC Ns = 1 are FAIL 59 (validate rulings I)" {
+	const allocator = std.testing.allocator;
+	const rgb = @embedFile("fixtures/progressive_8x8_rgb.jpg");
+	{
+		// The DC refinement scan at 404 (AhAl 0x10) relabeled Ah=2 Al=0.
+		var data = rgb.*;
+		try std.testing.expectEqual(@as(u8, 0x10), data[404 + 13]);
+		data[404 + 13] = 0x20;
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try expectExactTypedFailures(report, .progressive_scan_invalid, 404 + 13, 1);
+		for (report.findings.items) |f| if (f.code == .progressive_scan_invalid)
+			try std.testing.expectEqualStrings("refinement scan has Ah=2 and Al=0; Al must be Ah - 1 (T.81 G.1.1.1.1)", f.detail.?);
+	}
+	{
+		// Three-component AC scan: the DC refinement scan at 404 (Ns 3)
+		// relabeled Ss=1 Se=5, Ah=Al=0.
+		var data = rgb.*;
+		data[404 + 13] = 0x00;
+		data[404 + 11] = 1;
+		data[404 + 12] = 5;
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try expectExactTypedFailures(report, .progressive_scan_invalid, 404 + 4, 1);
+		for (report.findings.items) |f| if (f.code == .progressive_scan_invalid)
+			try std.testing.expectEqualStrings("AC scan (Ss=1) has Ns=3; AC scans code one component (T.81 G.1.1.1.1)", f.detail.?);
+	}
+	{
+		// The first AC scan (AhAl at 270) relabeled Ah=3 Al=0: one per-scan
+		// record. Its coefficients stay unrecorded, and history stops, so the
+		// later refinement of them is not reported as a second fault.
+		var data = rgb.*;
+		data[270] = 0x30;
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try expectExactTypedFailures(report, .progressive_scan_invalid, 270, 1);
+	}
+}
+
 test "validate: progressive_scan_count is INFO on progressive, absent on baseline" {
     const allocator = std.testing.allocator;
 

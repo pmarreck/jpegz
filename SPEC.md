@@ -345,6 +345,13 @@ Progressive scan history (T.81 G.1.1.1, validate rulings I) is FAIL 59
   root cause is reported once.
 - Incomplete progression is not a finding. The decoded-value 58 and the
   one-bit refinements bound the coefficient range.
+
+Two per-scan rules (T.81 G.1.1.1.1) are also FAIL 59:
+- a refinement scan (Ah > 0) whose Al is not Ah - 1, exact at the AhAl
+  byte;
+- an AC scan (Ss > 0) with Ns other than 1, exact at Ns.
+
+Either one ends history judging for the frame.
 Do not advertise complete corruption detection from pixel-oracle equality.
 
 A DAC entry outside T.81 B.2.4.3 is FAIL 53 (`arithmetic_table_corrupt`),

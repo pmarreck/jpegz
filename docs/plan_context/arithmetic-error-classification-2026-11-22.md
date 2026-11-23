@@ -195,3 +195,9 @@ repin.
 - **Re-pin:** an arithmetic data-fault test pin at byte 257 was a scan's
   Se byte; with history judged it is a history fault. It was replaced by
   an entropy-only pin at 259.
+- **Follow-up (rulings I, same day):**
+  - A refinement scan's Al must be Ah - 1; FAIL 59 exact at AhAl.
+  - An AC scan's Ns must be 1; FAIL 59 exact at Ns.
+  - Neither rule appears in jpegz's 1,747 progressive files outside the
+    fuzz fixture, nor in validate's 589 files and 5,907 scans.
+  - Validate also confirmed stopping history after the first fault.
