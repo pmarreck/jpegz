@@ -534,10 +534,11 @@ fn handleRestart(
         return error.InvalidMarker;
     }
 
-    if (br.marker_byte != expected_rst.*) {
+    var reported = false;
+    while (br.marker_seen and br.marker_byte != expected_rst.*) {
         const got_rst = br.marker_byte >= 0xD0 and br.marker_byte <= 0xD7;
         if (options.lenient and got_rst) {
-            if (options.findings_sink) |sink| {
+            if (!reported) if (options.findings_sink) |sink| {
                 var buf: [96]u8 = undefined;
                 const detail = std.fmt.bufPrint(&buf,
                     "expected RST{d} (0x{x:0>2}) but got RST{d} (0x{x:0>2})",
@@ -546,15 +547,37 @@ fn handleRestart(
                     catch buf[0..0];
                 sink.emit(.warn, .restart_marker_unexpected,
                     @intCast(base + br.byte_pos), detail) catch return error.OutOfMemory;
+            };
+            reported = true;
+            // libjpeg's jpeg_resync_to_restart, as on the sequential path.
+            switch ((br.marker_byte -% expected_rst.*) & 0x07) {
+                // One or two ahead: leave the marker; the expected interval
+                // decodes as empty and later intervals keep their positions.
+                1, 2 => {
+                    prev_dc.* = .{ 0, 0, 0 };
+                    eob_run.* = 0;
+                    expected_rst.* = 0xD0 + ((expected_rst.* - 0xD0 + 1) & 0x07);
+                    return;
+                },
+                // One or two behind: stale. Skip to the next marker.
+                6, 7 => {
+                    br.skipPastMarker();
+                    var i = br.byte_pos;
+                    while (i + 1 < br.data.len and !(br.data[i] == 0xFF and br.data[i + 1] != 0x00 and br.data[i + 1] != 0xFF)) i += 1;
+                    br.byte_pos = @min(i, br.data.len);
+                    br.seekToMarker();
+                    continue;
+                },
+                // Too far either way: take it as the expected marker.
+                else => {
+                    expected_rst.* = br.marker_byte;
+                    break;
+                },
             }
-            prev_dc.* = .{ 0, 0, 0 };
-            eob_run.* = 0;
-            expected_rst.* = 0xD0 + ((br.marker_byte - 0xD0 + 1) & 0x07);
-            br.skipPastMarker();
-            return;
         }
         return error.InvalidMarker;
     }
+    if (!br.marker_seen) return error.TruncatedStream;
 
     prev_dc.* = .{ 0, 0, 0 };
     eob_run.* = 0;

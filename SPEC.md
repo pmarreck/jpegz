@@ -343,7 +343,13 @@ other than 0 or 1, a Tb above 3, a DC Cs with L > U, or an AC Kx outside
 
 Arithmetic restart intervals and scans end as on the Huffman path (validate,
 2026-11-22):
-- **Wrong RSTm:** FAIL 57 at the marker; lenient decoding resynchronizes.
+- **Wrong RSTm:** FAIL 57 at the marker. Lenient decoding resynchronizes
+  as libjpeg's `jpeg_resync_to_restart` does, on sequential and progressive
+  Huffman scans:
+  - one or two RSTs ahead: the marker stays, the expected interval decodes
+    as empty, and later intervals keep their positions;
+  - one or two behind: the stale marker is skipped and the next one judged;
+  - any other RST: taken as the expected one.
 - **Other marker where an RSTm belongs:** 56.
 - **EOI, or data that ends there:** `truncated_stream`.
 - **RSTm after a scan's final MCU:** 57.

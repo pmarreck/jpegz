@@ -2653,8 +2653,8 @@ test "cleanroom lenient: an RST replaced by junk is FAIL 8 then 57 at the next R
     // ends with valid padding, so AA BB and the next interval's bytes are
     // whole bytes before the next marker, RST1: FAIL 8 at 652 (validate,
     // 2026-11-22). Like libjpeg, lenient decoding skips them to RST1, which
-    // is out of order (57), and resynchronizes; it does not yet count the
-    // skipped interval, so it may stop at EOI (PLAN). Strict decoding fails.
+    // is out of order (57) and one ahead, so the second interval decodes as
+    // empty and RST1 is then the expected marker. Strict decoding fails.
     const src = fixture_baseline_128x128_dri4;
     var corrupted = try allocator.alloc(u8, src.len);
     defer allocator.free(corrupted);
@@ -2686,6 +2686,136 @@ test "cleanroom lenient: an RST replaced by junk is FAIL 8 then 57 at the next R
     try std.testing.expectEqual(@as(usize, 1), extraneous);
     try std.testing.expectEqual(@as(usize, 1), unexpected);
     try std.testing.expectError(error.BackendError, jpegz.internal.cleanroomDecode(allocator, corrupted));
+}
+
+test "lenient Huffman resync follows libjpeg: a later RSTm leaves the interval empty, an earlier one is skipped" {
+    // libjpeg's jpeg_resync_to_restart (jdmarker.c): finding RSTm where RSTn
+    // belongs, with m one or two ahead, leaves the marker and decodes the
+    // expected interval as empty, so later intervals keep their positions.
+    // With m one or two behind, it skips to the next marker. Restart
+    // intervals reset DC prediction, so the rest decodes as in the original.
+    const allocator = std.testing.allocator;
+    const src = fixture_baseline_128x128_dri4;
+    try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xd0 }, src[652..654]);
+    const rst1 = std.mem.indexOfPos(u8, src, 654, &.{ 0xff, 0xd1 }).?;
+    var pristine = try jpegz.decode(allocator, src);
+    defer pristine.deinit(allocator);
+    {
+        // RST0 and the second interval removed: RST1 arrives where RST0
+        // belongs. The second interval (MCUs 4..7 of this 4:4:4 image: x 32
+        // to 63, rows 0 to 7) has no data; every other pixel decodes as in
+        // the original, in jpegz and in libjpeg-turbo alike. Inside the
+        // empty interval libjpeg-turbo decodes its first MCU from zero fill
+        // bits, so that region is not compared.
+        const dropped = try std.mem.concat(allocator, u8, &.{ src[0..652], src[rst1..] });
+        defer allocator.free(dropped);
+        var sink = jpegz.FindingsSink.init(allocator);
+        defer sink.deinit();
+        var recovered = try jpegz.internal.cleanroomDecodeLenientWithFindings(allocator, dropped, &sink);
+        defer recovered.deinit(allocator);
+        var oracle = try jpegz.internal.wrapperDecode(allocator, dropped);
+        defer oracle.deinit(allocator);
+        try std.testing.expectEqual(@as(usize, 128 * 128 * 3), recovered.pixels.len);
+        try std.testing.expectEqualSlices(u8, &.{ 1, 0x11, 0, 2, 0x11, 1, 3, 0x11, 1 }, src[std.mem.indexOf(u8, src, &.{ 0xff, 0xc0 }).? + 10 ..][0..9]);
+        for (0..128) |y| for (0..128) |x| {
+            if (y < 8 and x >= 32 and x < 64) continue;
+            const at = (y * 128 + x) * 3;
+            try std.testing.expectEqualSlices(u8, pristine.pixels[at..][0..3], recovered.pixels[at..][0..3]);
+            try std.testing.expectEqualSlices(u8, pristine.pixels[at..][0..3], oracle.pixels[at..][0..3]);
+        };
+        var unexpected: usize = 0;
+        for (sink.items()) |f| {
+            try std.testing.expect(f.code != .truncated_stream);
+            if (f.code == .restart_marker_unexpected) {
+                unexpected += 1;
+                try std.testing.expectEqual(@as(?u64, 652), f.offset);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), unexpected);
+    }
+    {
+        // Stale RST7 and RST0 (two and one behind) inserted before RST1:
+        // both skipped, one 57 for the resync, and every interval decodes as
+        // in the original.
+        const stale = try std.mem.concat(allocator, u8, &.{ src[0..rst1], &.{ 0xff, 0xd7, 0xff, 0xd0 }, src[rst1..] });
+        defer allocator.free(stale);
+        var sink = jpegz.FindingsSink.init(allocator);
+        defer sink.deinit();
+        var recovered = try jpegz.internal.cleanroomDecodeLenientWithFindings(allocator, stale, &sink);
+        defer recovered.deinit(allocator);
+        try std.testing.expectEqualSlices(u8, pristine.pixels, recovered.pixels);
+        var unexpected: usize = 0;
+        for (sink.items()) |f| {
+            try std.testing.expect(f.code != .truncated_stream and f.code != .insufficient_data);
+            if (f.code == .restart_marker_unexpected) {
+                unexpected += 1;
+                try std.testing.expectEqual(@as(?u64, rst1), f.offset);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), unexpected);
+    }
+}
+
+test "lenient progressive resync follows libjpeg too: an empty interval keeps later blocks in place" {
+    // libjpeg-turbo, -progressive -restart 1B (HUFFMAN_RESTART_PROVENANCE.md).
+    // The second scan is luma AC with one block per interval. Dropping its
+    // RST0 and second interval leaves luma block 1 (x 8 to 15, rows 0 to 7)
+    // without that scan's data; luma is not upsampled, so every other pixel
+    // decodes as in the original.
+    const allocator = std.testing.allocator;
+    const src = @embedFile("fixtures/huffman_restart_32x32_rgb420_progressive_1b.jpg");
+    const sos1 = std.mem.indexOf(u8, src, &.{ 0xff, 0xda }).?;
+    const sos2 = std.mem.indexOfPos(u8, src, sos1 + 2, &.{ 0xff, 0xda }).?;
+    try std.testing.expectEqualSlices(u8, &.{ 1, 1, 0, 1, 5 }, src[sos2 + 4 ..][0..5]);
+    const rst0 = std.mem.indexOfPos(u8, src, sos2, &.{ 0xff, 0xd0 }).?;
+    const rst1 = std.mem.indexOfPos(u8, src, rst0, &.{ 0xff, 0xd1 }).?;
+    var pristine = try jpegz.decode(allocator, src);
+    defer pristine.deinit(allocator);
+    {
+        const dropped = try std.mem.concat(allocator, u8, &.{ src[0..rst0], src[rst1..] });
+        defer allocator.free(dropped);
+        var sink = jpegz.FindingsSink.init(allocator);
+        defer sink.deinit();
+        var recovered = try jpegz.decodeWithOptions(allocator, dropped, .{ .lenient = true, .findings_sink = &sink });
+        defer recovered.deinit(allocator);
+        var oracle = try jpegz.internal.wrapperDecode(allocator, dropped);
+        defer oracle.deinit(allocator);
+        try std.testing.expectEqual(@as(usize, 32 * 32 * 3), recovered.pixels.len);
+        for (0..32) |y| for (0..32) |x| {
+            if (y < 8 and x >= 8 and x < 16) continue;
+            const at = (y * 32 + x) * 3;
+            try std.testing.expectEqualSlices(u8, pristine.pixels[at..][0..3], recovered.pixels[at..][0..3]);
+            try std.testing.expectEqualSlices(u8, pristine.pixels[at..][0..3], oracle.pixels[at..][0..3]);
+        };
+        var unexpected: usize = 0;
+        for (sink.items()) |f| {
+            try std.testing.expect(f.code != .truncated_stream);
+            if (f.code == .restart_marker_unexpected) {
+                unexpected += 1;
+                try std.testing.expectEqual(@as(?u64, rst0), f.offset);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), unexpected);
+    }
+    {
+        // A stale RST0 before RST1: skipped; the image decodes as the original.
+        const stale = try std.mem.concat(allocator, u8, &.{ src[0..rst1], &.{ 0xff, 0xd0 }, src[rst1..] });
+        defer allocator.free(stale);
+        var sink = jpegz.FindingsSink.init(allocator);
+        defer sink.deinit();
+        var recovered = try jpegz.decodeWithOptions(allocator, stale, .{ .lenient = true, .findings_sink = &sink });
+        defer recovered.deinit(allocator);
+        try std.testing.expectEqualSlices(u8, pristine.pixels, recovered.pixels);
+        var unexpected: usize = 0;
+        for (sink.items()) |f| {
+            try std.testing.expect(f.code != .truncated_stream and f.code != .insufficient_data);
+            if (f.code == .restart_marker_unexpected) {
+                unexpected += 1;
+                try std.testing.expectEqual(@as(?u64, rst1), f.offset);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), unexpected);
+    }
 }
 
 test "lenient Huffman decoding resumes after a restart that follows truncated data" {
