@@ -49,6 +49,7 @@ coordinator approved codes before 2026-11-06).
 | 71 | `huffman_table_full_all_ones` | jpegz | validate approval, 2026-11-06 | fc1625c (2026-11-06) |
 | 72 | `dnl_misplaced` | jpegz | validate approval, 2026-11-21 | 0be9de3 (2026-11-21) |
 | 73 | `differential_frame_without_dhp` | jpegz | validate approval, 2026-11-21 | 0be9de3 (2026-11-21) |
+| 74 | `entropy_decode_invalid` | jpegz | validate approval, 2026-11-22 | this commit (2026-11-22) |
 | 100 | `lossless_predictor_invalid` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 101 | `lossless_pointtransform_invalid` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |
 | 120 | `jpegls_invalid_run_mode` | jpegz | Assigned by jpegz before the shared registry | 6629e2b (2026-05-04) |

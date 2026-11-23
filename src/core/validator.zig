@@ -976,7 +976,10 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                     if (f.severity == .fail) break true;
                 } else false;
                 if (!typed) try addFinding(&report, allocator, .fail,
-                    if (report.variant == .jpegls) mapJpeglsDecodeError(err) else mapDecodeErrorToFindingCode(err),
+                    switch (report.variant) {
+                        .jpegls, .baseline_arithmetic, .progressive_arithmetic, .lossless_arithmetic => mapTypedCodecError(err),
+                        else => mapDecodeErrorToFindingCode(err),
+                    },
                     null, @errorName(err));
             },
         }
@@ -1062,12 +1065,13 @@ fn mapDecodeErrorToFindingCode(err: errors.DecodeError) FindingCode {
     };
 }
 
-/// JPEG-LS decode errors with no typed finding (validate, 2026-11-21: never
-/// `huffman_table_corrupt`). Entropy faults always arrive typed (120, 122,
-/// 56, 57, and 121 for LSE values), so the remaining errors come from
+/// JPEG-LS and arithmetic-coded decode errors with no typed finding (validate,
+/// 2026-11-21 and 2026-11-22: never `huffman_table_corrupt`). Entropy faults
+/// arrive typed (JPEG-LS: 120, 122, 56, 57 and 121 for LSE values;
+/// arithmetic: 8, 56, 57, 58 and 74), so the remaining errors come from
 /// segment content the marker walk does not parse. Exhaustive: a new
 /// DecodeError does not compile until it is classified here.
-fn mapJpeglsDecodeError(err: errors.DecodeError) FindingCode {
+fn mapTypedCodecError(err: errors.DecodeError) FindingCode {
     return switch (err) {
         error.TruncatedStream => .truncated_stream,
         error.InvalidMarker => .bad_marker_length,

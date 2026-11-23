@@ -544,7 +544,7 @@ pub fn classicFindingVerdict(code: FindingCode, severity: Severity) StrictVerdic
 		.jfif_version_unchecked, .sof_component_id_duplicate, .huffman_tables_missing, .dnl_misplaced, .differential_frame_without_dhp, .missing_soi, .truncated_stream, .bad_marker_length, .duplicate_sof, .extraneous_bytes_before_marker,
 		.entropy_fill_bytes, .invalid_sof_precision, .huffman_table_corrupt, .quantization_table_corrupt,
 		.arithmetic_table_corrupt, .sof_component_count_invalid, .sos_component_mismatch,
-		.dct_coefficient_overflow, .progressive_scan_invalid, .adobe_app14_conflicts_jfif, .invalid_dimensions,
+		.dct_coefficient_overflow, .entropy_decode_invalid, .progressive_scan_invalid, .adobe_app14_conflicts_jfif, .invalid_dimensions,
 		.entropy_padding_not_ones, .sequential_scan_invalid, .jfif_metadata_invalid, .sof_sampling_invalid,
 		.lossless_predictor_invalid, .lossless_pointtransform_invalid, .jpegls_invalid_run_mode,
 		.jpegls_context_table_invalid, .jpegls_golomb_code_invalid, .jpegls_padding_not_zeros, .jpegls_mapping_table_undefined, .jpegls_mapping_with_point_transform, .jpegls_mapping_table_invalid, .jpegls_maxval_derivation, .jpegls_point_transform_overflow, .jpegls_sample_interleave_subsampled, .jp2_invalid_signature, .jp2_invalid_codestream,

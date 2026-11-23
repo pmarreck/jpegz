@@ -200,6 +200,11 @@ pub const FindingCode = enum(u32) {
 	// no DHP before it, at the SOF marker. T.81 J.1 allows differential frames
 	// only in hierarchical mode. FAIL.
 	differential_frame_without_dhp = 73,
+	// validate-approved 2026-11-22. FAIL: the entropy-coded decision or code
+	// sequence has no valid T.81 decode at that point; first use, an
+	// arithmetic AC zero run past Se. Offset: the restart interval start, or
+	// the SOS without DRI (not exact).
+	entropy_decode_invalid = 74,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────
     lossless_predictor_invalid = 100,

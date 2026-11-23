@@ -357,8 +357,20 @@ Arithmetic restart intervals and scans end as on the Huffman path (validate,
 - **Detection limit:** a short final interval whose zero-filled decode
   completes cleanly is not detected.
 
-Decoded-value faults (58 and 74) and the exhaustive arithmetic error mapping
-remain in PLAN.md.
+Decoded arithmetic values are checked against T.81 F.1.2 (validate,
+2026-11-22):
+- **58 (`dct_coefficient_overflow`):** a DC difference above 2^(P+3) - 1 or
+  an AC coefficient above 2^(P+2) - 1. At 8 bits those bounds are 2047 and
+  1023.
+- **74 (`entropy_decode_invalid`):** an AC zero run past Se.
+- **Offset:** the start of the restart interval, or the SOS without DRI.
+  It is labeled as the interval and is not exact.
+- **Producer check:** libjpeg-turbo 3.2.1 and IJG libjpeg 10 stay within the
+  bounds across 2,304 files, including 288 extreme-contrast files at quality
+  100.
+- **Fallback:** arithmetic and JPEG-LS decode errors with no typed finding
+  map through one exhaustive switch and never to 51. An SOS table selector
+  above 3 is the open case; see PLAN.md.
 
 Sequential Huffman frames reject an additional SOS after all components have
 been coded, with exact finding 55 at its first selector. The post-coverage

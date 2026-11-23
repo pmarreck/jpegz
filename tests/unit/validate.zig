@@ -1790,6 +1790,73 @@ test "DAC entries classify every Tc/Tb byte and every DC and AC conditioning val
 	}
 }
 
+test "arithmetic decoded-value faults are 58 and 74 at the interval start, never 51 (validate 2026-11-22)" {
+	// Single-byte mutations of libjpeg-turbo files, found by search. Offsets
+	// are labeled as the interval (the SOS without DRI) and not exact.
+	const allocator = std.testing.allocator;
+	const seq = @embedFile("fixtures/arith_baseline_16x16_rgb_420.jpg");
+	const prog = @embedFile("fixtures/arith_restart_32x32_rgb420_progressive_1b.jpg");
+	try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xda }, seq[189..191]);
+	const Case = struct { data: []const u8, at: usize, mask: u8, code: jpegz.FindingCode, offset: u64, detail: []const u8 };
+	for ([_]Case{
+		.{ .data = seq, .at = 271, .mask = 0x01, .code = .dct_coefficient_overflow, .offset = 189,
+			.detail = "scan starting here: AC coefficient magnitude 2524 exceeds 1023 for 8-bit samples (T.81 F.1.2)" },
+		// 1025 is category 11: past the 8-bit AC bound, short of the old 0x8000 guard.
+		.{ .data = prog, .at = 365, .mask = 0x10, .code = .dct_coefficient_overflow, .offset = 388,
+			.detail = "restart interval starting here: AC coefficient magnitude 1025 exceeds 1023 for 8-bit samples (T.81 F.1.2)" },
+		.{ .data = seq, .at = 205, .mask = 0x92, .code = .dct_coefficient_overflow, .offset = 189,
+			.detail = "scan starting here: DC difference magnitude 2048 exceeds 2047 for 8-bit samples (T.81 F.1.2)" },
+		// 2048 is one past the 8-bit DC bound, in an interleaved DC scan's third interval.
+		.{ .data = prog, .at = 217, .mask = 0xb1, .code = .dct_coefficient_overflow, .offset = 215,
+			.detail = "restart interval starting here: DC difference magnitude 2048 exceeds 2047 for 8-bit samples (T.81 F.1.2)" },
+		.{ .data = seq, .at = 316, .mask = 0x10, .code = .entropy_decode_invalid, .offset = 189,
+			.detail = "scan starting here: AC zero run past Se=63" },
+		.{ .data = prog, .at = 257, .mask = 0x01, .code = .entropy_decode_invalid, .offset = 292,
+			.detail = "restart interval starting here: AC zero run past Se=4" },
+	}) |case| {
+		const data = try allocator.dupe(u8, case.data);
+		defer allocator.free(data);
+		data[case.at] ^= case.mask;
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		var hits: usize = 0;
+		for (report.findings.items) |f| {
+			try std.testing.expect(f.code != .huffman_table_corrupt);
+			if (f.code != case.code) continue;
+			hits += 1;
+			try std.testing.expectEqual(jpegz.Severity.fail, f.severity);
+			try std.testing.expect(!f.offset_is_exact);
+			try std.testing.expectEqual(@as(?u64, case.offset), f.offset);
+			try std.testing.expectEqualStrings(case.detail, f.detail.?);
+		}
+		try std.testing.expectEqual(@as(usize, 1), hits);
+	}
+	// Every single-byte mutation of the entropy data: no arithmetic decode
+	// error is reported as 51, and in the sequential file none arrives untyped.
+	for ([_][]const u8{ seq, @embedFile("fixtures/arith_progressive_16x16_rgb_444.jpg") }, 0..) |pristine, which| {
+		const sos = findMarker(pristine, 0xda).?;
+		const start = sos + 2 + (@as(usize, pristine[sos + 2]) << 8 | pristine[sos + 3]);
+		const data = try allocator.dupe(u8, pristine);
+		defer allocator.free(data);
+		for (start..pristine.len - 2) |i| {
+			for ([_]u8{ 0x01, 0x10, 0x80, 0xff }) |mask| {
+				data[i] = pristine[i] ^ mask;
+				defer data[i] = pristine[i];
+				var report = try jpegz.validate(allocator, data);
+				defer report.deinit(allocator);
+				for (report.findings.items) |f| {
+					try std.testing.expect(f.code != .huffman_table_corrupt);
+					if (which == 0 and f.code == .unknown_marker and f.detail != null) {
+						for ([_][]const u8{ "BackendError", "InvalidMarker", "TruncatedStream" }) |name| {
+							try std.testing.expect(!std.mem.eql(u8, f.detail.?, name));
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 test "validate: progressive_scan_count is INFO on progressive, absent on baseline" {
     const allocator = std.testing.allocator;
 

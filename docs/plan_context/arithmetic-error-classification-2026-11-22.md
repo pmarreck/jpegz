@@ -73,3 +73,20 @@ exactly at the first byte the decoder never fetched. Detail is
      valid table, or a code that matches no table entry), with corpus
      counts. Validate rules separately on moving them to 74; they stay at
      51 until then.
+
+## SOS Td/Ta ruling (validate, 2026-11-22): new code 75 `sos_table_selector_invalid`
+
+A selector is a scan-header field that works the same under every process,
+so 53 (DAC content) and 59/64 (process-specific Ss, Se, Ah, Al) do not fit.
+- **Scope:** a Td or Ta outside T.81 Table B.3, on the Huffman and arithmetic
+  paths alike.
+- **Location:** exact at the Td/Ta byte; the detail names the component, the
+  selector (`td` or `ta`) and the value.
+- **FAIL:** a value above 3 (that destination cannot exist).
+- **WARN:** 2 or 3 in a baseline frame when that table is defined (a
+  baseline limit, most likely the writer).
+- **Missing table:** a selector naming an undefined table keeps the
+  missing-table code, which outranks 75.
+- **Not covered:** lossless Ta (Table B.3 gives 0); report counts if seen.
+- **Before shipping:** a producer check.
+- **Huffman:** these cases move off 51 now; leave them out of the 51 list.

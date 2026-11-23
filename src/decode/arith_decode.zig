@@ -68,6 +68,30 @@ fn segmentEnd(qc: *const arith_coder.QCoder) SegmentEnd {
     return .{ .unread_at = if (qc.data.len > qc.pos) qc.pos else null, .marker_at = null, .marker = 0 };
 }
 
+/// Report a decoded-value fault (validate rulings 2026-11-22) at the start of
+/// its restart interval, or at the SOS without DRI, labeled as the interval
+/// and not exact: the coder has read ahead of the damage by an unknown amount.
+fn reportFault(state: *const arith_coder.ScanState, interval_start: usize, restarts: bool, options: DecodeOptions) Error!void {
+    const s = options.findings_sink orelse return;
+    const fault = state.fault;
+    const where: []const u8 = if (restarts) "restart interval" else "scan";
+    var buf: [128]u8 = undefined;
+    switch (fault.kind) {
+        .none => {},
+        .magnitude => {
+            const detail = std.fmt.bufPrint(&buf, "{s} starting here: {s} magnitude {d} exceeds {d} for {d}-bit samples (T.81 F.1.2)", .{
+                where, if (fault.dc) "DC difference" else "AC coefficient", fault.magnitude,
+                arith_coder.magnitudeLimit(state.precision, fault.dc), state.precision,
+            }) catch buf[0..0];
+            s.emit(.fail, .dct_coefficient_overflow, @intCast(interval_start), detail) catch return error.OutOfMemory;
+        },
+        .run_past_band => {
+            const detail = std.fmt.bufPrint(&buf, "{s} starting here: AC zero run past Se={d}", .{ where, fault.se }) catch buf[0..0];
+            s.emit(.fail, .entropy_decode_invalid, @intCast(interval_start), detail) catch return error.OutOfMemory;
+        },
+    }
+}
+
 /// Check the end of a restart interval or scan (validate rulings 2026-11-22).
 /// Whole bytes the coder never fetched are FAIL 8 (`arithmetic_interval` or
 /// `arithmetic_scan_end`): the D.1.8 flush emits only bytes a decoder
@@ -422,11 +446,13 @@ fn decodeArithBaseline(
                 const scan = try baseline.parseSos(data, pos, &frame.?);
                 // The SOF9 path decodes one interleaved scan; split-component frames stay out of scope.
                 if (scan.count != frame.?.num_components) return error.InvalidMarker;
+                const sos_at = pos - 2;
                 pos += baseline.parseSegmentLength(data, pos);
                 return try decodeScanSof9(
                     allocator,
                     data[pos..],
                     pos,
+                    sos_at,
                     options,
                     &frame.?,
                     &quant_tables,
@@ -478,6 +504,7 @@ fn decodeScanSof9(
     allocator: Allocator,
     data: []const u8,
     base: usize,
+    sos_at: usize,
     options: DecodeOptions,
     frame: *const baseline.FrameInfo,
     quant_tables: *const [4]?[64]u16,
@@ -563,6 +590,7 @@ fn decodeScanSof9(
 
     var mcus_since_rst: u32 = 0;
     var expected_rst: u8 = 0xD0;
+    var interval_start: usize = if (restart_interval > 0) base else sos_at;
     var mcu_y: u32 = 0;
     while (mcu_y < mcu_rows) : (mcu_y += 1) {
         var mcu_x: u32 = 0;
@@ -572,7 +600,7 @@ fn decodeScanSof9(
             // the marker byte (Q-coder already consumed the marker into
             // `marker_byte`, leaving pos *past* it).
             if (restart_interval > 0 and mcus_since_rst == restart_interval) {
-                _ = try finishSegment(&state.qcoder, base, .interval, &expected_rst, options);
+                interval_start = try finishSegment(&state.qcoder, base, .interval, &expected_rst, options) + 2;
                 state.resetForRestart();
                 mcus_since_rst = 0;
             }
@@ -590,7 +618,10 @@ fn decodeScanSof9(
                         const block_idx_y: u32 = mcu_y * blocks_v_per_mcu + block_v;
                         const linear: usize = (@as(usize, block_idx_y) * @as(usize, blocks_w[ci]) + @as(usize, block_idx_x)) * 64;
                         const out_slot: *[64]i32 = coef_buf[ci][linear..][0..64];
-                        try decodeBlockSof9(&state, ci, comp, quant_tables, out_slot);
+                        decodeBlockSof9(&state, ci, comp, quant_tables, out_slot) catch |err| {
+                            if (err == error.BackendError) try reportFault(&state, interval_start, restart_interval > 0, options);
+                            return err;
+                        };
                     }
                 }
             }
@@ -745,6 +776,7 @@ fn decodeArithProgressive(allocator: Allocator, data: []const u8, options: Decod
             },
             0xDA => { // SOS
                 if (!seen_sof) return error.InvalidMarker;
+                const sos_at = pos - 2;
                 const scan = try progressive.parseSos(data, pos, &frame.?);
                 pos += progressive.parseSegmentLength(data, pos);
                 // DAC overrides apply scan-wide; copy them onto the
@@ -760,6 +792,7 @@ fn decodeArithProgressive(allocator: Allocator, data: []const u8, options: Decod
                 state.startScan(data[pos..], reset_dc, reset_ac);
                 pos = try decodeArithProgressiveScan(
                     pos,
+                    sos_at,
                     &state,
                     &frame.?,
                     &coefs,
@@ -793,6 +826,7 @@ fn decodeArithProgressive(allocator: Allocator, data: []const u8, options: Decod
 /// Q-coder + selectively zero stats, but DON'T re-zero DAC state.
 fn decodeArithProgressiveScan(
     entropy_start: usize,
+    sos_at: usize,
     state: *arith_coder.ScanState,
     frame: *const progressive.FrameInfo,
     coefs: *[3][]i16,
@@ -806,6 +840,7 @@ fn decodeArithProgressiveScan(
 ) Error!usize {
     var units_since_rst: u32 = 0;
     var expected_rst: u8 = 0xD0;
+    var interval_start: usize = if (restart_interval > 0) entropy_start else sos_at;
     const reset_dc = (scan.ss == 0 and scan.ah == 0);
     const reset_ac = (scan.ss != 0);
 
@@ -817,14 +852,15 @@ fn decodeArithProgressiveScan(
             expected: *u8,
             re_dc: bool,
             re_ac: bool,
-        ) Error!void {
-            _ = try finishSegment(&s.qcoder, base, .interval, expected, opts);
+        ) Error!usize {
+            const marker_at = try finishSegment(&s.qcoder, base, .interval, expected, opts);
             // startScan applies the scan-type reset policy used at scan
             // start; the coder then resumes after the marker, at an
             // offset into the same buffer.
             const pos_after = s.qcoder.pos;
             s.startScan(s.qcoder.data, re_dc, re_ac);
             s.qcoder.pos = pos_after;
+            return marker_at + 2;
         }
     }.run;
 
@@ -836,7 +872,7 @@ fn decodeArithProgressiveScan(
             var mx: u32 = 0;
             while (mx < mcu_cols) : (mx += 1) {
                 if (restart_interval > 0 and units_since_rst == restart_interval) {
-                    try handleArithRst(state, entropy_start, options, &expected_rst, reset_dc, reset_ac);
+                    interval_start = try handleArithRst(state, entropy_start, options, &expected_rst, reset_dc, reset_ac);
                     units_since_rst = 0;
                 }
                 var ci: usize = 0;
@@ -855,7 +891,10 @@ fn decodeArithProgressiveScan(
                                 @as(usize, blocks_w[comp_idx]) +
                                 @as(usize, bx)) * 64;
                             const block = coefs[comp_idx][off .. off + 64];
-                            try decodeArithProgressiveBlock(state, comp_idx, comp, block, scan);
+                            decodeArithProgressiveBlock(state, comp_idx, comp, block, scan) catch |err| {
+                    if (err == error.BackendError) try reportFault(state, interval_start, restart_interval > 0, options);
+                    return err;
+                };
                         }
                     }
                 }
@@ -875,13 +914,16 @@ fn decodeArithProgressiveScan(
             var bx: u32 = 0;
             while (bx < xi) : (bx += 1) {
                 if (restart_interval > 0 and units_since_rst == restart_interval) {
-                    try handleArithRst(state, entropy_start, options, &expected_rst, reset_dc, reset_ac);
+                    interval_start = try handleArithRst(state, entropy_start, options, &expected_rst, reset_dc, reset_ac);
                     units_since_rst = 0;
                 }
                 const off: usize = (@as(usize, by) * @as(usize, stride) +
                     @as(usize, bx)) * 64;
                 const block = coefs[comp_idx][off .. off + 64];
-                try decodeArithProgressiveBlock(state, comp_idx, comp, block, scan);
+                decodeArithProgressiveBlock(state, comp_idx, comp, block, scan) catch |err| {
+                    if (err == error.BackendError) try reportFault(state, interval_start, restart_interval > 0, options);
+                    return err;
+                };
                 units_since_rst += 1;
             }
         }

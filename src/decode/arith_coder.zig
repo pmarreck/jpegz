@@ -374,6 +374,24 @@ pub const ArithError = error{
     BackendError,
 };
 
+/// Why a decode returned `BackendError` (validate rulings 2026-11-22).
+pub const Fault = struct {
+    kind: enum { none, magnitude, run_past_band } = .none,
+    /// For `magnitude`: whether it was a DC difference, and its magnitude
+    /// (a lower bound when the category walk itself overflowed).
+    dc: bool = false,
+    magnitude: u32 = 0,
+    /// For `run_past_band`: the band end the run passed.
+    se: u8 = 0,
+};
+
+/// T.81 F.1.2.1 and F.1.2.2 (Tables F.1, F.2): at precision P a DC
+/// difference fits category P+3 and an AC coefficient category P+2.
+pub fn magnitudeLimit(precision: u8, dc: bool) u32 {
+    const bits: u5 = @intCast(precision + @as(u8, if (dc) 3 else 2));
+    return (@as(u32, 1) << bits) - 1;
+}
+
 /// Per-scan state — Q-coder + statistics + DC predictor + DAC
 /// conditioning parameters. 1:1 with libjpeg's
 /// `arith_entropy_decoder` (jdarith.c:32-52). Lives by value;
@@ -405,6 +423,15 @@ pub const ScanState = struct {
     /// DAC AC conditioning: Kx — context boundary between low-freq
     /// and high-freq AC unary X-walk slots. Default 5.
     arith_ac_K: [4]u8,
+    /// Sample precision P, which bounds decoded magnitudes (T.81 F.1.2).
+    precision: u8 = 8,
+    /// Set with every `BackendError` a decode returns.
+    fault: Fault = .{},
+
+    fn fail(self: *ScanState, fault: Fault) ArithError {
+        self.fault = fault;
+        return error.BackendError;
+    }
 
     /// Initial state at scan start. All statistics zeroed (T.81
     /// §F.1.4.4 — every context begins at state 0 with MPS=0). DAC
@@ -487,9 +514,9 @@ pub fn decodeDcSof9(state: *ScanState, ci: usize, dc_tbl: u8) ArithError!i16 {
             st_idx = 20;
             while (state.qcoder.decode(&stats[st_idx]) == 1) {
                 m <<= 1;
-                if (m == 0x8000) return error.BackendError;
+                if (m == 0x8000) return state.fail(.{ .kind = .magnitude, .dc = true, .magnitude = 0x8000 });
                 st_idx += 1;
-                if (st_idx >= DC_STAT_BINS) return error.BackendError;
+                if (st_idx >= DC_STAT_BINS) return state.fail(.{ .kind = .magnitude, .dc = true, .magnitude = @intCast(m) });
             }
         }
 
@@ -522,6 +549,8 @@ pub fn decodeDcSof9(state: *ScanState, ci: usize, dc_tbl: u8) ArithError!i16 {
             if (state.qcoder.decode(&stats[st_idx]) == 1) v |= m;
         }
         v += 1;
+        if (v > magnitudeLimit(state.precision, true))
+            return state.fail(.{ .kind = .magnitude, .dc = true, .magnitude = @intCast(v) });
         if (sign == 1) v = -v;
 
         // T.81 wraparound — libjpeg masks to u16 then re-interprets
@@ -564,7 +593,7 @@ pub fn decodeAcSof9(
         while (state.qcoder.decode(&stats[st_idx + 1]) == 0) {
             st_idx += 3;
             k += 1;
-            if (k > 63) return error.BackendError;
+            if (k > 63) return state.fail(.{ .kind = .run_past_band, .se = 63 });
         }
         // Sign decode against the shared fixed-probability bin.
         const sign: u1 = state.qcoder.decode(&state.fixed_bin);
@@ -579,9 +608,9 @@ pub fn decodeAcSof9(
                 st_idx = if (k <= @as(usize, Kx)) 189 else 217;
                 while (state.qcoder.decode(&stats[st_idx]) == 1) {
                     m <<= 1;
-                    if (m == 0x8000) return error.BackendError;
+                    if (m == 0x8000) return state.fail(.{ .kind = .magnitude, .magnitude = 0x8000 });
                     st_idx += 1;
-                    if (st_idx >= AC_STAT_BINS) return error.BackendError;
+                    if (st_idx >= AC_STAT_BINS) return state.fail(.{ .kind = .magnitude, .magnitude = @intCast(m) });
                 }
             }
         }
@@ -594,6 +623,8 @@ pub fn decodeAcSof9(
             if (state.qcoder.decode(&stats[st_idx]) == 1) v |= m;
         }
         v += 1;
+        if (v > magnitudeLimit(state.precision, false))
+            return state.fail(.{ .kind = .magnitude, .magnitude = @intCast(v) });
         if (sign == 1) v = -v;
 
         zz[k] = v;
@@ -663,9 +694,9 @@ pub fn decodeDcFirstArith(
             st_idx = 20;
             while (state.qcoder.decode(&stats[st_idx]) == 1) {
                 m <<= 1;
-                if (m == 0x8000) return error.BackendError;
+                if (m == 0x8000) return state.fail(.{ .kind = .magnitude, .dc = true, .magnitude = 0x8000 });
                 st_idx += 1;
-                if (st_idx >= DC_STAT_BINS) return error.BackendError;
+                if (st_idx >= DC_STAT_BINS) return state.fail(.{ .kind = .magnitude, .dc = true, .magnitude = @intCast(m) });
             }
         }
         const sign_int: i32 = @intCast(sign);
@@ -687,6 +718,8 @@ pub fn decodeDcFirstArith(
             if (state.qcoder.decode(&stats[st_idx]) == 1) v |= m;
         }
         v += 1;
+        if (v > magnitudeLimit(state.precision, true))
+            return state.fail(.{ .kind = .magnitude, .dc = true, .magnitude = @intCast(v) });
         if (sign == 1) v = -v;
         const sum: i32 = state.last_dc_val[ci] + v;
         state.last_dc_val[ci] = sum & 0xFFFF;
@@ -738,7 +771,7 @@ pub fn decodeAcFirstArith(
         while (state.qcoder.decode(&stats[st_idx + 1]) == 0) {
             st_idx += 3;
             k += 1;
-            if (k > se) return error.BackendError;
+            if (k > se) return state.fail(.{ .kind = .run_past_band, .se = se });
         }
         const sign: u1 = state.qcoder.decode(&state.fixed_bin);
         st_idx += 2;
@@ -749,9 +782,9 @@ pub fn decodeAcFirstArith(
                 st_idx = if (k <= @as(usize, Kx)) 189 else 217;
                 while (state.qcoder.decode(&stats[st_idx]) == 1) {
                     m <<= 1;
-                    if (m == 0x8000) return error.BackendError;
+                    if (m == 0x8000) return state.fail(.{ .kind = .magnitude, .magnitude = 0x8000 });
                     st_idx += 1;
-                    if (st_idx >= AC_STAT_BINS) return error.BackendError;
+                    if (st_idx >= AC_STAT_BINS) return state.fail(.{ .kind = .magnitude, .magnitude = @intCast(m) });
                 }
             }
         }
@@ -763,6 +796,8 @@ pub fn decodeAcFirstArith(
             if (state.qcoder.decode(&stats[st_idx]) == 1) v |= m;
         }
         v += 1;
+        if (v > magnitudeLimit(state.precision, false))
+            return state.fail(.{ .kind = .magnitude, .magnitude = @intCast(v) });
         if (sign == 1) v = -v;
         // Shift << al and write at the ZIG-ZAG index k. progressive.zig's
         // coef buffers are zig-zag-indexed throughout; un-zig-zagging
@@ -830,7 +865,7 @@ pub fn decodeAcRefineArith(
             }
             st_idx += 3;
             k += 1;
-            if (k > se) return error.BackendError;
+            if (k > se) return state.fail(.{ .kind = .run_past_band, .se = se });
         }
     }
 }
