@@ -476,7 +476,8 @@ fn handleRestart(
     if (!recovery.truncated) {
         var boundary = br.*;
         // All-zero pad bits are a known encoder defect (finding 63): WARN, continue.
-        const complete = if (boundary.finishHuffmanSegment()) |_| eob_run.* == 0 else |err| zero: {
+        const finished = boundary.finishHuffmanSegment();
+        const complete = if (finished) |_| eob_run.* == 0 else |err| zero: {
             if (err == error.PaddingNotOnes) {
                 if (options.findings_sink) |sink| try sink.emitExact(.fail, .entropy_padding_not_ones,
                     base + boundary.padByteOffset(), "mixed Huffman pad bits before restart marker (T.81 F.1.2.3)");
@@ -489,10 +490,30 @@ fn handleRestart(
         };
         if (!complete) {
             if (!options.lenient) return error.BackendError;
+            const trailing: ?bitstream.BitReader.TrailingBytes = if (finished) |_| null else |err|
+                if (err == error.InvalidEntropyBoundary) boundary.trailingBytesAfterPadding() else null;
             if (options.findings_sink) |sink| {
-                try sink.emit(.fail, .huffman_table_corrupt, @intCast(br.byte_pos),
-                    "invalid progressive Huffman entropy or EOB run at restart boundary");
+                // Validate rulings 2026-11-22: an EOB run longer than the
+                // interval's blocks is 74 at the interval end; whole bytes
+                // after valid padding are FAIL 8 at the first.
+                if (eob_run.* != 0) {
+                    try sink.emit(.fail, .entropy_decode_invalid, @intCast(base + br.byte_pos),
+                        "restart interval end: EOB run continues past its last block");
+                } else if (trailing) |t| {
+                    var buf: [96]u8 = undefined;
+                    const detail = std.fmt.bufPrint(&buf, "{d} whole {s} after valid padding before marker 0x{X:0>2}", .{
+                        t.count, if (t.count == 1) "byte" else "bytes", t.marker,
+                    }) catch buf[0..0];
+                    try sink.emitExact(.fail, .extraneous_bytes_before_marker, @intCast(base + t.first), detail);
+                } else {
+                    try sink.emit(.fail, .huffman_table_corrupt, @intCast(base + br.byte_pos),
+                        "invalid progressive Huffman entropy at restart boundary");
+                }
             }
+            // Like libjpeg, skip whole extraneous bytes to the marker.
+            if (eob_run.* == 0) if (trailing) |t| {
+                br.byte_pos = t.marker_at;
+            };
         }
     }
     br.seekToMarker();
@@ -501,7 +522,7 @@ fn handleRestart(
         if (options.lenient) {
             if (options.findings_sink) |sink| {
                 sink.emit(.warn, .restart_marker_missing,
-                    @intCast(br.byte_pos),
+                    @intCast(base + br.byte_pos),
                     "expected RSTm marker not found at restart-interval boundary; continuing with reset DC predictors")
                     catch return error.OutOfMemory;
             }
@@ -524,7 +545,7 @@ fn handleRestart(
                        br.marker_byte - 0xD0, br.marker_byte })
                     catch buf[0..0];
                 sink.emit(.warn, .restart_marker_unexpected,
-                    @intCast(br.byte_pos), detail) catch return error.OutOfMemory;
+                    @intCast(base + br.byte_pos), detail) catch return error.OutOfMemory;
             }
             prev_dc.* = .{ 0, 0, 0 };
             eob_run.* = 0;
@@ -543,7 +564,19 @@ fn handleRestart(
 
 const ScanRecovery = struct {
     options: DecodeOptions,
+    /// File offset of the scan's `br.data[0]`.
+    base: usize = 0,
     truncated: bool = false,
+
+    /// An exact FAIL at `byte_pos` within the scan data (validate rulings
+    /// 2026-11-22: 74 for a code with no valid decode, 58 for a category past
+    /// the precision bound, both at the code's first byte).
+    fn fault(self: *const ScanRecovery, code: errors.FindingCode, byte_pos: usize, comptime fmt: []const u8, args: anytype) Error!void {
+        const s = self.options.findings_sink orelse return;
+        var buf: [128]u8 = undefined;
+        const detail = std.fmt.bufPrint(&buf, fmt, args) catch buf[0..0];
+        s.emitExact(.fail, code, @intCast(self.base + byte_pos), detail) catch return error.OutOfMemory;
+    }
 };
 
 /// Record one recovery warning per damaged restart interval (or scan without
@@ -556,7 +589,7 @@ inline fn emitInsufficientData(
     if (recovery.truncated) return;
     recovery.truncated = true;
     if (recovery.options.findings_sink) |s| {
-        s.emit(.warn, .insufficient_data, @intCast(byte_pos),
+        s.emit(.warn, .insufficient_data, @intCast(recovery.base + byte_pos),
             "Corrupt JPEG data: premature end of data segment") catch
             return error.OutOfMemory;
     }
@@ -577,7 +610,7 @@ fn decodeOneScan(
     restart_interval: u16,
     options: DecodeOptions,
 ) Error!usize {
-    var recovery: ScanRecovery = .{ .options = options };
+    var recovery: ScanRecovery = .{ .options = options, .base = entropy_start };
     var br = bitstream.BitReader.init(data[entropy_start..]);
     var prev_dc: [3]i16 = .{ 0, 0, 0 };
     var eob_run: u32 = 0;
@@ -682,12 +715,36 @@ fn decodeOneScan(
     // is not proof of an overlong run. Completed geometry must consume both
     // the EOB run and every entropy bit except all-one byte padding.
     if (!recovery.truncated) {
-        if (eob_run != 0) return error.BackendError;
+        if (eob_run != 0) {
+            // Validate 2026-11-22: 74, at the scan end (the EOBRUN code's
+            // position is not tracked), labeled as the scan end.
+            if (options.findings_sink) |sink| try sink.emit(.fail, .entropy_decode_invalid,
+                @intCast(entropy_start + br.byte_pos), "scan end: EOB run continues past the scan's last block");
+            return error.BackendError;
+        }
         _ = br.finishHuffmanSegment() catch |err| zero: {
             if (err == error.PaddingNotOnes) {
                 if (options.findings_sink) |sink| try sink.emitExact(.fail, .entropy_padding_not_ones,
                     entropy_start + br.padByteOffset(), "mixed Huffman pad bits before scan marker (T.81 F.1.2.3)");
             }
+            if (err == error.InvalidEntropyBoundary) if (br.trailingBytesAfterPadding()) |t| {
+                if (options.findings_sink) |sink| {
+                    var buf: [96]u8 = undefined;
+                    const detail = std.fmt.bufPrint(&buf, "{d} whole {s} after valid padding before marker 0x{X:0>2}", .{
+                        t.count, if (t.count == 1) "byte" else "bytes", t.marker,
+                    }) catch buf[0..0];
+                    try sink.emitExact(.fail, .extraneous_bytes_before_marker, entropy_start + t.first, detail);
+                }
+            } else {
+                // No marker before the data ends: the file ends after the scan.
+                var probe = br;
+                probe.seekToMarker();
+                if (!probe.marker_seen and probe.byte_pos + 1 >= probe.data.len) {
+                    if (options.findings_sink) |sink| try sink.emitExact(.fail, .truncated_stream,
+                        entropy_start + br.data.len, "file ends after a progressive scan, with no marker");
+                    return error.TruncatedStream;
+                }
+            };
             if (err != error.PaddingZeroBits) return error.BackendError;
             if (options.findings_sink) |sink| try sink.emitZeroPadding(entropy_start + br.padByteOffset(), br.padBitCount());
             br.seekToMarker();
@@ -696,9 +753,15 @@ fn decodeOneScan(
     } else br.seekToMarker();
     if (!br.marker_seen) {
         dbg("[prog:scan_end] no marker after scan: byte_pos={d} bits_valid={d}\n", .{ br.byte_pos, br.bits_valid });
+        if (options.findings_sink) |sink| try sink.emitExact(.fail, .truncated_stream,
+            entropy_start + br.data.len, "file ends after a progressive scan, with no marker");
         return error.TruncatedStream;
     }
-    if (br.marker_byte >= 0xd0 and br.marker_byte <= 0xd7) return error.BackendError;
+    if (br.marker_byte >= 0xd0 and br.marker_byte <= 0xd7) {
+        if (options.findings_sink) |sink| try sink.emitExact(.fail, .restart_marker_unexpected,
+            entropy_start + br.byte_pos, "restart marker after the final unit of the scan");
+        return error.BackendError;
+    }
     return entropy_start + br.byte_pos;
 }
 
@@ -744,15 +807,21 @@ fn decodeProgressiveDcFirst(
     recovery: *ScanRecovery,
 ) Error!void {
     const dc_t = dc_tables[comp.dc_table] orelse return error.InvalidMarker;
+    const dc_mark = br.mark();
     const dc_size: u8 = dc_t.decode(br) catch |e| {
         if (br.markerHit()) {
             try emitInsufficientData(recovery, br.byte_pos);
             return;
         }
         dbg("[prog:dc_first] huff fail comp={d} dc_table={d} byte_pos={d} bits_valid={d} buf=0x{x} err={s}\n", .{ comp_idx, comp.dc_table, br.byte_pos, br.bits_valid, br.buf, @errorName(e) });
+        try recovery.fault(.entropy_decode_invalid, br.markOffset(dc_mark), "DC Huffman code matches no table entry", .{});
         return error.BackendError;
     };
-    if (dc_size > precision + 3) return error.BackendError;
+    if (dc_size > precision + 3) {
+        try recovery.fault(.dct_coefficient_overflow, br.markOffset(dc_mark),
+            "DC difference category {d} exceeds {d} for {d}-bit samples (T.81 F.1.2.1)", .{ dc_size, precision + 3, precision });
+        return error.BackendError;
+    }
     var dc_diff: i16 = 0;
     if (dc_size > 0) {
         const bits = br.readBits(@intCast(dc_size)) catch {
@@ -812,21 +881,30 @@ fn decodeProgressiveAcFirst(
 
     var k: u8 = scan.ss;
     while (k <= scan.se) {
+        const ac_mark = br.mark();
         const rs: u8 = ac_t.decode(br) catch |e| {
             if (br.markerHit()) {
                 try emitInsufficientData(recovery, br.byte_pos);
                 return;
             }
+            try recovery.fault(.entropy_decode_invalid, br.markOffset(ac_mark), "AC Huffman code matches no table entry", .{});
             dbg("[prog:ac_first] huff fail ac_table={d} k={d} ss={d} se={d} byte_pos={d} bits_valid={d} buf=0x{x} err={s}\n", .{ comp.ac_table, k, scan.ss, scan.se, br.byte_pos, br.bits_valid, br.buf, @errorName(e) });
             return error.BackendError;
         };
         const run: u8 = rs >> 4;
         const size: u8 = rs & 0x0F;
-        if (size > precision + 2) return error.BackendError;
+        if (size > precision + 2) {
+            try recovery.fault(.dct_coefficient_overflow, br.markOffset(ac_mark),
+                "AC coefficient category {d} exceeds {d} for {d}-bit samples (T.81 F.1.2.2)", .{ size, precision + 2, precision });
+            return error.BackendError;
+        }
         if (size == 0) {
             if (run == 15) {
                 // ZRL — 16 zeros
-                if (@as(u16, k) + 15 > scan.se) return error.BackendError;
+                if (@as(u16, k) + 15 > scan.se) {
+                    try recovery.fault(.entropy_decode_invalid, br.markOffset(ac_mark), "AC zero run past Se={d}", .{scan.se});
+                    return error.BackendError;
+                }
                 k += 16;
                 continue;
             } else {
@@ -850,6 +928,7 @@ fn decodeProgressiveAcFirst(
         if (k > scan.se) {
             // The decoded run is out of band even if lookahead saw a marker.
             dbg("[prog:ac_first] k>se after run k={d} se={d} byte_pos={d}\n", .{ k, scan.se, br.byte_pos });
+            try recovery.fault(.entropy_decode_invalid, br.markOffset(ac_mark), "AC zero run past Se={d}", .{scan.se});
             return error.BackendError;
         }
         const bits = br.readBits(@intCast(size)) catch {
@@ -901,11 +980,13 @@ fn decodeProgressiveAcRefine(
     }
 
     while (k <= scan.se) {
+        const ac_mark = br.mark();
         const rs: u8 = ac_t.decode(br) catch |e| {
             if (br.markerHit()) {
                 try emitInsufficientData(recovery, br.byte_pos);
                 return;
             }
+            try recovery.fault(.entropy_decode_invalid, br.markOffset(ac_mark), "AC Huffman code matches no table entry", .{});
             const remaining: usize = if (br.byte_pos < br.data.len) br.data.len - br.byte_pos else 0;
             const next3: [3]u8 = if (br.byte_pos + 2 < br.data.len) .{ br.data[br.byte_pos], br.data[br.byte_pos + 1], br.data[br.byte_pos + 2] } else .{ 0, 0, 0 };
             dbg("[prog:ac_refine] huff fail ac_table={d} k={d} byte_pos={d} bytes_left={d} next3={x:0>2}{x:0>2}{x:0>2} buf=0x{x} bits_valid={d} marker_seen={} err={s}\n", .{ comp.ac_table, k, br.byte_pos, remaining, next3[0], next3[1], next3[2], br.buf, br.bits_valid, br.marker_seen, @errorName(e) });
@@ -920,7 +1001,9 @@ fn decodeProgressiveAcRefine(
         if (size != 0) {
             if (size != 1) {
                 dbg("[prog:ac_refine] size!=1 (size={d}) k={d} se={d} byte_pos={d}\n", .{ size, k, scan.se, br.byte_pos });
-                return error.BackendError; // refinement always ±1 LSB
+                // T.81 G.1.2.3 allows only size 1 in refinement.
+                try recovery.fault(.entropy_decode_invalid, br.markOffset(ac_mark), "AC refinement symbol of size {d}, not 1 (T.81 G.1.2.3)", .{size});
+                return error.BackendError;
             }
             const bit = br.readBits(1) catch {
                 if (br.markerHit()) {

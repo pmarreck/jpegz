@@ -365,7 +365,8 @@ test "progressive boundaries account for EOB runs padding and refinement bits" {
 			var boundary_failures: usize = 0;
 			for (sink.items()) |finding| {
 				if (finding.code == .insufficient_data and finding.severity == .warn) insufficient += 1;
-				if (finding.severity == .fail and finding.code == (if (case.mixed_pad_at.len > 0) jpegz.FindingCode.entropy_padding_not_ones else .huffman_table_corrupt)) boundary_failures += 1;
+				// An EOB run crossing a restart is 74 (validate, 2026-11-22).
+				if (finding.severity == .fail and finding.code == (if (case.mixed_pad_at.len > 0) jpegz.FindingCode.entropy_padding_not_ones else .entropy_decode_invalid)) boundary_failures += 1;
 			}
 			try std.testing.expectEqual(case.insufficient_count, insufficient);
 			try std.testing.expectEqual(@as(usize, if (case.recovered_boundary_failure) 1 else 0), boundary_failures);
@@ -2033,6 +2034,186 @@ test "Huffman insufficient_data and restart-boundary whole bytes report file off
 			try std.testing.expectEqual(@as(?u64, rst), f.offset);
 			try std.testing.expectEqualStrings("2 whole bytes after valid padding before marker 0xD0", f.detail.?);
 		}
+		try std.testing.expectEqual(@as(usize, 1), hits);
+	}
+}
+
+/// The first marker at or after `from` that ends an entropy segment (not a
+/// stuffed byte or an RSTm).
+fn segmentEndMarker(data: []const u8, from: usize) usize {
+	var i = from;
+	while (!(data[i] == 0xff and data[i + 1] != 0 and data[i + 1] != 0xff and (data[i + 1] < 0xd0 or data[i + 1] > 0xd7))) i += 1;
+	return i;
+}
+
+fn entropyStart(data: []const u8, sos: usize) usize {
+	return sos + 2 + (@as(usize, data[sos + 2]) << 8 | data[sos + 3]);
+}
+
+test "progressive Huffman data faults are typed: 74, 58, 8, 57 and truncated_stream (validate 2026-11-22)" {
+	const allocator = std.testing.allocator;
+	const rgb = @embedFile("fixtures/progressive_8x8_rgb.jpg");
+	const dri = @embedFile("fixtures/progressive_32x32_gray_dri.jpg");
+	// Single-byte mutations of libjpeg-turbo files, found by search.
+	const Case = struct { data: []const u8, at: usize, mask: u8, code: jpegz.FindingCode, offset: u64, exact: bool, detail: []const u8 };
+	for ([_]Case{
+		.{ .data = rgb, .at = 236, .mask = 0x40, .code = .entropy_decode_invalid, .offset = 236, .exact = true, .detail = "DC Huffman code matches no table entry" },
+		.{ .data = rgb, .at = 264, .mask = 0x02, .code = .entropy_decode_invalid, .offset = 273, .exact = true, .detail = "AC Huffman code matches no table entry" },
+		.{ .data = rgb, .at = 392, .mask = 0x02, .code = .entropy_decode_invalid, .offset = 403, .exact = true, .detail = "AC refinement symbol of size 2, not 1 (T.81 G.1.2.3)" },
+		.{ .data = rgb, .at = 260, .mask = 0x10, .code = .entropy_decode_invalid, .offset = 272, .exact = false, .detail = "scan end: EOB run continues past the scan's last block" },
+		.{ .data = dri, .at = 179, .mask = 0x08, .code = .dct_coefficient_overflow, .offset = 193, .exact = true, .detail = "AC coefficient category 11 exceeds 10 for 8-bit samples (T.81 F.1.2.2)" },
+		.{ .data = dri, .at = 179, .mask = 0x20, .code = .entropy_decode_invalid, .offset = 193, .exact = true, .detail = "AC zero run past Se=5" },
+		.{ .data = dri, .at = 180, .mask = 0x10, .code = .entropy_decode_invalid, .offset = 203, .exact = false, .detail = "restart interval end: EOB run continues past its last block" },
+	}) |case| {
+		const data = try allocator.dupe(u8, case.data);
+		defer allocator.free(data);
+		data[case.at] ^= case.mask;
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		errdefer for (report.findings.items) |f| std.debug.print("  {t} {?d} {s}\n", .{ f.code, f.offset, f.detail orelse "" });
+		var hits: usize = 0;
+		for (report.findings.items) |f| {
+			if (f.code != case.code or !std.mem.eql(u8, f.detail orelse "", case.detail)) continue;
+			hits += 1;
+			try std.testing.expect(f.severity == .fail and f.offset_is_exact == case.exact);
+			try std.testing.expectEqual(@as(?u64, case.offset), f.offset);
+		}
+		try std.testing.expectEqual(@as(usize, 1), hits);
+	}
+	// Constructed boundary cases on the first scan of the RGB file.
+	const sos = findMarker(rgb, 0xda).?;
+	const end = segmentEndMarker(rgb, entropyStart(rgb, sos));
+	const Built = struct { bytes: []const u8, code: jpegz.FindingCode, offset: usize, detail: []const u8, exact: bool = true };
+	const whole = try std.mem.concat(allocator, u8, &.{ rgb[0..end], &.{ 0x12, 0x34 }, rgb[end..] });
+	defer allocator.free(whole);
+	const final_rst = try std.mem.concat(allocator, u8, &.{ rgb[0..end], &.{ 0xff, 0xd3 }, rgb[end..] });
+	defer allocator.free(final_rst);
+	const cut = rgb[0..end];
+	for ([_]Built{
+		.{ .bytes = whole, .code = .extraneous_bytes_before_marker, .offset = end, .detail = "2 whole bytes after valid padding before marker 0xC4" },
+		.{ .bytes = final_rst, .code = .restart_marker_unexpected, .offset = end, .detail = "restart marker after the final unit of the scan" },
+		// The marker walk already reports the file ending inside the scan.
+		.{ .bytes = cut, .code = .truncated_stream, .offset = end, .detail = "SOS entropy data not terminated by a marker", .exact = false },
+	}) |case| {
+		var report = try jpegz.validate(allocator, case.bytes);
+		defer report.deinit(allocator);
+		errdefer for (report.findings.items) |f| std.debug.print("  {t} {?d} {s}\n", .{ f.code, f.offset, f.detail orelse "" });
+		var hits: usize = 0;
+		for (report.findings.items) |f| {
+			try std.testing.expect(f.code != .huffman_table_corrupt);
+			if (f.code != case.code or !std.mem.eql(u8, f.detail orelse "", case.detail)) continue;
+			hits += 1;
+			try std.testing.expect(f.severity == .fail and f.offset_is_exact == case.exact);
+			try std.testing.expectEqual(@as(?u64, case.offset), f.offset);
+		}
+		try std.testing.expectEqual(@as(usize, 1), hits);
+	}
+	{
+		// The decoder reports the same end itself to a decode-API sink.
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		try std.testing.expectError(error.TruncatedStream, jpegz.decodeWithOptions(allocator, cut, .{ .findings_sink = &sink }));
+		var hits: usize = 0;
+		for (sink.items()) |f| if (f.code == .truncated_stream) {
+			hits += 1;
+			try std.testing.expect(f.offset_is_exact and f.offset.? == end);
+			try std.testing.expectEqualStrings("file ends after a progressive scan, with no marker", f.detail.?);
+		};
+		try std.testing.expectEqual(@as(usize, 1), hits);
+	}
+}
+
+test "progressive restart findings report file offsets, and whole bytes before an RSTm are FAIL 8" {
+	const allocator = std.testing.allocator;
+	const dri = @embedFile("fixtures/progressive_32x32_gray_dri.jpg");
+	const rst = findMarker(dri, 0xd0).?;
+	{
+		var data = try allocator.dupe(u8, dri);
+		defer allocator.free(data);
+		data[rst + 1] = 0xd5;
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		var seen = false;
+		for (report.findings.items) |f| if (f.code == .restart_marker_unexpected) {
+			seen = true;
+			try std.testing.expectEqual(@as(?u64, rst), f.offset);
+			break;
+		};
+		try std.testing.expect(seen);
+	}
+	{
+		const data = try std.mem.concat(allocator, u8, &.{ dri[0..rst], &.{ 0x12, 0x34 }, dri[rst..] });
+		defer allocator.free(data);
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		var hits: usize = 0;
+		for (report.findings.items) |f| {
+			try std.testing.expect(f.code != .huffman_table_corrupt);
+			if (f.code != .extraneous_bytes_before_marker or f.severity != .fail) continue;
+			hits += 1;
+			try std.testing.expect(f.offset_is_exact);
+			try std.testing.expectEqual(@as(?u64, rst), f.offset);
+		}
+		try std.testing.expectEqual(@as(usize, 1), hits);
+	}
+	{
+		// Entropy cut mid-scan, then EOI: insufficient_data at the EOI's file offset.
+		const sos = findMarker(dri, 0xda).?;
+		const cut = entropyStart(dri, sos) + 6;
+		const data = try std.mem.concat(allocator, u8, &.{ dri[0..cut], &.{ 0xff, 0xd9 } });
+		defer allocator.free(data);
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		if (jpegz.decodeWithOptions(allocator, data, .{ .lenient = true, .findings_sink = &sink })) |image| {
+			var img = image;
+			img.deinit(allocator);
+		} else |_| {}
+		var seen = false;
+		for (sink.items()) |f| if (f.code == .insufficient_data) {
+			seen = true;
+			try std.testing.expectEqual(@as(?u64, cut), f.offset);
+		};
+		try std.testing.expect(seen);
+	}
+}
+
+test "progressive ZRL past Se is 74, and a file ending in unread bytes is truncated_stream" {
+	const allocator = std.testing.allocator;
+	// 8x8 gray progressive frame. DC table: code 0 -> category 0. AC table:
+	// code 0 -> ZRL (0xF0), code 10 -> EOB.
+	const head = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{16} ** 64) ++
+		[_]u8{ 0xff, 0xc2, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0x00, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 21, 0x10, 1, 1 } ++ ([_]u8{0} ** 14) ++ [_]u8{ 0xf0, 0x00 } ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 0, 0, 0x7f } ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, 63, 0 };
+	{
+		// Four ZRLs from k = 1: 17, 33, 49, then 49 + 15 passes Se = 63.
+		const data = head ++ [_]u8{ 0x0f, 0xff, 0xd9 };
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		errdefer for (report.findings.items) |f| std.debug.print("  {t} {?d} {s}\n", .{ f.code, f.offset, f.detail orelse "" });
+		var hits: usize = 0;
+		for (report.findings.items) |f| {
+			try std.testing.expect(f.code != .huffman_table_corrupt);
+			if (f.code != .entropy_decode_invalid) continue;
+			hits += 1;
+			try std.testing.expect(f.offset_is_exact and f.offset.? == head.len);
+			try std.testing.expectEqualStrings("AC zero run past Se=63", f.detail.?);
+		}
+		try std.testing.expectEqual(@as(usize, 1), hits);
+	}
+	{
+		// The AC scan's EOB, its padding, then one stray byte and no marker.
+		const data = head ++ [_]u8{ 0xbf, 0x12 };
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		try std.testing.expectError(error.TruncatedStream, jpegz.decodeWithOptions(allocator, &data, .{ .findings_sink = &sink }));
+		var hits: usize = 0;
+		for (sink.items()) |f| if (f.code == .truncated_stream) {
+			hits += 1;
+			try std.testing.expect(f.offset_is_exact and f.offset.? == data.len);
+		};
 		try std.testing.expectEqual(@as(usize, 1), hits);
 	}
 }

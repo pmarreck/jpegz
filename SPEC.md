@@ -389,7 +389,14 @@ Sequential Huffman data faults are typed exactly at the code (validate,
   does.
 - **Restarts:** a consumed RSTm restarts decoding after truncated data.
 - **`insufficient_data`:** reported at its file offset.
-- **Still to come:** progressive and lossless parity; see PLAN.md.
+- **Progressive scans** follow the same rules:
+  - 74 for a refinement symbol of size other than 1 (T.81 G.1.2.3);
+  - 74 for an EOB run longer than the remaining blocks, at the interval or
+    scan end (labeled, not exact);
+  - 57 for an RSTm after a scan's final unit;
+  - `truncated_stream` when the file ends after a scan;
+  - restart findings at their file offsets.
+- **Still to come:** lossless parity; see PLAN.md.
 
 Sequential Huffman frames reject an additional SOS after all components have
 been coded, with exact finding 55 at its first selector. The post-coverage
