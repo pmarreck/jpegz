@@ -280,6 +280,13 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 	var dht_segments: std.ArrayList([2]usize) = .empty;
 	defer dht_segments.deinit(allocator);
 	var frame_precision: ?u8 = null;
+	// Progressive scan history (validate rulings I, 2026-11-23): per component
+	// selector and coefficient, the Al of the last scan that coded it (-1: none).
+	var coef_al: [256][64]i8 = [_][64]i8{[_]i8{-1} ** 64} ** 256;
+	// One root cause, one record (as rulings H): history is not judged after
+	// a scan whose parameters are not established, or after the first
+	// history fault, since later scans would only repeat the consequence.
+	var history_known = true;
 	var first_sos_offset: ?usize = null;
 	var first_missing_table: ?usize = null;
     var sos_count: u32 = 0; // number of SOS (scan) markers seen
@@ -867,6 +874,8 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 				// leaves Ss, Se, Ah and Al unlocated, so they are not judged.
 				const ns_valid = report.variant == .jpegls or
 					!(ns2 == 0 or ns2 > 4 or (sof_component_count != 0 and ns2 > sof_component_count));
+                const progressive_frame = report.variant == .progressive_huffman or report.variant == .progressive_arithmetic;
+                if (progressive_frame and !(ns_valid and spec_off + 2 < seg_end)) history_known = false;
                 if (ns_valid and spec_off + 2 < seg_end) {
                     const ss = data[spec_off];
                     const se = data[spec_off + 1];
@@ -893,6 +902,45 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                             if (bad) try addFinding(&report, allocator, .fail,
                                 .progressive_scan_invalid, spec_off,
                                 "progressive SOS spectral/approximation parameters violate T.81 §G");
+                            // Validate rulings I: judged against earlier scans
+                            // (T.81 G.1.1.1.1 and G.1.1.1.2), one record per scan
+                            // at the first violation. An AC scan needs the
+                            // component's DC first scan; a scan coding coefficient k
+                            // needs Ah equal to the last Al for k (0 if uncoded).
+                            if (bad) history_known = false;
+                            if (!bad and history_known) {
+                                for (0..ns2) |j| {
+                                    const cs = data[seg_body_start + 1 + 2 * j];
+                                    const coded = &coef_al[cs];
+                                    if (ss > 0 and coded[0] < 0) {
+                                        const detail = try std.fmt.allocPrint(allocator,
+                                            "history: AC scan for component {d} before its DC first scan (T.81 G.1.1.1.1)", .{cs});
+                                        defer allocator.free(detail);
+                                        try addExactFinding(&report, allocator, .progressive_scan_invalid, spec_off, detail);
+                                        history_known = false;
+                                        break;
+                                    }
+                                    const mismatch: ?usize = for (ss..@as(usize, se) + 1) |k| {
+                                        if (ah != @max(coded[k], 0)) break k;
+                                    } else null;
+                                    if (mismatch) |k| {
+                                        const detail = if (coded[k] < 0)
+                                            try std.fmt.allocPrint(allocator,
+                                                "history: component {d} coefficient {d} has Ah={d}, but no scan has coded it, so Ah must be 0 (T.81 G.1.1.1.2)", .{ cs, k, ah })
+                                        else
+                                            try std.fmt.allocPrint(allocator,
+                                                "history: component {d} coefficient {d} has Ah={d}, but the last scan coding it had Al={d} (T.81 G.1.1.1.2)", .{ cs, k, ah, coded[k] });
+                                        defer allocator.free(detail);
+                                        try addExactFinding(&report, allocator, .progressive_scan_invalid, spec_off + 2, detail);
+                                        history_known = false;
+                                        break;
+                                    }
+                                }
+                                for (0..ns2) |j| {
+                                    const cs = data[seg_body_start + 1 + 2 * j];
+                                    for (ss..@as(usize, se) + 1) |k| coef_al[cs][k] = @intCast(al);
+                                }
+                            }
                         },
                         .lossless_huffman, .lossless_arithmetic => {
                             // T.81 §H.1: Ss is the predictor selector (1..7);

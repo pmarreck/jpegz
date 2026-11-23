@@ -174,3 +174,24 @@ repin.
   69 at Td.
 - **Tail fields:** with Ns invalid, Ss, Se, Ah and Al are not located, so
   no tail-field record follows the 55. One root cause, one record.
+
+## Progressive scan history (validate, 2026-11-23, registry rulings I)
+
+- **Evidence:**
+  - two reds that validated as valid: an AC scan before the DC first
+    scan, and Ah not equal to the prior Al;
+  - 1,747 progressive producer and fixture files with no violation
+    outside `fuzz_progressive_ac_refine_al15.jpg`.
+- **Ruling:** FAIL 59 `progressive_scan_invalid`, details prefixed
+  `history:`.
+  - AC before the component's DC first scan: exact at Ss.
+  - Ah not equal to the last Al for a coefficient (0 if uncoded): exact
+    at AhAl.
+  - One record per scan, and SOF10 alike.
+  - Incomplete progression is not a finding, and no new range rule.
+- **Implementation choice, reported to validate:** history stops after
+  its first fault, or after a scan whose parameters are not established
+  (invalid Ns, a per-scan 59), so a root cause is reported once.
+- **Re-pin:** an arithmetic data-fault test pin at byte 257 was a scan's
+  Se byte; with history judged it is a history fault. It was replaced by
+  an entropy-only pin at 259.

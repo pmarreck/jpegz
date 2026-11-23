@@ -332,8 +332,19 @@ both corruption-detection gains and zero new rejects on the known-good corpus.
 Sequential and lossless Huffman scans check padding and exact entropy
 consumption at scan ends and restart intervals. Supported lossless scans also
 enforce whole-row restart intervals and reset prediction for each interval's
-first row. Progressive scans also check padding and EOB-run exhaustion;
-remaining coefficient and scan-history constraints are tracked in PLAN.md.
+first row. Progressive scans also check padding and EOB-run exhaustion.
+
+Progressive scan history (T.81 G.1.1.1, validate rulings I) is FAIL 59
+`progressive_scan_invalid`, with details prefixed `history:`:
+- An AC scan for a component whose DC first scan has not occurred is
+  reported exact at Ss.
+- A scan coding a coefficient with Ah other than the Al of the last scan
+  that coded it (0 when none has) is reported exact at the AhAl byte.
+- There is one record per scan. After the first such record, or after a
+  scan whose parameters are not established, history is not judged, so a
+  root cause is reported once.
+- Incomplete progression is not a finding. The decoded-value 58 and the
+  one-bit refinements bound the coefficient range.
 Do not advertise complete corruption detection from pixel-oracle equality.
 
 A DAC entry outside T.81 B.2.4.3 is FAIL 53 (`arithmetic_table_corrupt`),

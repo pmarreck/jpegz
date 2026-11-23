@@ -1817,8 +1817,10 @@ test "arithmetic decoded-value faults are 58 and 74 at the interval start, never
 			.detail = "restart interval starting here: DC difference magnitude 2048 exceeds 2047 for 8-bit samples (T.81 F.1.2)" },
 		.{ .data = seq, .at = 316, .mask = 0x10, .code = .entropy_decode_invalid, .offset = 189,
 			.detail = "scan starting here: AC zero run past Se=63" },
-		.{ .data = prog, .at = 257, .mask = 0x01, .code = .entropy_decode_invalid, .offset = 292,
-			.detail = "restart interval starting here: AC zero run past Se=4" },
+		// Entropy only: a pin at 257 (the scan's Se byte) became a scan-history
+		// fault once history was judged (validate rulings I).
+		.{ .data = prog, .at = 259, .mask = 0x80, .code = .entropy_decode_invalid, .offset = 259,
+			.detail = "restart interval starting here: AC zero run past Se=5" },
 	}) |case| {
 		const data = try allocator.dupe(u8, case.data);
 		defer allocator.free(data);
@@ -2456,6 +2458,69 @@ test "Huffman walker parity: DHT overruns, symbols past the bound, progressive t
 		var report = try jpegz.validate(allocator, &data);
 		defer report.deinit(allocator);
 		try expectExactTypedFailures(report, .sos_component_mismatch, 226, 1);
+	}
+}
+
+test "progressive scan history is FAIL 59, one record per scan (validate rulings I, T.81 G.1.1.1)" {
+	const allocator = std.testing.allocator;
+	const Expect = struct { offset: u64, detail: []const u8 };
+	const check = struct {
+		fn run(a: std.mem.Allocator, data: []const u8, first: Expect) !void {
+			var report = try jpegz.validate(a, data);
+			defer report.deinit(a);
+			errdefer for (report.findings.items) |f| std.debug.print("  {t} {?d} {s}\n", .{ f.code, f.offset, f.detail orelse "" });
+			var history: ?jpegz.Finding = null;
+			for (report.findings.items) |f| {
+				if (f.severity != .fail) continue;
+				try std.testing.expectEqual(jpegz.FindingCode.progressive_scan_invalid, f.code);
+				try std.testing.expect(std.mem.startsWith(u8, f.detail.?, "history: "));
+				if (history == null) history = f;
+			}
+			const h = history orelse return error.TestExpectedHistory;
+			try std.testing.expect(h.offset_is_exact);
+			try std.testing.expectEqual(@as(?u64, first.offset), h.offset);
+			try std.testing.expectEqualStrings(first.detail, h.detail.?);
+		}
+	}.run;
+	const rgb = @embedFile("fixtures/progressive_8x8_rgb.jpg");
+	{
+		// The component-1 AC scan (with its DHT) moved before the DC first
+		// scan: FAIL at the moved scan's Ss.
+		const moved = try std.mem.concat(allocator, u8, &.{ rgb[0..222], rgb[239..272], rgb[222..239], rgb[272..] });
+		defer allocator.free(moved);
+		try check(allocator, moved, .{ .offset = 251, .detail = "history: AC scan for component 1 before its DC first scan (T.81 G.1.1.1.1)" });
+	}
+	{
+		// The first AC scan relabeled Ah=1 Al=0: coefficients 1..5 were
+		// never coded, so Ah must be 0. FAIL at its AhAl byte.
+		var data = rgb.*;
+		try std.testing.expectEqual(@as(u8, 0x02), data[270]);
+		data[270] = 0x10;
+		try check(allocator, &data, .{ .offset = 270, .detail = "history: component 1 coefficient 1 has Ah=1, but no scan has coded it, so Ah must be 0 (T.81 G.1.1.1.2)" });
+	}
+	{
+		// SOF10: the AC refinement at 0xAA refines 1..63 from Al 2;
+		// relabeled Ah=1 Al=0, it skips a bit plane.
+		const arith = @embedFile("fixtures/arith_progressive_8x8_gray.jpg");
+		var data = arith.*;
+		try std.testing.expectEqual(@as(u8, 0x21), data[0xaa + 9]);
+		data[0xaa + 9] = 0x10;
+		try check(allocator, &data, .{ .offset = 0xaa + 9, .detail = "history: component 1 coefficient 1 has Ah=1, but the last scan coding it had Al=2 (T.81 G.1.1.1.2)" });
+	}
+	// One root cause, one record: the relabeled scan above leaves a later
+	// refinement inconsistent too, but only the first fault is reported.
+	{
+		var data = rgb.*;
+		data[270] = 0x10;
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try expectExactTypedFailures(report, .progressive_scan_invalid, 270, 1);
+	}
+	// Valid controls: the producer fixtures keep a clean history.
+	for ([_][]const u8{ rgb, @embedFile("fixtures/arith_progressive_8x8_gray.jpg"), @embedFile("fixtures/huffman_restart_32x32_rgb420_progressive_1b.jpg"), @embedFile("fixtures/progressive_8x8_gray12.jpg") }) |data| {
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expect(report.isValid());
 	}
 }
 
