@@ -403,6 +403,24 @@ Sequential Huffman data faults are typed exactly at the code (validate,
   - FAIL 8 for whole bytes after valid padding;
   - 57 for a wrong RSTm or one after the final MCU, 56 for another marker
     where an RSTm belongs.
+- **Huffman tables and scan headers in the marker walk:**
+  - A DHT symbol past T.81's bound for the frame precision is FAIL 51,
+    exact at the symbol byte (validate rulings G, 2026-11-23). The bounds:
+    - DC at most P+3, or 16 in lossless frames;
+    - AC sizes at most P+2;
+    - outside progressive frames, where they are EOBRUN symbols, no size-0
+      AC symbol with a run of 1 to 14.
+
+    A table fault reported this way stops the decode-through, so the
+    decoder's own 58 remains only for tables the walk does not reach.
+  - BITS counts that overrun the DHT segment are 51 at the count byte where
+    the symbols stop fitting. A segment that ends inside a Tc/Th and BITS
+    header is 51 at the Tc/Th byte.
+  - A progressive scan naming an undefined table is 69 at its Td/Ta byte. A
+    DC first scan judges Td, an AC scan Ta, and a DC refinement neither.
+  - SOS Ns outside 1..4, or above the SOF's Nf, is
+    `sos_component_mismatch` at Ns in every non-sequential T.81 scan, as in
+    sequential ones.
 
 Sequential Huffman frames reject an additional SOS after all components have
 been coded, with exact finding 55 at its first selector. The post-coverage

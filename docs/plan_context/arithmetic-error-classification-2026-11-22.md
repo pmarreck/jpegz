@@ -142,3 +142,26 @@ Recorded in validate's finding_code_registry.md (rulings F). Ship items
 1-9 with your usual corpus report and reds. Validate maps them at the next
 repin.
 
+
+## DHT symbol bound (validate, 2026-11-23, registry rulings G)
+
+- **Producer counts:**
+  - jpegz: 2,141 files and 394 DHT tables;
+  - validate: 5,391 local files and 19,897 tables, plus its corpus (17
+    files, 62 tables).
+- **Result:** no value past the bound anywhere except the deliberately
+  corrupt `baseline_4x4_bogus_dht.jpg`. A first rule that also counted
+  size-0 symbols with runs of 1 to 14 in progressive tables was wrong:
+  those are EOBRUN symbols (G.1.2.2).
+- **Ruling:** FAIL 51 `huffman_table_corrupt`, exact at the symbol byte,
+  with the table (Tc, Th) and the value in the detail. The decoded-value 58
+  stays for tables the walker misses.
+- **Implementation note:** the walk reports the table before the codec
+  check, so the decode-through no longer runs for such a file. Tests reach
+  the decoders' 58 through the decode API's sink and
+  `internal.losslessValidateWithFindings`.
+- **Ns, an assumption to confirm:** the ruling said to use the code a first
+  scan gets for the same field. A first progressive scan with Ns of 5 also
+  ended in a bare 51 (Ns of 0 got an incidental `progressive_scan_invalid`
+  from the misread tail). So every non-sequential T.81 scan now gets
+  sequential's `sos_component_mismatch` at Ns.

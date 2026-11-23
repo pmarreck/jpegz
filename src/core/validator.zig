@@ -275,6 +275,11 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 	// first scan, and the first Td/Ta byte naming a table not yet defined.
 	var dht_defined = [2][4]bool{ .{ false, false, false, false }, .{ false, false, false, false } };
 	var seen_dht = false;
+	// DHT bodies, judged after the walk against the frame precision (a DHT
+	// may precede the SOF).
+	var dht_segments: std.ArrayList([2]usize) = .empty;
+	defer dht_segments.deinit(allocator);
+	var frame_precision: ?u8 = null;
 	var first_sos_offset: ?usize = null;
 	var first_missing_table: ?usize = null;
     var sos_count: u32 = 0; // number of SOS (scan) markers seen
@@ -442,13 +447,32 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 		// the decode-through, which reports them as 51.
 		if (marker_byte == Marker.DHT) {
 			seen_dht = true;
+			try dht_segments.append(allocator, .{ seg_body_start, seg_end });
 			const bits_bytes: usize = 16;
 			var hp: usize = seg_body_start;
 			while (hp + 1 + bits_bytes <= seg_end) {
-				if (data[hp] >> 4 <= 1 and data[hp] & 0x0F <= 3) dht_defined[data[hp] >> 4][data[hp] & 0x0F] = true;
 				const bits = data[hp + 1 ..][0..bits_bytes].*;
 				var total: usize = 0;
 				for (bits) |count| total += count;
+				// Validate 2026-11-22: BITS counts that overrun the segment are 51,
+				// exact at the count byte where the symbols stop fitting.
+				const room = seg_end - (hp + 1 + bits_bytes);
+				if (total > room) {
+					var running: usize = 0;
+					const at = for (bits, 0..) |count, i| {
+						running += count;
+						if (running > room) break hp + 1 + i;
+					} else unreachable;
+					const detail = try std.fmt.allocPrint(allocator,
+						"DHT Tc={d} Th={d}: BITS counts {d} symbols but only {d} bytes remain in the segment",
+						.{ data[hp] >> 4, data[hp] & 0x0F, total, room });
+					defer allocator.free(detail);
+					try addExactFinding(&report, allocator, .huffman_table_corrupt, at, detail);
+					// Declared, though corrupt: not also a missing table (69).
+					if (data[hp] >> 4 <= 1 and data[hp] & 0x0F <= 3) dht_defined[data[hp] >> 4][data[hp] & 0x0F] = true;
+					break;
+				}
+				if (data[hp] >> 4 <= 1 and data[hp] & 0x0F <= 3) dht_defined[data[hp] >> 4][data[hp] & 0x0F] = true;
 				switch (huffman.codeSpace(bits)) {
 					.full_all_ones => |length| {
 						const detail = try std.fmt.allocPrint(allocator,
@@ -462,6 +486,9 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 					.valid, .invalid => {},
 				}
 				hp += 1 + bits_bytes + total;
+			} else if (hp < seg_end) {
+				try addExactFinding(&report, allocator, .huffman_table_corrupt, hp,
+					"DHT segment ends inside a table's Tc/Th and BITS header");
 			}
 		}
 
@@ -558,6 +585,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
                         seg_body_start, "SOF segment too short for header fields");
                 } else {
                     const precision = data[seg_body_start];
+                    if (frame_precision == null) frame_precision = precision;
                     const declared_height = readU16BE(data, seg_body_start + 1);
                     const declared_width = readU16BE(data, seg_body_start + 3);
                     // T.81 B.2.5 and T.87 C.2.2: Y = 0 defers the line count
@@ -691,6 +719,43 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 						first_missing_table = seg_body_start + 2 + 2 * sj;
 						break;
 					}
+				}
+			}
+			// Validate 2026-11-22: a progressive scan naming an undefined table
+			// gets finding 69 at its Td/Ta byte, as on the sequential path. A
+			// DC first scan uses Td, an AC scan Ta, a DC refinement neither.
+			if (seen_sof and report.variant == .progressive_huffman and
+				seg_body_start < seg_end and first_missing_table == null)
+			{
+				const scan_ns = data[seg_body_start];
+				if (seg_len == 6 + @as(usize, scan_ns) * 2) {
+					const tail = seg_body_start + 1 + 2 * @as(usize, scan_ns);
+					const ss = data[tail];
+					const ah = data[tail + 2] >> 4;
+					for (0..scan_ns) |sj| {
+						const tdta = data[seg_body_start + 2 + 2 * sj];
+						const td = tdta >> 4;
+						const ta = tdta & 0x0F;
+						const missing = if (ss == 0) ah == 0 and td <= 3 and !dht_defined[0][td] else ta <= 3 and !dht_defined[1][ta];
+						if (missing) {
+							// No K.3 fallback applies to progressive scans, so report
+							// now; the FAIL also spares a redundant decode-through 51.
+							first_missing_table = seg_body_start + 2 + 2 * sj;
+							try addExactFinding(&report, allocator, .huffman_tables_missing, first_missing_table.?,
+								"scan names a Huffman table that no DHT segment defines");
+							break;
+						}
+					}
+				}
+			}
+			// Validate 2026-11-22: SOS Ns outside 1..4 or above the SOF's Nf gets
+			// the code the sequential check below gives it, on every T.81 path.
+			const sequential_scan = report.variant == .baseline_huffman or report.variant == .extended_huffman;
+			if (seen_sof and !sequential_scan and report.variant != .jpegls and seg_body_start < seg_end) {
+				const ns = data[seg_body_start];
+				if (ns == 0 or ns > 4 or (sof_component_count != 0 and ns > sof_component_count)) {
+					try addExactFinding(&report, allocator, .sos_component_mismatch, seg_body_start,
+						"SOS Ns must be 1..4 and cannot exceed SOF Nf");
 				}
 			}
 			// Finding 75 (validate, 2026-11-22): an SOS Td/Ta outside T.81
@@ -942,6 +1007,43 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         else => {},
     }
 
+	// Validate rulings G (2026-11-23): a DHT symbol past T.81's bound for the
+	// frame precision is FAIL 51, exact at the symbol byte. No producer in
+	// either project's corpora writes one. DC categories are at most P+3
+	// (lossless 16); AC sizes at most P+2; and outside progressive scans,
+	// where G.1.2.2 makes them EOBRUN symbols, no size-0 symbol has a run of
+	// 1 to 14. Before the codec check, so its decode-through 58 does not
+	// repeat the same table fault.
+	if (frame_precision) |p| if (report.variant != .jpegls) {
+		const lossless = report.variant == .lossless_huffman or report.variant == .lossless_arithmetic;
+		const progressive = report.variant == .progressive_huffman or report.variant == .progressive_arithmetic;
+		segments: for (dht_segments.items) |segment| {
+			var hp = segment[0];
+			while (hp + 17 <= segment[1]) {
+				const tc = data[hp] >> 4;
+				var total: usize = 0;
+				for (data[hp + 1 ..][0..16]) |count| total += count;
+				if (hp + 17 + total > segment[1]) break;
+				for (data[hp + 17 ..][0..total], 0..) |value, k| {
+					const size = value & 0x0F;
+					const run = value >> 4;
+					const bad = if (tc == 0)
+						value > (if (lossless) 16 else @as(usize, p) + 3)
+					else
+						size > @as(usize, p) + 2 or (!progressive and size == 0 and run >= 1 and run <= 14);
+					if (!bad) continue;
+					const detail = try std.fmt.allocPrint(allocator,
+						"DHT Tc={d} Th={d}: symbol 0x{X:0>2} is past the T.81 bound for {d}-bit samples",
+						.{ tc, data[hp] & 0x0F, value, p });
+					defer allocator.free(detail);
+					try addExactFinding(&report, allocator, .huffman_table_corrupt, hp + 17 + k, detail);
+					break :segments;
+				}
+				hp += 17 + total;
+			}
+		}
+	};
+
     // ── Step 4: Codec-level integrity ──────────────────────────
     // SOF3 consumes Huffman syntax without pixels or recovery. Other supported
     // variants run the cleanroom decoder with `lenient = true` + FindingsSink.
@@ -1036,6 +1138,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 				"scan names a Huffman table that no DHT segment defines");
 		}
 	}
+
 
     return report;
 }

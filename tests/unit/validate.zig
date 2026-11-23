@@ -1944,6 +1944,46 @@ test "SOS table selectors outside T.81 Table B.3 are finding 75 (validate 2026-1
 	}
 }
 
+/// Validate rulings G (2026-11-23): a DHT symbol past the precision bound is
+/// FAIL 51, exact at the symbol byte, and the report's only FAIL.
+fn expectDhtSymbolPastBound(allocator: std.mem.Allocator, data: []const u8, symbol_at: usize) !void {
+	var report = try jpegz.validate(allocator, data);
+	defer report.deinit(allocator);
+	errdefer for (report.findings.items) |f| std.debug.print("  {t} {?d} {s}\n", .{ f.code, f.offset, f.detail orelse "" });
+	var fails: usize = 0;
+	for (report.findings.items) |f| {
+		if (f.severity != .fail) continue;
+		fails += 1;
+		try std.testing.expectEqual(jpegz.FindingCode.huffman_table_corrupt, f.code);
+		try std.testing.expect(f.offset_is_exact);
+		try std.testing.expectEqual(@as(?u64, symbol_at), f.offset);
+		try std.testing.expect(std.mem.indexOf(u8, f.detail.?, "is past the T.81 bound") != null);
+	}
+	try std.testing.expectEqual(@as(usize, 1), fails);
+}
+
+/// One exact FAIL `code` at `offset` with `detail` among decoder findings.
+fn expectOneExact(items: []const jpegz.Finding, code: jpegz.FindingCode, offset: usize, detail: []const u8) !void {
+	errdefer for (items) |f| std.debug.print("  {t} {?d} {s}\n", .{ f.code, f.offset, f.detail orelse "" });
+	var hits: usize = 0;
+	for (items) |f| {
+		if (f.code != code) continue;
+		hits += 1;
+		try std.testing.expect(f.severity == .fail and f.offset_is_exact);
+		try std.testing.expectEqual(@as(?u64, offset), f.offset);
+		try std.testing.expectEqualStrings(detail, f.detail.?);
+	}
+	try std.testing.expectEqual(@as(usize, 1), hits);
+}
+
+/// The decode API's findings for `data`, decoded leniently.
+fn decodeFindings(allocator: std.mem.Allocator, data: []const u8, sink: *jpegz.FindingsSink) void {
+	if (jpegz.decodeWithOptions(allocator, data, .{ .lenient = true, .findings_sink = sink })) |image| {
+		var img = image;
+		img.deinit(allocator);
+	} else |_| {}
+}
+
 test "Huffman data faults are 74, 58 and 8 exact at the code, not 51 (validate 2026-11-22)" {
 	// One 8x8 gray block. DC table: code 0 -> category 0. AC table: three-bit
 	// codes 000 EOB, 001 ZRL, 010 0xE1, 011 0xF1; codes 1xx match nothing,
@@ -1981,6 +2021,16 @@ test "Huffman data faults are 74, 58 and 8 exact at the code, not 51 (validate 2
 		if (case.patch_at) |at| head[at] = case.patch;
 		const data = try std.mem.concat(allocator, u8, &.{ &head, case.entropy, &.{ 0xff, 0xd9 } });
 		defer allocator.free(data);
+		if (case.patch_at) |at| {
+			// The table itself is past the bound: the walk reports it (rulings
+			// G), and the decoder's 58 stays for tables a walk misses.
+			try expectDhtSymbolPastBound(allocator, data, at);
+			var sink = jpegz.FindingsSink.init(allocator);
+			defer sink.deinit();
+			decodeFindings(allocator, data, &sink);
+			try expectOneExact(sink.items(), case.code, header.len + case.at, case.detail);
+			continue;
+		}
 		var report = try jpegz.validate(allocator, data);
 		defer report.deinit(allocator);
 		errdefer for (report.findings.items) |f| std.debug.print("  {t} {?d} {s}\n", .{ f.code, f.offset, f.detail orelse "" });
@@ -2058,10 +2108,8 @@ test "progressive Huffman data faults are typed: 74, 58, 8, 57 and truncated_str
 	const Case = struct { data: []const u8, at: usize, mask: u8, code: jpegz.FindingCode, offset: u64, exact: bool, detail: []const u8 };
 	for ([_]Case{
 		.{ .data = rgb, .at = 236, .mask = 0x40, .code = .entropy_decode_invalid, .offset = 236, .exact = true, .detail = "DC Huffman code matches no table entry" },
-		.{ .data = rgb, .at = 264, .mask = 0x02, .code = .entropy_decode_invalid, .offset = 273, .exact = true, .detail = "AC Huffman code matches no table entry" },
 		.{ .data = rgb, .at = 392, .mask = 0x02, .code = .entropy_decode_invalid, .offset = 403, .exact = true, .detail = "AC refinement symbol of size 2, not 1 (T.81 G.1.2.3)" },
 		.{ .data = rgb, .at = 260, .mask = 0x10, .code = .entropy_decode_invalid, .offset = 272, .exact = false, .detail = "scan end: EOB run continues past the scan's last block" },
-		.{ .data = dri, .at = 179, .mask = 0x08, .code = .dct_coefficient_overflow, .offset = 193, .exact = true, .detail = "AC coefficient category 11 exceeds 10 for 8-bit samples (T.81 F.1.2.2)" },
 		.{ .data = dri, .at = 179, .mask = 0x20, .code = .entropy_decode_invalid, .offset = 193, .exact = true, .detail = "AC zero run past Se=5" },
 		.{ .data = dri, .at = 180, .mask = 0x10, .code = .entropy_decode_invalid, .offset = 203, .exact = false, .detail = "restart interval end: EOB run continues past its last block" },
 	}) |case| {
@@ -2079,6 +2127,18 @@ test "progressive Huffman data faults are typed: 74, 58, 8, 57 and truncated_str
 			try std.testing.expectEqual(@as(?u64, case.offset), f.offset);
 		}
 		try std.testing.expectEqual(@as(usize, 1), hits);
+	}
+	{
+		// The DHT symbol at 179 becomes 0x0B, size 11, past 10 (rulings G);
+		// the decoder still reports its 58 where the code is decoded.
+		const data = try allocator.dupe(u8, dri);
+		defer allocator.free(data);
+		data[179] ^= 0x08;
+		try expectDhtSymbolPastBound(allocator, data, 179);
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		decodeFindings(allocator, data, &sink);
+		try expectOneExact(sink.items(), .dct_coefficient_overflow, 193, "AC coefficient category 11 exceeds 10 for 8-bit samples (T.81 F.1.2.2)");
 	}
 	// Constructed boundary cases on the first scan of the RGB file.
 	const sos = findMarker(rgb, 0xda).?;
@@ -2204,6 +2264,14 @@ test "progressive ZRL past Se is 74, and a file ending in unread bytes is trunca
 		try std.testing.expectEqual(@as(usize, 1), hits);
 	}
 	{
+		// AC code 11 matches nothing (codes 0 and 10 only).
+		const data = head ++ [_]u8{ 0xdf, 0xdf, 0xdf, 0xdf, 0xff, 0xd9 };
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try expectOneExact(report.findings.items, .entropy_decode_invalid, head.len, "AC Huffman code matches no table entry");
+		for (report.findings.items) |f| try std.testing.expect(f.code != .huffman_table_corrupt);
+	}
+	{
 		// The AC scan's EOB, its padding, then one stray byte and no marker.
 		const data = head ++ [_]u8{ 0xbf, 0x12 };
 		var sink = jpegz.FindingsSink.init(allocator);
@@ -2237,8 +2305,16 @@ test "lossless data faults are typed: 74, 58, insufficient_data and restart 57 (
 	const unmatched = one ++ [_]u8{ 0x80, 0x00, 0x00, 0x00, 0xff, 0xd9 };
 	// Category 8 needs eight more bits; only six precede EOI.
 	const short = eight ++ [_]u8{ 0xbf, 0xff, 0xd9 };
+	{
+		// Symbol 17 in the DHT (byte 37) is past 16 (rulings G); SOF3 syntax
+		// validation still reports the decoded 58 for a table a walk misses.
+		try expectDhtSymbolPastBound(allocator, &cat17, 37);
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		jpegz.internal.losslessValidateWithFindings(&cat17, &sink) catch {};
+		try expectOneExact(sink.items(), .dct_coefficient_overflow, two.len, "difference category 17 exceeds 16 (T.81 H.1.2.2)");
+	}
 	for ([_]Case{
-		.{ .data = &cat17, .code = .dct_coefficient_overflow, .offset = two.len, .exact = true, .detail = "difference category 17 exceeds 16 (T.81 H.1.2.2)" },
 		.{ .data = &unmatched, .code = .entropy_decode_invalid, .offset = one.len, .exact = true, .detail = "difference Huffman code matches no table entry" },
 		.{ .data = &short, .code = .insufficient_data, .offset = eight.len + 1, .exact = false, .detail = "Corrupt JPEG data: premature end of data segment" },
 	}) |case| {
@@ -2279,6 +2355,98 @@ test "lossless data faults are typed: 74, 58, insufficient_data and restart 57 (
 			try std.testing.expectEqualStrings(case.detail, f.detail.?);
 		}
 		try std.testing.expectEqual(@as(usize, 1), hits);
+	}
+}
+
+test "Huffman walker parity: DHT overruns, symbols past the bound, progressive tables and Ns (validate 2026-11-22, rulings F and G)" {
+	const allocator = std.testing.allocator;
+	{
+		// BITS counts 4080 symbols in a 29-byte segment: 51 at the count
+		// byte where the symbols stop fitting, the report's only FAIL.
+		const bogus = @embedFile("fixtures/baseline_4x4_bogus_dht.jpg");
+		var report = try jpegz.validate(allocator, bogus);
+		defer report.deinit(allocator);
+		var fails: usize = 0;
+		for (report.findings.items) |f| if (f.severity == .fail) {
+			fails += 1;
+			try std.testing.expect(f.code == .huffman_table_corrupt and f.offset_is_exact and f.offset.? == 182);
+			try std.testing.expectEqualStrings("DHT Tc=0 Th=0: BITS counts 4080 symbols but only 12 bytes remain in the segment", f.detail.?);
+		};
+		try std.testing.expectEqual(@as(usize, 1), fails);
+	}
+	// One 8x8 gray baseline block: DC table 0 (code 0 -> 0), AC table 0
+	// (code 0 -> EOB), entropy 0x3f.
+	const sof = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{1} ** 64) ++
+		[_]u8{ 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 };
+	const dc = [_]u8{ 0xff, 0xc4, 0, 20, 0x00, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0};
+	const ac = [_]u8{ 0xff, 0xc4, 0, 20, 0x10, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0};
+	const scan = [_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0, 0x3f, 0xff, 0xd9 };
+	{
+		const good = sof ++ dc ++ ac ++ scan;
+		var report = try jpegz.validate(allocator, &good);
+		defer report.deinit(allocator);
+		try std.testing.expect(report.isValid());
+	}
+	{
+		// A DHT ending inside a table's Tc/Th and BITS: 51 at the Tc/Th byte.
+		const short = [_]u8{ 0xff, 0xc4, 0, 12, 0x01 } ++ ([_]u8{0} ** 9);
+		const data = sof ++ dc ++ ac ++ short ++ scan;
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try expectOneExact(report.findings.items, .huffman_table_corrupt, sof.len + dc.len + ac.len + 4, "DHT segment ends inside a table's Tc/Th and BITS header");
+	}
+	{
+		// A sequential AC symbol 0x10 (run 1, size 0) has no meaning outside
+		// progressive scans: past the bound (rulings G).
+		var data = sof ++ dc ++ ac ++ scan;
+		const symbol_at = sof.len + dc.len + ac.len - 1;
+		data[symbol_at] = 0x10;
+		try expectDhtSymbolPastBound(allocator, &data, symbol_at);
+	}
+	const rgb = @embedFile("fixtures/progressive_8x8_rgb.jpg");
+	{
+		// In a progressive frame 0x10 is EOBRUN 1 (T.81 G.1.2.2), within
+		// the bound: the DHT stands, the decoder reports what follows.
+		var data = rgb.*;
+		data[260] ^= 0x10;
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		for (report.findings.items) |f| try std.testing.expect(f.code != .huffman_table_corrupt);
+		try std.testing.expect(!report.isValid());
+	}
+	{
+		// Lossless DC category 16 is within the bound (T.81 H.1.2.2).
+		const head = comptime losslessHead(.{ 1, 1 } ++ ([_]u8{0} ** 14), &.{ 0, 16 });
+		const data = head ++ [_]u8{ 0x3f, 0xff, 0xd9 };
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try std.testing.expect(report.isValid());
+	}
+	{
+		// A progressive AC scan naming undefined table 3: FAIL 69 at its
+		// Td/Ta byte, with no decode-through 51 beside it.
+		var data = rgb.*;
+		data[267] = 0x03;
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try expectOnlyTyped(report, .fail, .huffman_tables_missing, 267);
+	}
+	{
+		// A DC refinement scan uses no table, so its Td is not judged.
+		var data = rgb.*;
+		data[410] = 0x30;
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try std.testing.expect(report.isValid());
+	}
+	{
+		// A later progressive scan with Ns = 5: the Ns code sequential scans
+		// get, exact at Ns, instead of a generic 51.
+		var data = rgb.*;
+		data[265] = 5;
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try expectOnlyTyped(report, .fail, .sos_component_mismatch, 265);
 	}
 }
 
@@ -3028,7 +3196,9 @@ test "a full DHT in a baseline file is 71 and leaves the pixels unchanged" {
 	const at = std.mem.indexOf(u8, original, &([_]u8{0x00} ++ k3_dc_bits)).?;
 	const length_at = std.mem.lastIndexOf(u8, original[0..at], &.{ 0xff, 0xc4 }).? + 2;
 	const values_end = at + 1 + 16 + 12;
-	const data = try std.mem.concat(allocator, u8, &.{ original[0 .. at + 9], &.{2}, original[at + 10 .. values_end], &.{12}, original[values_end..] });
+	// The extra symbol is 11, within the 8-bit bound (rulings G); K.3 already
+	// uses 0..11, so it repeats one.
+	const data = try std.mem.concat(allocator, u8, &.{ original[0 .. at + 9], &.{2}, original[at + 10 .. values_end], &.{11}, original[values_end..] });
 	defer allocator.free(data);
 	const old_length = std.mem.readInt(u16, original[length_at..][0..2], .big);
 	std.mem.writeInt(u16, data[length_at..][0..2], old_length + 1, .big);
@@ -3259,14 +3429,17 @@ test "no DHT anywhere is known defect 69 when the K.3 tables decode every scan" 
 	}
 	try std.testing.expect(exact);
 
-	// A progressive file without DHT is not the Motion-JPEG pattern.
+	// A progressive file without DHT is not the Motion-JPEG pattern: no K.3
+	// fallback, so FAIL 69 at the first scan's Td/Ta byte (validate,
+	// 2026-11-22), and no generic 51 beside it.
 	const progressive = @embedFile("fixtures/progressive_32x32_gray_dri.jpg");
 	const bare = try withoutDht(allocator, progressive, null);
 	defer allocator.free(bare);
 	var p_report = try jpegz.validate(allocator, bare);
 	defer p_report.deinit(allocator);
 	try std.testing.expectEqual(jpegz.Severity.fail, p_report.overall);
-	for (p_report.findings.items) |f| try std.testing.expect(f.code != .huffman_tables_missing);
+	const p_sos = std.mem.indexOf(u8, bare, &.{ 0xff, 0xda }).?;
+	try expectOnlyTyped(p_report, .fail, .huffman_tables_missing, p_sos + 6);
 }
 
 /// A Multi-Picture Format file (CIPA DC-007): `primary` with an MPF APP2

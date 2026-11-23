@@ -992,6 +992,14 @@ pub const internal = struct {
         const lossless = @import("decode/lossless.zig");
         return lossless.decodeWithOptions(allocator, data, .{ .findings_sink = sink });
     }
+    /// SOF3 syntax validation, the codec check `validate` runs for
+    /// lossless Huffman files, without the marker walk in front of it.
+    /// Tests use it to reach decoded-value findings for tables the walk
+    /// would already reject.
+    pub fn losslessValidateWithFindings(data: []const u8, sink: *FindingsSink) DecodeError!void {
+        const lossless = @import("decode/lossless.zig");
+        return lossless.validate(data, sink);
+    }
     /// Lossless cleanroom decode with lenient RST recovery. Same
     /// shape as `progressiveDecodeLenientWithFindings`.
     pub fn losslessDecodeLenientWithFindings(
