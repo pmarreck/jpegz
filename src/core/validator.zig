@@ -863,7 +863,11 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
             if (seen_sof and seg_body_start < seg_end) {
                 const ns2 = data[seg_body_start];
                 const spec_off = seg_body_start + 1 + 2 * @as(usize, ns2);
-                if (spec_off + 2 < seg_end) {
+				// Validate rulings H (2026-11-23): an invalid Ns (already 55)
+				// leaves Ss, Se, Ah and Al unlocated, so they are not judged.
+				const ns_valid = report.variant == .jpegls or
+					!(ns2 == 0 or ns2 > 4 or (sof_component_count != 0 and ns2 > sof_component_count));
+                if (ns_valid and spec_off + 2 < seg_end) {
                     const ss = data[spec_off];
                     const se = data[spec_off + 1];
                     const ahal = data[spec_off + 2];

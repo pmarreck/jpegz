@@ -165,3 +165,12 @@ repin.
   ended in a bare 51 (Ns of 0 got an incidental `progressive_scan_invalid`
   from the misread tail). So every non-sequential T.81 scan now gets
   sequential's `sos_component_mismatch` at Ns.
+
+## Ns follow-up (validate, 2026-11-23, registry rulings H)
+
+- **Confirmed:** 55 `sos_component_mismatch`, exact at Ns, for an Ns of 0
+  or above 4 (or above Nf) in any non-sequential scan, first or later.
+- **Td extension accepted:** a DC first scan naming an undefined table is
+  69 at Td.
+- **Tail fields:** with Ns invalid, Ss, Se, Ah and Al are not located, so
+  no tail-field record follows the 55. One root cause, one record.

@@ -420,7 +420,8 @@ Sequential Huffman data faults are typed exactly at the code (validate,
     DC first scan judges Td, an AC scan Ta, and a DC refinement neither.
   - SOS Ns outside 1..4, or above the SOF's Nf, is
     `sos_component_mismatch` at Ns in every non-sequential T.81 scan, as in
-    sequential ones.
+    sequential ones. With Ns invalid, the Ss, Se, Ah and Al positions are
+    not established, so the walk does not judge them (validate rulings H).
 
 Sequential Huffman frames reject an additional SOS after all components have
 been coded, with exact finding 55 at its first selector. The post-coverage

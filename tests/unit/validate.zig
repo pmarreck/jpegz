@@ -2429,7 +2429,7 @@ test "Huffman walker parity: DHT overruns, symbols past the bound, progressive t
 		data[267] = 0x03;
 		var report = try jpegz.validate(allocator, &data);
 		defer report.deinit(allocator);
-		try expectOnlyTyped(report, .fail, .huffman_tables_missing, 267);
+		try expectExactTypedFailures(report, .huffman_tables_missing, 267, 1);
 	}
 	{
 		// A DC refinement scan uses no table, so its Td is not judged.
@@ -2446,7 +2446,16 @@ test "Huffman walker parity: DHT overruns, symbols past the bound, progressive t
 		data[265] = 5;
 		var report = try jpegz.validate(allocator, &data);
 		defer report.deinit(allocator);
-		try expectOnlyTyped(report, .fail, .sos_component_mismatch, 265);
+		try expectExactTypedFailures(report, .sos_component_mismatch, 265, 1);
+	}
+	{
+		// A first progressive scan with Ns = 0: 55 at Ns and nothing about
+		// the misread tail fields (validate rulings H, 2026-11-23).
+		var data = rgb.*;
+		data[226] = 0;
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try expectExactTypedFailures(report, .sos_component_mismatch, 226, 1);
 	}
 }
 
