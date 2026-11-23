@@ -205,6 +205,11 @@ pub const FindingCode = enum(u32) {
 	// arithmetic AC zero run past Se. Offset: the restart interval start, or
 	// the SOS without DRI (not exact).
 	entropy_decode_invalid = 74,
+	// validate-approved 2026-11-22. An SOS Td or Ta outside T.81 Table B.3,
+	// exact at the byte; detail names the component, selector and value.
+	// FAIL above 3 (no such destination); WARN for 2 or 3 in a baseline
+	// frame when that table is defined. Lossless Ta is not judged.
+	sos_table_selector_invalid = 75,
 
     // ── Lossless (T.81 §13) (100..119) ───────────────────────────
     lossless_predictor_invalid = 100,

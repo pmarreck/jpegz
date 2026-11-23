@@ -369,8 +369,15 @@ Decoded arithmetic values are checked against T.81 F.1.2 (validate,
   bounds across 2,304 files, including 288 extreme-contrast files at quality
   100.
 - **Fallback:** arithmetic and JPEG-LS decode errors with no typed finding
-  map through one exhaustive switch and never to 51. An SOS table selector
-  above 3 is the open case; see PLAN.md.
+  map through one exhaustive switch and never to 51.
+
+An SOS Td or Ta outside T.81 Table B.3 is finding 75
+(`sos_table_selector_invalid`), exact at the byte, on every T.81 path
+(validate, 2026-11-22):
+- **FAIL:** a value above 3 names no destination.
+- **WARN:** 2 or 3 in a baseline (SOF0) frame when that table is defined.
+- **Undefined table:** a selector naming one keeps finding 69.
+- **Lossless:** Ta is not judged.
 
 Sequential Huffman frames reject an additional SOS after all components have
 been coded, with exact finding 55 at its first selector. The post-coverage

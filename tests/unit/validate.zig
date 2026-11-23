@@ -1857,6 +1857,87 @@ test "arithmetic decoded-value faults are 58 and 74 at the interval start, never
 	}
 }
 
+fn countCode(report: jpegz.ValidationReport, code: jpegz.FindingCode, severity: jpegz.Severity, offset: u64) !usize {
+	var n: usize = 0;
+	for (report.findings.items) |f| if (f.code == code) {
+		try std.testing.expectEqual(severity, f.severity);
+		try std.testing.expect(f.offset_is_exact);
+		try std.testing.expectEqual(@as(?u64, offset), f.offset);
+		n += 1;
+	};
+	return n;
+}
+
+test "SOS table selectors outside T.81 Table B.3 are finding 75 (validate 2026-11-22)" {
+	const allocator = std.testing.allocator;
+	// One-block baseline gray frame with DC table 0 and AC table 0 defined.
+	const pristine = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{1} ** 64) ++
+		[_]u8{ 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0x00, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0x10, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0x00, 0, 63, 0, 0x3f, 0xff, 0xd9 };
+	const sel = findMarker(&pristine, 0xda).? + 6;
+	for (0..256) |value| {
+		var data = pristine;
+		data[sel] = @intCast(value);
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		const td = value >> 4;
+		const ta = value & 15;
+		// Above 3: no destination, FAIL. 1..3 name undefined tables here, which
+		// finding 69 reports instead.
+		const want: usize = @intFromBool(td > 3 or ta > 3);
+		errdefer std.debug.print("Td/Ta 0x{x:0>2}\n", .{value});
+		try std.testing.expectEqual(want, try countCode(report, .sos_table_selector_invalid, .fail, sel));
+	}
+	{
+		// Define DC table 2 instead of 0 and select it: a baseline limit,
+		// WARN; the scan still decodes. An extended (SOF1) frame allows it.
+		var data = pristine;
+		data[findMarker(&data, 0xc4).? + 4] = 0x02;
+		data[sel] = 0x20;
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try std.testing.expectEqual(@as(usize, 1), try countCode(report, .sos_table_selector_invalid, .warn, sel));
+		try std.testing.expect(report.isValid());
+		data[findMarker(&data, 0xc0).? + 1] = 0xc1;
+		var extended = try jpegz.validate(allocator, &data);
+		defer extended.deinit(allocator);
+		try std.testing.expectEqual(@as(usize, 0), try countCode(extended, .sos_table_selector_invalid, .warn, sel));
+	}
+	{
+		// Arithmetic scans: no conditioning destination above 3 either, and
+		// the decoder never sees one, so nothing arrives untyped.
+		const prog = @embedFile("fixtures/arith_progressive_16x16_rgb_444.jpg");
+		const first = findMarker(prog, 0xda).? + 6;
+		for ([_]usize{ first, first + 2, first + 4 }) |at| {
+			for (0..256) |value| {
+				const data = try allocator.dupe(u8, prog);
+				defer allocator.free(data);
+				data[at] = @intCast(value);
+				var report = try jpegz.validate(allocator, data);
+				defer report.deinit(allocator);
+				const want: usize = @intFromBool(value >> 4 > 3 or value & 15 > 3);
+				try std.testing.expectEqual(want, try countCode(report, .sos_table_selector_invalid, .fail, at));
+				for (report.findings.items) |f| try std.testing.expect(f.code != .unknown_marker or
+					f.detail == null or !std.mem.eql(u8, f.detail.?, "BackendError"));
+			}
+		}
+	}
+	{
+		// Lossless: Td is judged; Ta is not (Table B.3 gives 0).
+		const sel_ll = findMarker(fixture_lossless_4x4_gray8, 0xda).? + 6;
+		for ([_]struct { value: u8, fails: usize }{ .{ .value = 0x01, .fails = 0 }, .{ .value = 0x0f, .fails = 0 }, .{ .value = 0x40, .fails = 1 } }) |case| {
+			const data = try allocator.dupe(u8, fixture_lossless_4x4_gray8);
+			defer allocator.free(data);
+			data[sel_ll] = case.value;
+			var report = try jpegz.validate(allocator, data);
+			defer report.deinit(allocator);
+			try std.testing.expectEqual(case.fails, try countCode(report, .sos_table_selector_invalid, .fail, sel_ll));
+		}
+	}
+}
+
 test "validate: progressive_scan_count is INFO on progressive, absent on baseline" {
     const allocator = std.testing.allocator;
 

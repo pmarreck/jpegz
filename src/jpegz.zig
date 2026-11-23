@@ -560,7 +560,7 @@ pub fn classicFindingVerdict(code: FindingCode, severity: Severity) StrictVerdic
 		.photoshop_irb_present, .trailing_data_after_eoi, .jp2_packets_under_read, .entropy_over_read,
 		.entropy_under_read, .coding_pass_overflow, .jp2_packets_walked_to_end, .zero_bitplane_overflow,
 		.packed_headers_mismatch, .jp2_trailing_bytes, .segmentation_symbol_mismatch, .profile_violation,
-		.reversible_exponent_mismatch, .cblk_contribution_ends_ff,
+		.reversible_exponent_mismatch, .cblk_contribution_ends_ff, .sos_table_selector_invalid,
 		=> .valid,
 	};
 	// A finding emitted as part of an admitted known defect classifies by its

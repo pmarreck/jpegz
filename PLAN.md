@@ -6,7 +6,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Priority: dependency freshness
 
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; client terminal and activation shortcut requested, settings unchanged.
-- [x] Resolve the corruption-coverage default JPEG-LS fixture mismatch; owner choice requested among three supported defaults, an audited inconclusive JPEG-LS control, or retaining the blocked campaign. Answer: no choice needed; the JPEG-LS control was indeterminate only because validate never checked JPEG-LS (now valid since 32d2501), and coverage_stats misread the CLI's exit 5 as a harness failure (fixed); the default campaign exits 0 with classifications and the judged-case denominator unchanged in definition: 1,600 judged, 54.2% corrupt [51.7, 56.6] (commit abdf10a; done 2026-11-21 23:58 EST).
 - [ ] Keep the non-luma-dominant sampling packet held; do not retry that research or edit the decoder for it without new direction.
 - [ ] Keep the published JP2 pin and its real Nix closure hash; do not restore draft pin 54531e26 or any placeholder hash.
 
@@ -33,9 +32,9 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## JPEG entropy and comparison coverage
 
-- [ ] Type arithmetic-coded (SOF9/SOF10) decode errors per validate's 2026-11-22 ruling: restart faults 56/57 at the marker, early end insufficient_data/truncated_stream, DAC values 53 at the byte, decoded overflow as on the Huffman path; exhaustive mapping with no huffman_table_corrupt; corpus report and reds to validate (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md).
+- [x] Type arithmetic-coded (SOF9/SOF10) decode errors per validate's 2026-11-22 ruling: restart faults 56/57 at the marker, early end insufficient_data/truncated_stream, DAC values 53 at the byte, decoded overflow as on the Huffman path; exhaustive mapping with no huffman_table_corrupt; corpus report and reds to validate (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md; done 2026-11-22 21:40 EST; commits d0a26db, 90c96af, 98983f8).
 - [ ] Apply validate's 58 precision bound (DC > P+3, AC > P+2, lossless > 16) on the Huffman paths too, after a producer/corpus check; list Huffman-path 51 data faults (run past Se, unmatched code) with corpus counts for validate's 74 ruling (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md).
-- [ ] Add validate's new code 75 sos_table_selector_invalid: SOS Td/Ta above 3 is FAIL and 2 or 3 in a baseline frame with the table defined is WARN, exact at the byte, on Huffman and arithmetic paths; missing-table codes outrank it; producer check first (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md).
+- [x] Add validate's new code 75 sos_table_selector_invalid: SOS Td/Ta above 3 is FAIL and 2 or 3 in a baseline frame with the table defined is WARN, exact at the byte, on Huffman and arithmetic paths; missing-table codes outrank it; producer check first (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md; done 2026-11-22 21:40 EST).
 - [ ] Complete scan consumption, MCU counts, sampling edges, noninterleaved scans, restart cadence and predictor-reset coverage across supported modes.
 - [ ] Complete progressive scan-history and coefficient-range constraints with independent normative review and valid boundary controls.
 - [ ] Classify the known-good corpus as a set and expand reproducible corruption-probe sweeps across JPEG-LS, JPEG 2000 and JPEG XL; JPEG-LS swept 2026-11-21 (93.0% of 1,600 on four T.87 streams; survivors all entropy) and JPEG 2000/JPEG XL swept 2026-11-22 (nine fixtures, 3,600 cases, no crash; lossless gray JXL survivors all decode in libjxl's djxl); the set-level corpus classification remains (context: docs/measurements/jp2-jxl-corruption-coverage-2026-11-22.md).
@@ -45,7 +44,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## JPEG-LS conformance
 
-- [x] Stop JPEG-LS mapping-table scans decoding to indices. Done: a scan with SOS Tdi != 0 is NotImplemented (CharLS fixture; clearing Tdi decodes) (commit 3868527; done 2026-11-21 22:15 EST).
 - [x] Validate JPEG-LS mapping tables per T.87 C.2.3/C.2.4.1.2-3 with validate's codes 124 (undefined table, FAIL), 125 (Tmi with Pt, WARN) and 126 (malformed table, FAIL; tokens tid_range, wt_range, length, continuation, entries) instead of refusing the scan; one-byte tables map in the decode API, wider ones are NotImplemented there and validate on indices; CharLS fixture plus byte-edited variants, an ID 2 + ID 3 split, replacement and ILV 0 cases; fifteen mutants killed (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md; done 2026-11-22 10:15 EST).
 - [x] Read JPEG-LS Y from a DNL immediately after the first scan when SOF Y = 0 (T.87 C.2.2), reusing 72 dnl_misplaced; t8nde0 and the three-scan t8c0e0 with Y zeroed and a DNL inserted decode to identical pixels and validate clean; no DNL or NL = 0 is 61 and InvalidMarker; six mutants killed (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md; done 2026-11-22 07:50 EST).
 - [x] Output JPEG-LS samples as Rx << Pt for a nonzero point transform (T.87 4.3.2), saturating at 2^P-1 with validate's FAIL 128 jpegls_point_transform_overflow once per scan; Pt=1 control (127 -> 254) and one-overflowing-sample fixtures, ILV 0 and 12-bit cases; nine mutants killed (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md; done 2026-11-22 09:00 EST).

@@ -693,6 +693,36 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
 					}
 				}
 			}
+			// Finding 75 (validate, 2026-11-22): an SOS Td/Ta outside T.81
+			// Table B.3, exact at the byte. Above 3 no destination exists:
+			// FAIL. In a baseline (SOF0) frame, 2 or 3 naming a defined table
+			// breaks a baseline limit: WARN; an undefined table is finding 69's.
+			// Lossless Ta (B.3 gives 0) is not judged; JPEG-LS has no Td/Ta.
+			if (seen_sof and report.variant != .jpegls and seg_body_start < seg_end) {
+				const scan_ns = data[seg_body_start];
+				const lossless = report.variant == .lossless_huffman or report.variant == .lossless_arithmetic;
+				if (seg_len == 6 + @as(usize, scan_ns) * 2) for (0..scan_ns) |sj| {
+					const at = seg_body_start + 2 + 2 * sj;
+					const td = data[at] >> 4;
+					const ta = data[at] & 0x0F;
+					const td_bad = td > 3;
+					const ta_bad = !lossless and ta > 3;
+					var dbuf: [112]u8 = undefined;
+					if (td_bad or ta_bad) {
+						const detail = (if (td_bad and ta_bad)
+							std.fmt.bufPrint(&dbuf, "SOS component {d}: td={d} and ta={d} name no table destination (T.81 Table B.3: 0..3)", .{ data[at - 1], td, ta })
+						else
+							std.fmt.bufPrint(&dbuf, "SOS component {d}: {s}={d} names no table destination (T.81 Table B.3: 0..3)", .{ data[at - 1], if (td_bad) "td" else "ta", if (td_bad) td else ta })) catch "SOS Td/Ta outside T.81 Table B.3";
+						try addExactFinding(&report, allocator, .sos_table_selector_invalid, at, detail);
+					} else if (report.variant == .baseline_huffman and
+						((td >= 2 and dht_defined[0][td]) or (ta >= 2 and dht_defined[1][ta])))
+					{
+						const detail = std.fmt.bufPrint(&dbuf, "SOS component {d}: {s}={d} in a baseline frame (T.81 Table B.3: 0..1)", .{ data[at - 1], if (td >= 2) "td" else "ta", if (td >= 2) td else ta }) catch "SOS Td/Ta above the baseline limit";
+						try addFinding(&report, allocator, .warn, .sos_table_selector_invalid, at, detail);
+						report.findings.items[report.findings.items.len - 1].offset_is_exact = true;
+					}
+				};
+			}
 			// T.81 B.2.3: diagnose sequential SOS shape before decoding can
 			// mislabel a header fault as damaged Huffman entropy.
 			const sequential_huffman = report.variant == .baseline_huffman or report.variant == .extended_huffman;
