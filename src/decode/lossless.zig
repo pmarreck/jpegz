@@ -690,9 +690,11 @@ fn decodeScan(
                 if (ssss > 16) return error.BackendError;
                 var diff: i32 = 0;
                 if (ssss == 16) {
-                    // T.81 §H.1.2.1: SSSS=16 represents diff = 32768 with
-                    // no extra bits. Only legal at 16-bit precision.
-                    if (frame.precision != 16) return error.BackendError;
+                    // T.81 H.1.2.2: SSSS=16 is the difference 32768, with no
+                    // extra bits. Differences are taken modulo 2^16 at every
+                    // precision, and predictors 4 to 7 can leave the P-bit
+                    // range, so a valid file below 16 bits can need it
+                    // (libjpeg-turbo writes them at 15 bits with predictor 4).
                     diff = 32768;
                 } else if (ssss > 0) {
                     const bits = br.readBits(@intCast(ssss)) catch return error.TruncatedStream;

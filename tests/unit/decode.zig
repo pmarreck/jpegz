@@ -2818,6 +2818,33 @@ test "lenient progressive resync follows libjpeg too: an empty interval keeps la
     }
 }
 
+test "lossless difference category 16 decodes at every precision (T.81 H.1.2.2, modulo 2^16)" {
+    // 2x2 gray, P = 15, predictor 4 (Ra + Rb - Rc). Samples 0, 32767 /
+    // 32767, 32766. The last prediction is 32767 + 32767 - 0 = 65534, so
+    // the difference is -32768, which is 32768 modulo 2^16: category 16,
+    // no extra bits. libjpeg-turbo writes such files at 15-bit precision
+    // (cjpeg -precision 15 -lossless 4); a decoder that allows category 16
+    // only at 16-bit precision rejects them.
+    // DC table: code 0 -> 15, code 10 -> 16.
+    const data = [_]u8{ 0xff, 0xd8, 0xff, 0xc3, 0, 11, 15, 0, 2, 0, 2, 1, 1, 0x11, 0 } ++
+        [_]u8{ 0xff, 0xc4, 0, 21, 0x00, 1, 1 } ++ ([_]u8{0} ** 14) ++ [_]u8{ 15, 16 } ++
+        [_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0x00, 4, 0, 0 } ++
+        // 0 + 011111111111111 (-16384), 0 + 111111111111111 (+32767) twice,
+        // then 10 (category 16) and six 1 pad bits; FF bytes stuffed.
+        [_]u8{ 0x3f, 0xff, 0x00, 0x7f, 0xff, 0x00, 0x7f, 0xff, 0x00, 0xbf, 0xff, 0xd9 };
+    const allocator = std.testing.allocator;
+    var image = try jpegz.decode(allocator, &data);
+    defer image.deinit(allocator);
+    var oracle = try jpegz.internal.wrapperDecode(allocator, &data);
+    defer oracle.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, oracle.pixels, image.pixels);
+    const last = std.mem.readInt(u16, image.pixels[6..8], .little);
+    try std.testing.expectEqual(@as(u16, 32766), last);
+    var report = try jpegz.validate(allocator, &data);
+    defer report.deinit(allocator);
+    try std.testing.expect(report.isValid());
+}
+
 test "lenient Huffman decoding resumes after a restart that follows truncated data" {
     // Three bytes cut from the end of the first restart interval: its data
     // runs into RST0 (insufficient_data). RST0 restarts decoding, as
