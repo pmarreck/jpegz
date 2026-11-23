@@ -339,8 +339,26 @@ Do not advertise complete corruption detection from pixel-oracle equality.
 A DAC entry outside T.81 B.2.4.3 is FAIL 53 (`arithmetic_table_corrupt`),
 exactly at its first offending byte and once per segment. Faults are a Tc
 other than 0 or 1, a Tb above 3, a DC Cs with L > U, or an AC Kx outside
-1..63 (validate, 2026-11-22). The remaining arithmetic decode errors are being
-typed under the same ruling; see PLAN.md.
+1..63 (validate, 2026-11-22).
+
+Arithmetic restart intervals and scans end as on the Huffman path (validate,
+2026-11-22):
+- **Wrong RSTm:** FAIL 57 at the marker; lenient decoding resynchronizes.
+- **Other marker where an RSTm belongs:** 56.
+- **EOI, or data that ends there:** `truncated_stream`.
+- **RSTm after a scan's final MCU:** 57.
+- **Unread bytes:** whole bytes the decoder never fetches before a marker
+  are FAIL 8, exact, with detail `arithmetic_interval` or
+  `arithmetic_scan_end`. The T.81 D.1.8 flush emits only bytes a decoder
+  fetches, and libjpeg-turbo 3.2.1, IJG libjpeg 10 and their `jpegtran
+  -arithmetic` leave none across 2,016 files.
+- **Early end:** there is no separate finding, because an encoder may drop
+  trailing zero bytes. Damage surfaces as 56, 57 or 8 at the next boundary.
+- **Detection limit:** a short final interval whose zero-filled decode
+  completes cleanly is not detected.
+
+Decoded-value faults (58 and 74) and the exhaustive arithmetic error mapping
+remain in PLAN.md.
 
 Sequential Huffman frames reject an additional SOS after all components have
 been coded, with exact finding 55 at its first selector. The post-coverage

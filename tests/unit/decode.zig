@@ -1893,6 +1893,187 @@ test "lossless point-transform decode is total over every single-bit flip" {
 	}
 }
 
+/// Decode `data` with a sink and return its interval and scan-end findings.
+const ArithEnd = struct {
+	err: ?anyerror,
+	items: [16]jpegz.Finding = undefined,
+	len: usize = 0,
+
+	fn count(self: *const ArithEnd, code: jpegz.FindingCode) usize {
+		var n: usize = 0;
+		for (self.items[0..self.len]) |f| n += @intFromBool(f.code == code);
+		return n;
+	}
+
+	fn first(self: *const ArithEnd, code: jpegz.FindingCode) ?jpegz.Finding {
+		for (self.items[0..self.len]) |f| if (f.code == code) return f;
+		return null;
+	}
+};
+
+fn arithEnd(allocator: std.mem.Allocator, sink: *jpegz.FindingsSink, data: []const u8, lenient: bool) ArithEnd {
+	var result: ArithEnd = .{ .err = null };
+	if (jpegz.decodeWithOptions(allocator, data, .{ .lenient = lenient, .findings_sink = sink })) |image| {
+		var decoded = image;
+		decoded.deinit(allocator);
+	} else |err| result.err = err;
+	for (sink.items()) |f| switch (f.code) {
+		.extraneous_bytes_before_marker, .restart_marker_missing, .restart_marker_unexpected, .truncated_stream => {
+			if (result.len < result.items.len) {
+				result.items[result.len] = f;
+				result.len += 1;
+			}
+		},
+		else => {},
+	};
+	return result;
+}
+
+test "arithmetic restart and scan ends are typed: 8, 56, 57 and truncated_stream (validate 2026-11-22)" {
+	// One-MCU restart intervals: RST0 ends the first interval at `r0`.
+	const allocator = std.testing.allocator;
+	const gray = fixture_arith_restart_gray;
+	var r0: usize = 0;
+	while (!(gray[r0] == 0xff and gray[r0 + 1] == 0xd0)) r0 += 1;
+	const eoi = gray.len - 2;
+	try std.testing.expectEqualSlices(u8, &.{ 0xff, 0xd9 }, gray[eoi..]);
+	const filler = [_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0x10 };
+
+	{ // A wrong RSTm is 57 at it; lenient decodes resynchronize, strict ones fail.
+		const data = try allocator.dupe(u8, gray);
+		defer allocator.free(data);
+		data[r0 + 1] = 0xd3;
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		const end = arithEnd(allocator, &sink, data, true);
+		try std.testing.expectEqual(@as(?anyerror, null), end.err);
+		const f = end.first(.restart_marker_unexpected).?;
+		try std.testing.expect(f.offset_is_exact and f.offset.? == r0 and f.severity == .fail);
+		try std.testing.expectEqualStrings("expected RST0 (0xd0) but got RST3 (0xd3)", f.detail.?);
+		// Resynchronized to RST4, the file's RST1 is out of order too.
+		try std.testing.expectEqual(@as(usize, 2), end.count(.restart_marker_unexpected));
+		var strict_sink = jpegz.FindingsSink.init(allocator);
+		defer strict_sink.deinit();
+		const strict = arithEnd(allocator, &strict_sink, data, false);
+		try std.testing.expectEqual(@as(?anyerror, error.InvalidMarker), strict.err);
+		try std.testing.expectEqual(@as(usize, 1), strict.count(.restart_marker_unexpected));
+	}
+	{ // Another marker where an RSTm belongs is 56 at it.
+		const data = try allocator.dupe(u8, gray);
+		defer allocator.free(data);
+		data[r0 + 1] = 0xc4;
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		const end = arithEnd(allocator, &sink, data, true);
+		try std.testing.expectEqual(@as(?anyerror, error.InvalidMarker), end.err);
+		const f = end.first(.restart_marker_missing).?;
+		try std.testing.expect(f.offset_is_exact and f.offset.? == r0);
+		try std.testing.expectEqualStrings("marker 0xc4 where RST0 belongs", f.detail.?);
+	}
+	{ // EOI where an RSTm belongs, or data that ends there, is truncated_stream.
+		const with_eoi = try std.mem.concat(allocator, u8, &.{ gray[0..r0], &.{ 0xff, 0xd9 } });
+		defer allocator.free(with_eoi);
+		for ([_][]const u8{ with_eoi, gray[0..r0] }) |data| {
+			var sink = jpegz.FindingsSink.init(allocator);
+			defer sink.deinit();
+			const end = arithEnd(allocator, &sink, data, true);
+			try std.testing.expectEqual(@as(?anyerror, error.TruncatedStream), end.err);
+			const f = end.first(.truncated_stream).?;
+			try std.testing.expect(f.offset_is_exact and f.offset.? == r0);
+		}
+	}
+	{ // Whole bytes the coder never fetches before an RSTm are FAIL 8.
+		const data = try std.mem.concat(allocator, u8, &.{ gray[0..r0], &filler, gray[r0..] });
+		defer allocator.free(data);
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		const end = arithEnd(allocator, &sink, data, true);
+		try std.testing.expectEqual(@as(?anyerror, null), end.err);
+		try std.testing.expectEqual(@as(usize, 1), end.count(.extraneous_bytes_before_marker));
+		const f = end.first(.extraneous_bytes_before_marker).?;
+		try std.testing.expect(f.severity == .fail and f.offset_is_exact);
+		try std.testing.expect(f.offset.? >= r0 and f.offset.? < r0 + filler.len);
+		try std.testing.expectEqualStrings("arithmetic_interval", f.detail.?);
+		var strict_sink = jpegz.FindingsSink.init(allocator);
+		defer strict_sink.deinit();
+		try std.testing.expectEqual(@as(?anyerror, error.InvalidMarker), arithEnd(allocator, &strict_sink, data, false).err);
+	}
+	{ // ...and before the marker that ends the scan, without failing the decode.
+		const data = try std.mem.concat(allocator, u8, &.{ gray[0..eoi], &filler, gray[eoi..] });
+		defer allocator.free(data);
+		for ([_]bool{ true, false }) |lenient| {
+			var sink = jpegz.FindingsSink.init(allocator);
+			defer sink.deinit();
+			const end = arithEnd(allocator, &sink, data, lenient);
+			try std.testing.expectEqual(@as(?anyerror, null), end.err);
+			const f = end.first(.extraneous_bytes_before_marker).?;
+			try std.testing.expect(f.offset.? >= eoi and f.offset.? < eoi + filler.len);
+			try std.testing.expectEqualStrings("arithmetic_scan_end", f.detail.?);
+		}
+	}
+	{ // An RSTm after the final MCU is 57.
+		const data = try std.mem.concat(allocator, u8, &.{ gray[0..eoi], &.{ 0xff, 0xd7 }, gray[eoi..] });
+		defer allocator.free(data);
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		const end = arithEnd(allocator, &sink, data, true);
+		try std.testing.expectEqual(@as(?anyerror, error.BackendError), end.err);
+		const f = end.first(.restart_marker_unexpected).?;
+		try std.testing.expect(f.offset_is_exact and f.offset.? == eoi);
+		try std.testing.expectEqualStrings("restart marker after the final MCU of the scan", f.detail.?);
+	}
+	{ // The clean file has none of these.
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		const end = arithEnd(allocator, &sink, gray, true);
+		try std.testing.expectEqual(@as(?anyerror, null), end.err);
+		try std.testing.expectEqual(@as(usize, 0), end.len);
+	}
+}
+
+test "progressive arithmetic restart and scan ends are typed the same way" {
+	const allocator = std.testing.allocator;
+	const prog = fixture_arith_restart_rgb420_progressive;
+	var r0: usize = 0;
+	while (!(prog[r0] == 0xff and prog[r0 + 1] == 0xd0)) r0 += 1;
+	// The first scan ends at the first marker after RST0 that is not an RSTm
+	// (here the DAC before the second scan).
+	var scan1_end: usize = r0 + 2;
+	while (!(prog[scan1_end] == 0xff and prog[scan1_end + 1] != 0 and (prog[scan1_end + 1] < 0xd0 or prog[scan1_end + 1] > 0xd7))) scan1_end += 1;
+	try std.testing.expectEqual(@as(u8, 0xcc), prog[scan1_end + 1]);
+	{
+		const data = try allocator.dupe(u8, prog);
+		defer allocator.free(data);
+		data[r0 + 1] = 0xd5;
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		const end = arithEnd(allocator, &sink, data, true);
+		const f = end.first(.restart_marker_unexpected).?;
+		try std.testing.expect(f.offset_is_exact and f.offset.? == r0);
+		try std.testing.expectEqualStrings("expected RST0 (0xd0) but got RST5 (0xd5)", f.detail.?);
+	}
+	{
+		const filler = [_]u8{ 0x21, 0x43, 0x65, 0x87, 0xa9, 0xcb, 0xed, 0x0f };
+		const data = try std.mem.concat(allocator, u8, &.{ prog[0..scan1_end], &filler, prog[scan1_end..] });
+		defer allocator.free(data);
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		const end = arithEnd(allocator, &sink, data, true);
+		try std.testing.expectEqual(@as(?anyerror, null), end.err);
+		const f = end.first(.extraneous_bytes_before_marker).?;
+		try std.testing.expect(f.severity == .fail and f.offset_is_exact);
+		try std.testing.expect(f.offset.? >= scan1_end and f.offset.? < scan1_end + filler.len);
+		try std.testing.expectEqualStrings("arithmetic_scan_end", f.detail.?);
+	}
+	{
+		var sink = jpegz.FindingsSink.init(allocator);
+		defer sink.deinit();
+		const end = arithEnd(allocator, &sink, prog, true);
+		try std.testing.expectEqual(@as(?anyerror, null), end.err);
+		try std.testing.expectEqual(@as(usize, 0), end.len);
+	}
+}
+
 test "B1: SOF9 arithmetic baseline cleanroom (gray + RGB at all sampling factors)" {
     // Real cleanroom-vs-wrapper gate. Same tolerance shape as A3:
     // ≤4 LSB for RGB (chroma upsampling amplifies sub-pixel rounding),
@@ -3769,9 +3950,9 @@ test "JPEG-LS mapping table selected by one ILV 0 scan maps only that component"
     const first = std.mem.indexOf(u8, src, &.{ 0xff, 0xda }).?;
     const data = try std.mem.concat(allocator, u8, &.{ src[0..first], seg, src[first..] });
     defer allocator.free(data);
-    const sos2 = std.mem.indexOfPos(u8, data, first + seg.len + jlsFirstScanEnd(data[first + seg.len ..]), &.{ 0xff, 0xda }).?;
-    try std.testing.expectEqual(@as(u8, 1), data[sos2 + 4]);
-    data[sos2 + 6] = 1;
+    const scan1_end = std.mem.indexOfPos(u8, data, first + seg.len + jlsFirstScanEnd(data[first + seg.len ..]), &.{ 0xff, 0xda }).?;
+    try std.testing.expectEqual(@as(u8, 1), data[scan1_end + 4]);
+    data[scan1_end + 6] = 1;
     var image = try jpegz.jpegls_cleanroom_decode(allocator, data);
     defer image.deinit(allocator);
     for (plain.pixels, image.pixels, 0..) |want, got, i| {

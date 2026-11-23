@@ -32,10 +32,111 @@ comptime {
 /// dispatcher can pass through a `FindingsSink` uniformly. The arith
 /// progressive path is strict on marker prefix and the Q-coder
 /// explicitly never uses `markerHit` (zero-bit-supply per T.81 §F.1.4),
-/// so only `decodeArithBaseline`'s extraneous-bytes walker emits today.
+/// The sink receives the marker walker's extraneous-bytes findings and the
+/// typed restart-interval and scan-end findings (`finishSegment`).
+/// `lenient` resynchronizes on an out-of-order RSTm instead of failing.
 pub const DecodeOptions = struct {
     findings_sink: ?*findings_mod.FindingsSink = null,
+    lenient: bool = false,
 };
+
+/// Where an arithmetic entropy segment ends (T.81 D.1.8, D.2.6), as offsets
+/// into the coder's `data`.
+const SegmentEnd = struct {
+    /// First whole byte the coder never fetched, when any precede the marker.
+    unread_at: ?usize,
+    /// The 0xFF that introduces the ending marker, or null when data ends.
+    marker_at: ?usize,
+    marker: u8,
+};
+
+fn segmentEnd(qc: *const arith_coder.QCoder) SegmentEnd {
+    if (qc.marker_seen) return .{ .unread_at = null, .marker_at = qc.pos - 2, .marker = qc.marker_byte };
+    var p: usize = qc.pos;
+    while (p < qc.data.len) : (p += 1) {
+        if (qc.data[p] != 0xFF) continue;
+        // 0xFF fill before a marker is not unread data (T.81 B.1.1.2).
+        var q: usize = p + 1;
+        while (q < qc.data.len and qc.data[q] == 0xFF) q += 1;
+        if (q >= qc.data.len) break;
+        if (qc.data[q] == 0x00) {
+            p = q; // a stuffed 0xFF is entropy data
+            continue;
+        }
+        return .{ .unread_at = if (p > qc.pos) qc.pos else null, .marker_at = q - 1, .marker = qc.data[q] };
+    }
+    return .{ .unread_at = if (qc.data.len > qc.pos) qc.pos else null, .marker_at = null, .marker = 0 };
+}
+
+/// Check the end of a restart interval or scan (validate rulings 2026-11-22).
+/// Whole bytes the coder never fetched are FAIL 8 (`arithmetic_interval` or
+/// `arithmetic_scan_end`): the D.1.8 flush emits only bytes a decoder
+/// fetches. At an interval: the expected RSTm leaves the coder just past it
+/// for `restart()`; another RSTm is 57 (lenient decodes resynchronize on it);
+/// EOI, or data that ends, is `truncated_stream`; any other marker is 56.
+/// At scan end an RSTm is 57; EOI and other markers end the scan normally.
+/// `base` is the file offset of `qc.data[0]`. Returns the file offset of the
+/// ending marker's 0xFF (the end of data when none follows the scan).
+fn finishSegment(
+    qc: *arith_coder.QCoder,
+    base: usize,
+    comptime where: enum { interval, scan_end },
+    expected: *u8,
+    options: DecodeOptions,
+) Error!usize {
+    const end = segmentEnd(qc);
+    const sink = options.findings_sink;
+    if (end.unread_at) |at| {
+        if (sink) |s| s.emitExact(.fail, .extraneous_bytes_before_marker, @intCast(base + at),
+            if (where == .interval) "arithmetic_interval" else "arithmetic_scan_end") catch return error.OutOfMemory;
+        if (where == .interval and !options.lenient and end.marker_at != null and end.marker == expected.*)
+            return error.InvalidMarker;
+    }
+    const marker_at = end.marker_at orelse {
+        if (where == .scan_end) return base + qc.data.len;
+        if (sink) |s| s.emitExact(.fail, .truncated_stream, @intCast(base + qc.data.len),
+            "data ends where a restart marker and further restart intervals belong") catch return error.OutOfMemory;
+        return error.TruncatedStream;
+    };
+    const m = end.marker;
+    const is_rst = m >= 0xD0 and m <= 0xD7;
+    if (where == .scan_end) {
+        if (is_rst) {
+            if (sink) |s| s.emitExact(.fail, .restart_marker_unexpected, @intCast(base + marker_at),
+                "restart marker after the final MCU of the scan") catch return error.OutOfMemory;
+            return error.BackendError;
+        }
+        return base + marker_at;
+    }
+    if (m == expected.*) {
+        qc.pos = marker_at + 2;
+        expected.* = 0xD0 + ((m - 0xD0 + 1) & 0x07);
+        return base + marker_at;
+    }
+    if (is_rst) {
+        if (sink) |s| {
+            var buf: [64]u8 = undefined;
+            const detail = std.fmt.bufPrint(&buf, "expected RST{d} (0x{x:0>2}) but got RST{d} (0x{x:0>2})",
+                .{ expected.* - 0xD0, expected.*, m - 0xD0, m }) catch buf[0..0];
+            s.emitExact(.fail, .restart_marker_unexpected, @intCast(base + marker_at), detail) catch return error.OutOfMemory;
+        }
+        if (!options.lenient) return error.InvalidMarker;
+        qc.pos = marker_at + 2;
+        expected.* = 0xD0 + ((m - 0xD0 + 1) & 0x07);
+        return base + marker_at;
+    }
+    if (m == 0xD9) {
+        if (sink) |s| s.emitExact(.fail, .truncated_stream, @intCast(base + marker_at),
+            "EOI where a restart marker and further restart intervals belong") catch return error.OutOfMemory;
+        return error.TruncatedStream;
+    }
+    if (sink) |s| {
+        var buf: [64]u8 = undefined;
+        const detail = std.fmt.bufPrint(&buf, "marker 0x{x:0>2} where RST{d} belongs", .{ m, expected.* - 0xD0 }) catch buf[0..0];
+        s.emitExact(.fail, .restart_marker_missing, @intCast(base + marker_at), detail) catch return error.OutOfMemory;
+    }
+    return error.InvalidMarker;
+}
 
 /// Public entry. Walks markers, classifies SOF9/SOF10/SOF11, dispatches.
 /// Default-options entry — null sink, silent tolerance.
@@ -73,8 +174,8 @@ pub fn decodeWithOptions(
             continue;
         }
         switch (marker) {
-            0xC9 => return decodeArithBaseline(allocator, data, options.findings_sink),
-            0xCA => return decodeArithProgressive(allocator, data),
+            0xC9 => return decodeArithBaseline(allocator, data, options),
+            0xCA => return decodeArithProgressive(allocator, data, options),
             0xCB => return error.NotImplemented, // SOF11 deferred (no encoder produces it).
             0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7 => return error.NotImplemented,
             else => {
@@ -169,6 +270,9 @@ fn dumpScanCoefsSof9(
     dac_ac_K: *const [4]u8,
     restart_interval: u32,
 ) Error!CoefDump {
+    // Coefficient dumps are strict and silent.
+    const base: usize = 0;
+    const options: DecodeOptions = .{};
     const channels: u8 = frame.num_components;
     var max_h: u32 = 1;
     var max_v: u32 = 1;
@@ -210,11 +314,9 @@ fn dumpScanCoefsSof9(
         var mcu_x: u32 = 0;
         while (mcu_x < mcu_cols) : (mcu_x += 1) {
             if (restart_interval > 0 and mcus_since_rst == restart_interval) {
-                if (!state.qcoder.marker_seen) return error.InvalidMarker;
-                if (state.qcoder.marker_byte != expected_rst) return error.InvalidMarker;
+                _ = try finishSegment(&state.qcoder, base, .interval, &expected_rst, options);
                 state.resetForRestart();
                 mcus_since_rst = 0;
-                expected_rst = 0xD0 + ((expected_rst - 0xD0 + 1) & 0x07);
             }
             var ci: usize = 0;
             while (ci < channels) : (ci += 1) {
@@ -252,8 +354,9 @@ fn dumpScanCoefsSof9(
 fn decodeArithBaseline(
     allocator: Allocator,
     data: []const u8,
-    sink: ?*findings_mod.FindingsSink,
+    options: DecodeOptions,
 ) Error!types.Image {
+    const sink = options.findings_sink;
     var pos: usize = 2;
     var frame: ?baseline.FrameInfo = null;
     var quant_tables: [4]?[64]u16 = .{ null, null, null, null };
@@ -323,6 +426,8 @@ fn decodeArithBaseline(
                 return try decodeScanSof9(
                     allocator,
                     data[pos..],
+                    pos,
+                    options,
                     &frame.?,
                     &quant_tables,
                     &dac_dc_L,
@@ -372,6 +477,8 @@ fn parseDac(
 fn decodeScanSof9(
     allocator: Allocator,
     data: []const u8,
+    base: usize,
+    options: DecodeOptions,
     frame: *const baseline.FrameInfo,
     quant_tables: *const [4]?[64]u16,
     dac_dc_L: *const [4]u8,
@@ -465,11 +572,9 @@ fn decodeScanSof9(
             // the marker byte (Q-coder already consumed the marker into
             // `marker_byte`, leaving pos *past* it).
             if (restart_interval > 0 and mcus_since_rst == restart_interval) {
-                if (!state.qcoder.marker_seen) return error.InvalidMarker;
-                if (state.qcoder.marker_byte != expected_rst) return error.InvalidMarker;
+                _ = try finishSegment(&state.qcoder, base, .interval, &expected_rst, options);
                 state.resetForRestart();
                 mcus_since_rst = 0;
-                expected_rst = 0xD0 + ((expected_rst - 0xD0 + 1) & 0x07);
             }
 
             var ci: usize = 0;
@@ -492,6 +597,8 @@ fn decodeScanSof9(
             mcus_since_rst += 1;
         }
     }
+
+    _ = try finishSegment(&state.qcoder, base, .scan_end, &expected_rst, options);
 
     // ── Phase 2: IDCT each block into its component plane ─────
     var of_flag = std.atomic.Value(bool).init(false);
@@ -555,7 +662,7 @@ fn decodeBlockSof9(
 // Huffman ones. Phase 2 (dequant + IDCT + chroma upsample + color
 // convert) is reused verbatim via `progressive.assembleProgressiveGeneric`.
 
-fn decodeArithProgressive(allocator: Allocator, data: []const u8) Error!types.Image {
+fn decodeArithProgressive(allocator: Allocator, data: []const u8, options: DecodeOptions) Error!types.Image {
     var pos: usize = 2;
     var frame: ?progressive.FrameInfo = null;
     var quant_tables: [4]?[64]u16 = .{ null, null, null, null };
@@ -652,7 +759,6 @@ fn decodeArithProgressive(allocator: Allocator, data: []const u8) Error!types.Im
                 const reset_ac = (scan.ss != 0);
                 state.startScan(data[pos..], reset_dc, reset_ac);
                 pos = try decodeArithProgressiveScan(
-                    data,
                     pos,
                     &state,
                     &frame.?,
@@ -663,6 +769,7 @@ fn decodeArithProgressive(allocator: Allocator, data: []const u8) Error!types.Im
                     max_v,
                     &scan,
                     restart_interval,
+                    options,
                 );
             },
             0x01, 0xD0...0xD7 => continue,
@@ -685,7 +792,6 @@ fn decodeArithProgressive(allocator: Allocator, data: []const u8) Error!types.Im
 /// MCU vs single-comp x_i/y_i grid). On RST: re-init ScanState's
 /// Q-coder + selectively zero stats, but DON'T re-zero DAC state.
 fn decodeArithProgressiveScan(
-    data: []const u8,
     entropy_start: usize,
     state: *arith_coder.ScanState,
     frame: *const progressive.FrameInfo,
@@ -696,6 +802,7 @@ fn decodeArithProgressiveScan(
     max_v: u32,
     scan: *const progressive.ScanInfo,
     restart_interval: u32,
+    options: DecodeOptions,
 ) Error!usize {
     var units_since_rst: u32 = 0;
     var expected_rst: u8 = 0xD0;
@@ -705,19 +812,19 @@ fn decodeArithProgressiveScan(
     const handleArithRst = struct {
         fn run(
             s: *arith_coder.ScanState,
+            base: usize,
+            opts: DecodeOptions,
             expected: *u8,
             re_dc: bool,
             re_ac: bool,
         ) Error!void {
-            if (!s.qcoder.marker_seen) return error.InvalidMarker;
-            if (s.qcoder.marker_byte != expected.*) return error.InvalidMarker;
+            _ = try finishSegment(&s.qcoder, base, .interval, expected, opts);
             // startScan applies the scan-type reset policy used at scan
             // start; the coder then resumes after the marker, at an
             // offset into the same buffer.
             const pos_after = s.qcoder.pos;
             s.startScan(s.qcoder.data, re_dc, re_ac);
             s.qcoder.pos = pos_after;
-            expected.* = 0xD0 + ((expected.* - 0xD0 + 1) & 0x07);
         }
     }.run;
 
@@ -729,7 +836,7 @@ fn decodeArithProgressiveScan(
             var mx: u32 = 0;
             while (mx < mcu_cols) : (mx += 1) {
                 if (restart_interval > 0 and units_since_rst == restart_interval) {
-                    try handleArithRst(state, &expected_rst, reset_dc, reset_ac);
+                    try handleArithRst(state, entropy_start, options, &expected_rst, reset_dc, reset_ac);
                     units_since_rst = 0;
                 }
                 var ci: usize = 0;
@@ -768,7 +875,7 @@ fn decodeArithProgressiveScan(
             var bx: u32 = 0;
             while (bx < xi) : (bx += 1) {
                 if (restart_interval > 0 and units_since_rst == restart_interval) {
-                    try handleArithRst(state, &expected_rst, reset_dc, reset_ac);
+                    try handleArithRst(state, entropy_start, options, &expected_rst, reset_dc, reset_ac);
                     units_since_rst = 0;
                 }
                 const off: usize = (@as(usize, by) * @as(usize, stride) +
@@ -780,31 +887,8 @@ fn decodeArithProgressiveScan(
         }
     }
 
-    // After scan's blocks are decoded, the Q-coder may already have
-    // consumed bytes past the marker boundary (it pre-fetches via
-    // getByte). `qcoder.pos` points just past the last byte we
-    // actually read OR just past a marker we observed. If a marker
-    // was seen mid-scan and processed (RST), we'd have already
-    // advanced past it; in either case, walk forward to the NEXT
-    // marker boundary so the caller's outer marker loop re-enters
-    // correctly.
-    var p: usize = entropy_start + state.qcoder.pos;
-    if (state.qcoder.marker_seen) {
-        // Q-coder has already consumed the marker byte — rewind to
-        // point at its 0xFF prefix so the outer walker sees it.
-        // marker_byte was at pos-1 (after stuff-byte skip we might
-        // have over-walked; simplest correct path is to scan back
-        // for FF NN where NN == marker_byte).
-        if (p >= 2 and data[p - 2] == 0xFF and data[p - 1] == state.qcoder.marker_byte) {
-            p -= 2;
-        }
-        return p;
-    }
-    // No marker seen yet — search forward for the next 0xFF NN.
-    while (p + 1 < data.len) : (p += 1) {
-        if (data[p] == 0xFF and data[p + 1] != 0x00) break;
-    }
-    return p;
+    // The outer marker walk resumes at the marker that ends the scan.
+    return finishSegment(&state.qcoder, entropy_start, .scan_end, &expected_rst, options);
 }
 
 fn decodeArithProgressiveBlock(

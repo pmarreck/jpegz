@@ -50,3 +50,26 @@ exactly at the first byte the decoder never fetched. Detail is
   `truncated_stream`.
 - **Detection limit (document in SPEC):** a short final interval whose
   zero-filled decode completes cleanly cannot be detected.
+
+## Decoded-fault ruling (validate, 2026-11-22)
+
+1. **58 `dct_coefficient_overflow`** covers every magnitude category past
+   T.81's bound for precision P.
+   - **DCT:** a DC difference category above P+3, or an AC category above
+     P+2. That is 11 and 10 at 8 bits, and 15 and 14 at 12 bits (F.1.2.1,
+     F.1.2.2). Progressive scans use the same unshifted bound.
+   - **Lossless:** a difference category above 16 (H.1.2.2).
+   - **Scope:** applies to the Huffman path as well, for parity.
+   - **Offset:** the restart interval start (or SOS without DRI), labeled
+     as the interval and not exact.
+   - **Before shipping:** a producer and corpus check; any producer past
+     the bound goes back for a re-grade.
+2. **New FAIL 74 `entropy_decode_invalid`:** the entropy-coded decision or
+   code sequence has no valid T.81 decode at that point. First use: a zero
+   run past Se.
+   - **Offset:** the interval start, labeled as the interval.
+   - **Requested:** a list of Huffman-path cases now mapped to 51 that are
+     data faults rather than table faults (for example a run past Se with a
+     valid table, or a code that matches no table entry), with corpus
+     counts. Validate rules separately on moving them to 74; they stay at
+     51 until then.

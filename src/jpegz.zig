@@ -345,7 +345,10 @@ pub fn decodeWithOptions(
     // fall through). Patents expired in early 2000s; libjpeg-turbo
     // decodes them. B1 milestone — see arith_decode.zig.
     const arith_decode = @import("decode/arith_decode.zig");
-    if (arith_decode.decode(allocator, data)) |img| {
+    if (arith_decode.decodeWithOptions(allocator, data, .{
+        .lenient = options.lenient,
+        .findings_sink = options.findings_sink,
+    })) |img| {
         return img;
     } else |err| switch (err) {
         error.NotImplemented => {},
