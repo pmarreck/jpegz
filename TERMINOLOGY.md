@@ -13,7 +13,10 @@
   features and inconclusive checks remain distinguishable from validity.
 - Known defect: an identified encoder mistake reported by the codec, separate
   from its warning or failure treatment. Reader tolerance alone does not
-  establish this classification.
+  establish this classification. Either basis admits one: the same signature
+  in at least 3 independent real-world files, or an upstream bug report or
+  fix that documents it, reproduced as a synthetic exemplar (owner,
+  2026-11-05 and 2026-11-25).
 - Mutation rejection: the observed rate at which a validator rejects modified
   inputs. It is not corruption sensitivity unless the inputs' invalidity is
   independently established.

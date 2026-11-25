@@ -62,3 +62,20 @@ The "jpegz today" column gives the finding number and code jpegz reports now.
 Both are detection additions, so neither weakens an existing check. Either can
 be a narrower reason on an existing code, as in row 51b. A new code number
 needs a registry decision first.
+
+## Owner ruling, 2026-11-25: either evidence basis admits a known defect
+
+A producer defect can be admitted to the known-defect registry on either
+basis:
+- the same signature in at least 3 independent real-world files; or
+- an upstream bug report or fix that documents the signature, reproduced
+  as a synthetic exemplar (the 2026-11-05 rule).
+
+Neither basis takes precedence. This settles an apparent conflict:
+validate's admission checklist (`docs/plan_context/known_defect_state.md`,
+step 5) required 3 real-world exemplars unconditionally, while its purpose
+paragraph and TERMINOLOGY row already listed the upstream-bug basis.
+
+Known defect 68 (Go 1.0's Se=0) and the historic encoder cases in this
+document rest on the upstream-bug basis, with synthetic exemplars only. So
+they qualify. Relayed to validate the same day.
