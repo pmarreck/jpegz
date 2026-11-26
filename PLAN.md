@@ -3,6 +3,15 @@
 Evidence and earlier request details: [queue context](docs/plan_context/pre-canon-2026-09-24.md).
 Completed history: [plan log](docs/PLAN_LOG.md).
 
+## Priority: decode robustness on damaged input
+
+- [ ] Explain the remaining pixel differences from libjpeg-turbo on damaged input (no crashes): 21 of 3,000 12-bit mutants, 34 of 3,000 general and 27 of 3,000 arithmetic; classify each as a parity bug or an accepted recovery difference.
+- [x] Did validate confirm the two code extensions in c86fe21 (bad_marker_length on every T.81 SOS path; lossless_pointtransform_invalid for Pt >= P)? Answer: yes, both as implemented: existing codes, FAIL, exact offsets (done 2026-11-26 18:17 EST; commit c86fe21).
+- [x] Lossless AC-class DHT tables are FAIL 51, non-blocking, and decoding continues (done 2026-11-26 13:24 EST; commit d62051e).
+- [x] 12-bit progressive dequantization panic fixed, and 12-bit IDCT range limiting matches libjpeg-turbo's masked table (done 2026-11-26 15:33 EST; commit fa289eb).
+- [x] Validate's allocation-failure segfault: no double free or leak at any refused allocation, swept over 21 fixtures (done 2026-11-26 17:00 EST; commit 1a01bd7).
+- [x] Decode-path bounds: SOS and SOF fields are checked before indexing, with a single-byte totality test over every decoder family; 15,425 damaged files, 0 crashes (done 2026-11-26 18:16 EST; commit c86fe21).
+
 ## Priority: dependency freshness
 
 - [ ] Determine which terminal layer owns copy mode on a remote SSH session and document client-side clipboard routing; client terminal and activation shortcut requested, settings unchanged.
@@ -32,10 +41,8 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## JPEG entropy and comparison coverage
 
-- [x] Type arithmetic-coded (SOF9/SOF10) decode errors per validate's 2026-11-22 ruling: restart faults 56/57 at the marker, early end insufficient_data/truncated_stream, DAC values 53 at the byte, decoded overflow as on the Huffman path; exhaustive mapping with no huffman_table_corrupt; corpus report and reds to validate (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md; done 2026-11-22 21:40 EST; commits d0a26db, 90c96af, 98983f8).
 - [x] Type Huffman-path data faults per validate's rulings F and G: 74, 58, FAIL 8, 56/57, truncated_stream and insufficient_data at file offsets on sequential, progressive and lossless paths; walker parity for DHT overruns, DHT symbols past the bound (51 at the byte), progressive undefined tables (69) and later-scan Ns; corpus report and reds to validate (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md; done 2026-11-23 04:50 EST; commits 34e8c7e, a3eaba7, 175f09c, b30012a, 6294fcf).
 - [x] Lenient Huffman resync on an out-of-order RSTm should account for the skipped intervals (libjpeg's resync advances its MCU count to the marker); today recovery stops at EOI with an extra truncated_stream. Answer: sequential and progressive resync now follow jpeg_resync_to_restart (ahead 1-2: empty interval, marker kept; behind 1-2: skip; else take); pixels outside the empty interval match the original and libjpeg-turbo (done 2026-11-23 06:30 EST; commit 3daedfd).
-- [x] Add validate's new code 75 sos_table_selector_invalid: SOS Td/Ta above 3 is FAIL and 2 or 3 in a baseline frame with the table defined is WARN, exact at the byte, on Huffman and arithmetic paths; missing-table codes outrank it; producer check first (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md; done 2026-11-22 21:40 EST).
 - [x] Complete scan consumption, MCU counts, sampling edges, noninterleaved scans, restart cadence and predictor-reset coverage across supported modes. Answer: covered on every supported mode by malformed-input tests plus 2,744 producer controls (all valid, pixel-identical to libjpeg-turbo); the sweep found and fixed lossless category 16 below 16-bit precision; lossless arithmetic has no producer and rests on hand-built tests (context: docs/plan_context/scan-geometry-coverage-2026-11-23.md; done 2026-11-23 07:35 EST).
 - [x] Complete progressive scan-history and coefficient-range constraints with independent normative review and valid boundary controls. Answer: validate reviewed the rules against T.81 G.1.1.1 (rulings I); history faults are FAIL 59 with a history: detail, exact at Ss or AhAl, one per root cause; no new range rule (58 plus one-bit refinements bound it); 2,920 producer files stay valid (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md; done 2026-11-23 09:20 EST).
 - [ ] Classify the known-good corpus as a set and expand reproducible corruption-probe sweeps across JPEG-LS, JPEG 2000 and JPEG XL; JPEG-LS swept 2026-11-21 (93.0% of 1,600 on four T.87 streams; survivors all entropy) and JPEG 2000/JPEG XL swept 2026-11-22 (nine fixtures, 3,600 cases, no crash; lossless gray JXL survivors all decode in libjxl's djxl); the set-level corpus classification remains (context: docs/measurements/jp2-jxl-corruption-coverage-2026-11-22.md).
@@ -45,13 +52,10 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## JPEG-LS conformance
 
 - [ ] Owner decision: admit CharLS 3.0's RANGE-from-P coding of LSE MAXVAL < 2^P-1 (127 only_charls) as known_defect now, keep it unsupported until real-world files appear, or admit after checking CharLS 2.x and the latest release; validate queued it and recommends the version check if cheap (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md).
-- [x] Decode JPEG-LS subsampled components: line-interleaved scans decode per T.87 B.2/B.4 (Vi lines per component per MCU, per-component plane sizes, padding lines dropped); t8sse0 matches the HP reference planes test8r/test8gr4/test8bs2 exactly and t8sse3 within NEAR 3, and both now validate as decoded; restarts, point transform, mapping tables, the dual MAXVAL decode and ILV 0/2 stay NotImplemented for unequal planes; seven mutants killed (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md; done 2026-11-22 11:20 EST).
 - [ ] Owner decision: how the JPEG-LS decode API should return components of unequal size (t8sse0/3): keep NotImplemented (validation and jpegls_cleanroom_decode_planes already work), upsample to full size by replication, or expose planes through the public API (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md).
-- [x] Report ILV 2 over JPEG-LS components of unequal size as validate's FAIL 129 jpegls_sample_interleave_subsampled at the SOS ILV byte (T.87 C.2.3), detail each component's Hi x Vi; three mutants killed (context: docs/plan_context/jpegls-t87-rulings-2026-11-22.md; done 2026-11-22 12:30 EST).
 
 ## Build and CLI
 
-- [x] Measure fresh test execution separately from admission, dependency setup, evaluation and compilation; preserve complete coverage and report the one-second target/five-second budget. Answer: run steps with compiles cached took 10.6 s, 85% in one exhaustive validate sweep; a frame-free leak-checked allocator (524d1ac) and validate's per-SOF finding 66 (aeb75d2) bring execution to about 4.1 s with full coverage, inside the 5 s budget but not the 1 s target; facade_validation (1-2 s) is the largest remaining share; -Dtest-filter=TEXT added for bisection (context: docs/measurements/test-timing-2026-11-22.md; done 2026-11-22 16:10 EST).
 - [x] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks. Answer: build.zig compiles the pinned brotliSrc (common, dec, enc) with Zig for each target via -Dbrotli-src/BROTLI_SRC, which every Nix build and the dev shell set; the Windows cross checks now link JXL; system libraries remain the fallback when no source is given (done 2026-11-23 11:45 EST).
 - [ ] Track libjxlz's validator exports pulling the Brotli encoder into the link (FYI sent earlier); the vendored Brotli compiles the encoder until libjxlz drops that dependency.
 - [ ] Add U5b progress controls and pure timestamp-injected rendering; verify rendered output with Peter and test terminal/width degradation.
