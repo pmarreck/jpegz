@@ -35,6 +35,19 @@ const huffman = @import("huffman.zig");
 const findings_mod = @import("findings.zig");
 
 pub const Error = errors.DecodeError;
+const lframe = @import("lossless_frame.zig");
+const RestartCtx = lframe.RestartCtx;
+const ComponentInfo = lframe.ComponentInfo;
+const FrameInfo = lframe.FrameInfo;
+const ScanInfo = lframe.ScanInfo;
+const parseSof = lframe.parseSof;
+const parseDht = lframe.parseDht;
+const parseSos = lframe.parseSos;
+const sampleAt = lframe.sampleAt;
+const writeSample = lframe.writeSample;
+const computePredictorAt = lframe.computePredictorAt;
+/// SOF3 syntax validation (see lossless_validate.zig).
+pub const validate = @import("lossless_validate.zig").validate;
 
 /// Optional findings sink + future knobs. Mirrors the pattern in
 /// `baseline.zig`. Emit sites in lossless are the pre-SOS marker
@@ -49,40 +62,6 @@ pub const DecodeOptions = struct {
     /// from RST cycle mismatches and missing RST markers. Strict
     /// mode (default) returns `error.InvalidMarker`.
     lenient: bool = false,
-};
-
-/// State threaded into decodeScan for restart-marker handling.
-const RestartCtx = struct {
-    interval: u16, // 0 = no restarts
-    samples_since: u32 = 0,
-    expected_rst: u8 = 0xD0,
-    /// True when the next sample(s) — one per scan-component for the
-    /// MCU after RST — must use the initial predictor 2^(P-Pt-1) per
-    /// T.81 §H.1.2.2. Cleared after each component's first sample of
-    /// the next restart interval is emitted.
-    force_initial: bool = false,
-};
-
-const ComponentInfo = struct {
-    id: u8,
-    h_factor: u4,
-    v_factor: u4,
-    dc_table: u8 = 0,
-};
-
-const FrameInfo = struct {
-    precision: u8,
-    height: u16,
-    width: u16,
-    num_components: u8,
-    components: [4]ComponentInfo,
-};
-
-const ScanInfo = struct {
-    num_components: u8,
-    comp_indices: [4]usize,
-    predictor: u8, // Ss; 1..7
-    point_transform: u4, // Al
 };
 
 /// Decode a lossless JPEG (T.81 SOF3).
@@ -128,11 +107,8 @@ pub fn decodeWithOptions(allocator: Allocator, data: []const u8, options: Decode
             if (options.findings_sink) |sink| {
                 var buf: [96]u8 = undefined;
                 const next_marker: u8 = if (pos + 1 < data.len) data[pos + 1] else 0;
-                const detail = std.fmt.bufPrint(&buf,
-                    "Corrupt JPEG data: {d} extraneous bytes before marker 0x{x:0>2}",
-                    .{ pos - skip_start, next_marker }) catch buf[0..0];
-                sink.emit(.warn, .extraneous_bytes_before_marker,
-                    @intCast(skip_start), detail) catch return error.OutOfMemory;
+                const detail = std.fmt.bufPrint(&buf, "Corrupt JPEG data: {d} extraneous bytes before marker 0x{x:0>2}", .{ pos - skip_start, next_marker }) catch buf[0..0];
+                sink.emit(.warn, .extraneous_bytes_before_marker, @intCast(skip_start), detail) catch return error.OutOfMemory;
             }
         }
         if (pos + 1 >= data.len) return error.TruncatedStream;
@@ -144,18 +120,18 @@ pub fn decodeWithOptions(allocator: Allocator, data: []const u8, options: Decode
             if (options.findings_sink) |sink| {
                 var buf: [80]u8 = undefined;
                 const next_marker: u8 = if (pos + 1 < data.len) data[pos + 1] else 0;
-                const detail = std.fmt.bufPrint(&buf,
-                    "{d} extra 0xFF fill byte(s) before marker 0x{x:0>2}",
-                    .{ pos - fill_start, next_marker }) catch buf[0..0];
-                sink.emit(.warn, .entropy_fill_bytes,
-                    @intCast(fill_start), detail) catch return error.OutOfMemory;
+                const detail = std.fmt.bufPrint(&buf, "{d} extra 0xFF fill byte(s) before marker 0x{x:0>2}", .{ pos - fill_start, next_marker }) catch buf[0..0];
+                sink.emit(.warn, .entropy_fill_bytes, @intCast(fill_start), detail) catch return error.OutOfMemory;
             }
         }
         if (pos + 1 >= data.len) return error.TruncatedStream;
         const marker = data[pos + 1];
         pos += 2;
         switch (marker) {
-            0xD9 => { saw_eoi = true; break; },
+            0xD9 => {
+                saw_eoi = true;
+                break;
+            },
             0xC3 => { // SOF3 — lossless predictive
                 frame = try parseSof(data, pos);
                 // v1 supports 8/12/14/16-bit precision (any P in 2..16
@@ -236,316 +212,6 @@ pub fn decodeWithOptions(allocator: Allocator, data: []const u8, options: Decode
 
 const parseSegmentLength = @import("segment.zig").parseSegmentLength;
 
-/// Validate lossless Huffman syntax without allocating or upsampling pixels.
-/// Supports a single full-component scan (1..4 components), including unequal
-/// sampling. DNL and separated component scans remain explicitly unsupported.
-/// Offsets identify the payload-relative detection cursor, not the byte whose
-/// mutation caused desynchronization. No sample-domain or image-content claim.
-pub fn validate(data: []const u8, sink: *findings_mod.FindingsSink) Error!void {
-	var offset: usize = 0;
-	const findings_start = sink.items().len;
-	validateSyntax(data, &offset, sink) catch |err| {
-		const typed = for (sink.items()[findings_start..]) |finding| {
-			if (finding.severity == .fail) break true;
-		} else false;
-		if (err != error.NotImplemented and !typed) {
-			try sink.emit(.fail, if (err == error.TruncatedStream) .truncated_stream else .huffman_table_corrupt,
-				@intCast(@min(offset, data.len)), @errorName(err));
-		}
-		return err;
-	};
-}
-
-fn validateSyntax(data: []const u8, offset: *usize, sink: *findings_mod.FindingsSink) Error!void {
-	if (data.len < 2) return error.TruncatedStream;
-	if (data[0] != 0xff or data[1] != 0xd8) return error.InvalidMarker;
-	var pos: usize = 2;
-	var frame: ?FrameInfo = null;
-	var tables: [4]?huffman.HuffmanTable = .{ null, null, null, null };
-	var restart: u16 = 0;
-	var scanned = false;
-	while (true) {
-		offset.* = pos;
-		if (pos + 1 >= data.len) return error.TruncatedStream;
-		if (data[pos] != 0xff) return error.InvalidMarker;
-		while (pos + 1 < data.len and data[pos + 1] == 0xff) pos += 1;
-		if (pos + 1 >= data.len) return error.TruncatedStream;
-		const marker = data[pos + 1];
-		pos += 2;
-		if (marker == 0xd9) {
-			if (!scanned) return error.TruncatedStream;
-			// The public marker walker separately reports bytes after EOI.
-			return;
-		}
-		if (marker == 0xdc) return error.NotImplemented; // DNL may redefine Y.
-		// These have no length field; none is legal here in a SOF3 frame.
-		if (marker == 0x00 or marker == 0x01 or marker == 0xd8 or
-			(marker >= 0xd0 and marker <= 0xd7)) return error.InvalidMarker;
-		const len = parseSegmentLength(data, pos);
-		if (len < 2 or pos + len > data.len) return error.TruncatedStream;
-		switch (marker) {
-			0xc3 => {
-				if (frame != null) return error.InvalidMarker;
-				if (len >= 8 and data[pos + 7] > 4) return error.NotImplemented;
-				frame = try parseSof(data, pos);
-				if (frame.?.precision < 2 or frame.?.precision > 16 or frame.?.width == 0)
-					return error.InvalidMarker;
-				if (frame.?.height == 0) return error.NotImplemented;
-			},
-			0xc4 => try parseDht(data, pos, &tables),
-			0xdd => {
-				if (len != 4) return error.InvalidMarker;
-				restart = (@as(u16, data[pos + 2]) << 8) | data[pos + 3];
-			},
-			0xda => {
-				if (frame == null or scanned) return error.InvalidMarker;
-				const scan = try parseSos(data, pos, &frame.?);
-				if (scan.num_components != frame.?.num_components) return error.NotImplemented;
-				if (scan.predictor < 1 or scan.predictor > 7) return error.InvalidMarker;
-				if (scan.point_transform >= frame.?.precision) return error.NotImplemented;
-				pos += len;
-				pos = try validateEntropy(data, pos, &frame.?, &scan, &tables, restart, offset, sink);
-				scanned = true;
-				continue;
-			},
-			0xdb, 0xe0...0xef, 0xfe => {}, // Unused DQT, application data, comments.
-			else => return error.NotImplemented,
-		}
-		pos += len;
-	}
-}
-
-fn validateEntropy(data: []const u8, start: usize, frame: *const FrameInfo, scan: *const ScanInfo,
-	tables: *const [4]?huffman.HuffmanTable, restart: u16, offset: *usize, sink: *findings_mod.FindingsSink) Error!usize
-{
-	var max_h: usize = 1;
-	var max_v: usize = 1;
-	var samples_per_mcu: usize = 0;
-	for (frame.components[0..frame.num_components]) |comp| {
-		max_h = @max(max_h, comp.h_factor);
-		max_v = @max(max_v, comp.v_factor);
-		samples_per_mcu += @as(usize, comp.h_factor) * comp.v_factor;
-	}
-	const interleaved = scan.num_components > 1;
-	if (interleaved and samples_per_mcu > 10) return error.InvalidMarker;
-	const columns = if (interleaved) std.math.divCeil(usize, frame.width, max_h) catch unreachable else frame.width;
-	const rows = if (interleaved) std.math.divCeil(usize, frame.height, max_v) catch unreachable else frame.height;
-	if (restart % columns != 0) return error.InvalidMarker;
-	for (scan.comp_indices[0..scan.num_components]) |ci| {
-		if (tables[frame.components[ci].dc_table] == null) return error.InvalidMarker;
-	}
-	var br = bitstream.BitReader.init(data[start..]);
-	// Update the cursor even when lookahead encountered an early marker.
-	errdefer offset.* = start + br.byte_pos;
-	var expected_rst: u8 = 0xd0;
-	for (0..columns * rows) |mcu| {
-		if (restart != 0 and mcu != 0 and mcu % restart == 0) {
-			const marker = br.finishHuffmanSegment() catch |err| try zeroPadMarker(&br, err, start, sink);
-			if (marker == 0xdc) return error.NotImplemented;
-			// As on the sequential path: a wrong RSTm is 57, another marker 56.
-			if (marker != expected_rst) {
-				var buf: [64]u8 = undefined;
-				const at = start + br.byte_pos;
-				if (marker >= 0xd0 and marker <= 0xd7) {
-					try sink.emitExact(.fail, .restart_marker_unexpected, at, std.fmt.bufPrint(&buf,
-						"expected RST{d} (0x{x:0>2}) but got RST{d} (0x{x:0>2})", .{ expected_rst - 0xd0, expected_rst, marker - 0xd0, marker }) catch buf[0..0]);
-				} else {
-					try sink.emitExact(.fail, .restart_marker_missing, at, std.fmt.bufPrint(&buf,
-						"marker 0x{x:0>2} where RST{d} belongs", .{ marker, expected_rst - 0xd0 }) catch buf[0..0]);
-				}
-				return error.InvalidMarker;
-			}
-			br.skipPastMarker();
-			expected_rst = 0xd0 + ((expected_rst - 0xd0 + 1) & 7);
-		}
-		for (scan.comp_indices[0..scan.num_components]) |ci| {
-			const comp = frame.components[ci];
-			const count = if (interleaved) @as(usize, comp.h_factor) * comp.v_factor else 1;
-			for (0..count) |_| {
-				const code_mark = br.mark();
-				const category = tables[comp.dc_table].?.decode(&br) catch return dataFault(&br, start, sink, code_mark);
-				if (category > 16) {
-					// Validate 2026-11-22: 58, exact at the code.
-					var buf: [80]u8 = undefined;
-					try sink.emitExact(.fail, .dct_coefficient_overflow, start + br.markOffset(code_mark),
-						std.fmt.bufPrint(&buf, "difference category {d} exceeds 16 (T.81 H.1.2.2)", .{category}) catch buf[0..0]);
-					return error.BackendError;
-				}
-				// H.1.2.2: category16 carries no amplitude; other nonzero
-				// categories carry that many bits. Predictor4 can exceed P.
-				if (category > 0 and category < 16)
-					_ = br.readBits(@intCast(category)) catch return dataFault(&br, start, sink, null);
-			}
-		}
-	}
-	const marker = br.finishHuffmanSegment() catch |err| try zeroPadMarker(&br, err, start, sink);
-	if (marker == 0xdc) return error.NotImplemented;
-	if (marker >= 0xd0 and marker <= 0xd7) {
-		try sink.emitExact(.fail, .restart_marker_unexpected, start + br.byte_pos, "restart marker after the final MCU of the scan");
-		return error.InvalidMarker;
-	}
-	return start + br.byte_pos;
-}
-
-/// A difference that cannot be decoded (validate rulings 2026-11-22). Data
-/// that runs into a marker is `insufficient_data` at the marker; a code that
-/// matches no table entry (`mark` is where it began) is 74, exact. A DNL
-/// stays unsupported, and data that simply ends is left to the marker walk.
-fn dataFault(br: *const bitstream.BitReader, start: usize, sink: *findings_mod.FindingsSink, mark: ?bitstream.BitReader.Mark) Error {
-	var boundary = br.*;
-	if (boundary.marker_seen) {
-		boundary.seekToMarker();
-		if (boundary.marker_seen and boundary.marker_byte == 0xdc) return error.NotImplemented;
-		// This path stops here rather than recovering, so the report's FAIL is
-		// emitted directly.
-		sink.emit(.fail, .insufficient_data, @intCast(start + br.byte_pos),
-			"Corrupt JPEG data: premature end of data segment") catch return error.OutOfMemory;
-		return error.BackendError;
-	}
-	if (br.byte_pos >= br.data.len) return error.TruncatedStream;
-	if (mark) |m| sink.emitExact(.fail, .entropy_decode_invalid, start + br.markOffset(m),
-		"difference Huffman code matches no table entry") catch return error.OutOfMemory;
-	return error.BackendError;
-}
-
-/// All-zero pad bits are a known encoder defect (finding 63, T.81 §F.1.2.3):
-/// report the WARN and return the marker that follows them. Every other
-/// segment-boundary fault keeps its error; mixed padding emits FAIL 62.
-/// `base` is the file offset of
-/// `br.data[0]`.
-fn zeroPadMarker(br: *bitstream.BitReader, err: anyerror, base: usize, sink: *findings_mod.FindingsSink) Error!u8 {
-	if (err == error.PaddingNotOnes) {
-		try sink.emitExact(.fail, .entropy_padding_not_ones, base + br.padByteOffset(),
-			"mixed Huffman pad bits before marker (T.81 F.1.2.3)");
-	}
-	if (err == error.InvalidEntropyBoundary) {
-		// Whole bytes after valid padding (libjpeg's "extraneous bytes
-		// before marker"): FAIL 8 at the first (validate, 2026-11-22).
-		if (br.trailingBytesAfterPadding()) |trailing| {
-			var buf: [96]u8 = undefined;
-			const detail = std.fmt.bufPrint(&buf, "{d} whole {s} after valid padding before marker 0x{X:0>2}", .{
-				trailing.count, if (trailing.count == 1) "byte" else "bytes", trailing.marker,
-			}) catch unreachable;
-			try sink.emitExact(.fail, .extraneous_bytes_before_marker, base + trailing.first, detail);
-			return error.BackendError;
-		}
-	}
-	if (err != error.PaddingZeroBits) return entropyError(br);
-	try sink.emitZeroPadding(base + br.padByteOffset(), br.padBitCount());
-	br.seekToMarker();
-	if (!br.marker_seen) return entropyError(br);
-	return br.marker_byte;
-}
-
-fn entropyError(br: *const bitstream.BitReader) Error {
-	var boundary = br.*;
-	if (boundary.marker_seen) boundary.seekToMarker();
-	if (boundary.marker_seen and boundary.marker_byte == 0xdc) return error.NotImplemented;
-	return if (br.byte_pos >= br.data.len) error.TruncatedStream else error.BackendError;
-}
-
-fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
-    const seg_len = parseSegmentLength(data, pos);
-    if (seg_len < 8 or pos + seg_len > data.len) return error.TruncatedStream;
-    var fi: FrameInfo = undefined;
-    fi.precision = data[pos + 2];
-    fi.height = (@as(u16, data[pos + 3]) << 8) | data[pos + 4];
-    fi.width = (@as(u16, data[pos + 5]) << 8) | data[pos + 6];
-    fi.num_components = data[pos + 7];
-    if (fi.num_components == 0 or fi.num_components > 4) return error.InvalidMarker;
-    if (seg_len != 8 + @as(usize, fi.num_components) * 3) return error.InvalidMarker;
-    var i: usize = 0;
-    while (i < fi.num_components) : (i += 1) {
-        const off = pos + 8 + i * 3;
-        fi.components[i] = .{
-            .id = data[off],
-            .h_factor = @intCast(data[off + 1] >> 4),
-            .v_factor = @intCast(data[off + 1] & 0x0F),
-            // qt_index byte is at off+2 but is unused for lossless.
-        };
-        if (fi.components[i].h_factor < 1 or fi.components[i].h_factor > 4 or
-            fi.components[i].v_factor < 1 or fi.components[i].v_factor > 4) return error.InvalidMarker;
-        for (fi.components[0..i]) |previous| {
-            if (previous.id == fi.components[i].id) return error.InvalidMarker;
-        }
-    }
-    return fi;
-}
-
-fn parseDht(
-    data: []const u8,
-    pos: usize,
-    dc_tables: *[4]?huffman.HuffmanTable,
-) Error!void {
-    const seg_len = parseSegmentLength(data, pos);
-    if (seg_len < 2 or pos + seg_len > data.len) return error.TruncatedStream;
-    var off: usize = pos + 2;
-    const seg_end = pos + seg_len;
-    while (off < seg_end) {
-        if (off + 17 > seg_end) return error.TruncatedStream;
-        const tc_th = data[off];
-        const tc: u8 = tc_th >> 4;
-        const th: u8 = tc_th & 0x0F;
-        if (tc != 0 or th > 3) return error.InvalidMarker; // lossless uses DC tables only
-        off += 1;
-        var bits: [16]u8 = undefined;
-        var total: u16 = 0;
-        for (0..16) |i| {
-            bits[i] = data[off + i];
-            total += bits[i];
-        }
-        off += 16;
-        if (off + total > seg_end) return error.TruncatedStream;
-        const values = data[off .. off + total];
-        // T.81 C.2: canonical codes may not overflow their width, and the
-        // all-ones code is reserved; an exactly full table (finding 71, which
-        // the validator reports) still decodes. Check before indexing.
-        if (huffman.codeSpace(bits) == .invalid) return error.InvalidMarker;
-        const t = huffman.HuffmanTable.buildFromDht(bits, values) catch
-            return error.InvalidMarker;
-        dc_tables[th] = t;
-        off += total;
-    }
-}
-
-fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo {
-    const seg_len = parseSegmentLength(data, pos);
-    if (seg_len < 6 or pos + seg_len > data.len) return error.TruncatedStream;
-    var info: ScanInfo = undefined;
-    info.num_components = data[pos + 2];
-    if (info.num_components == 0 or info.num_components > 4)
-        return error.InvalidMarker;
-    if (seg_len != 6 + @as(usize, info.num_components) * 2) return error.InvalidMarker;
-    var i: usize = 0;
-    while (i < info.num_components) : (i += 1) {
-        const off = pos + 3 + i * 2;
-        const cs = data[off];
-        const td_ta = data[off + 1];
-        if (td_ta >> 4 > 3 or td_ta & 0x0f != 0) return error.InvalidMarker;
-        var found: bool = false;
-        var j: usize = 0;
-        while (j < frame.num_components) : (j += 1) {
-            if (frame.components[j].id == cs) {
-                frame.components[j].dc_table = td_ta >> 4;
-                info.comp_indices[i] = j;
-                found = true;
-                break;
-            }
-        }
-        if (!found) return error.InvalidMarker;
-        for (info.comp_indices[0..i]) |previous| {
-            if (previous >= info.comp_indices[i]) return error.InvalidMarker;
-        }
-    }
-    const tail_off = pos + 3 + @as(usize, info.num_components) * 2;
-    info.predictor = data[tail_off];
-    if (data[tail_off + 1] != 0) return error.InvalidMarker;
-    const ah_al = data[tail_off + 2];
-    if (ah_al >> 4 != 0) return error.InvalidMarker;
-    info.point_transform = @intCast(ah_al & 0x0F);
-    return info;
-}
-
 /// Decode the entropy-coded scan into a `width*height`-byte pixel
 /// buffer. Sample reconstruction per T.81 §H.1.2:
 ///   sample[x,y] = (predictor(x,y) + diff[x,y]) mod 2^precision
@@ -624,23 +290,18 @@ fn decodeScan(
                     if (options.findings_sink) |sink| try sink.emitZeroPadding(entropy_start + boundary.padByteOffset(), boundary.padBitCount());
                 } else {
                     if (err == error.PaddingNotOnes) {
-                        if (options.findings_sink) |sink| try sink.emitExact(.fail, .entropy_padding_not_ones,
-                            entropy_start + boundary.padByteOffset(), "mixed Huffman pad bits before restart marker (T.81 F.1.2.3)");
+                        if (options.findings_sink) |sink| try sink.emitExact(.fail, .entropy_padding_not_ones, entropy_start + boundary.padByteOffset(), "mixed Huffman pad bits before restart marker (T.81 F.1.2.3)");
                     }
                     if (!options.lenient) return error.BackendError;
                     if (err != error.PaddingNotOnes) if (options.findings_sink) |sink| {
-                        try sink.emit(.fail, .huffman_table_corrupt, @intCast(br.byte_pos),
-                            "invalid Huffman entropy or padding at restart boundary");
+                        try sink.emit(.fail, .huffman_table_corrupt, @intCast(br.byte_pos), "invalid Huffman entropy or padding at restart boundary");
                     };
                 }
                 br.seekToMarker();
                 if (!br.marker_seen) {
                     if (options.lenient) {
                         if (options.findings_sink) |sink| {
-                            sink.emit(.warn, .restart_marker_missing,
-                                @intCast(br.byte_pos),
-                                "expected RSTm marker not found at restart-interval boundary; continuing with reset predictors")
-                                catch return error.OutOfMemory;
+                            sink.emit(.warn, .restart_marker_missing, @intCast(br.byte_pos), "expected RSTm marker not found at restart-interval boundary; continuing with reset predictors") catch return error.OutOfMemory;
                         }
                         rst.expected_rst = 0xD0 + ((rst.expected_rst - 0xD0 + 1) & 0x07);
                         rst.samples_since = 0;
@@ -653,13 +314,8 @@ fn decodeScan(
                     if (options.lenient and got_rst) {
                         if (options.findings_sink) |sink| {
                             var buf: [96]u8 = undefined;
-                            const detail = std.fmt.bufPrint(&buf,
-                                "expected RST{d} (0x{x:0>2}) but got RST{d} (0x{x:0>2})",
-                                .{ rst.expected_rst - 0xD0, rst.expected_rst,
-                                   br.marker_byte - 0xD0, br.marker_byte })
-                                catch buf[0..0];
-                            sink.emit(.warn, .restart_marker_unexpected,
-                                @intCast(br.byte_pos), detail) catch return error.OutOfMemory;
+                            const detail = std.fmt.bufPrint(&buf, "expected RST{d} (0x{x:0>2}) but got RST{d} (0x{x:0>2})", .{ rst.expected_rst - 0xD0, rst.expected_rst, br.marker_byte - 0xD0, br.marker_byte }) catch buf[0..0];
+                            sink.emit(.warn, .restart_marker_unexpected, @intCast(br.byte_pos), detail) catch return error.OutOfMemory;
                         }
                         rst.expected_rst = 0xD0 + ((br.marker_byte - 0xD0 + 1) & 0x07);
                         br.skipPastMarker();
@@ -712,8 +368,7 @@ fn decodeScan(
 
     const marker = br.finishHuffmanSegment() catch |err| zero: {
         if (err == error.PaddingNotOnes) {
-            if (options.findings_sink) |sink| try sink.emitExact(.fail, .entropy_padding_not_ones,
-                entropy_start + br.padByteOffset(), "mixed Huffman pad bits before scan marker (T.81 F.1.2.3)");
+            if (options.findings_sink) |sink| try sink.emitExact(.fail, .entropy_padding_not_ones, entropy_start + br.padByteOffset(), "mixed Huffman pad bits before scan marker (T.81 F.1.2.3)");
         }
         if (err != error.PaddingZeroBits) return error.BackendError;
         if (options.findings_sink) |sink| try sink.emitZeroPadding(entropy_start + br.padByteOffset(), br.padBitCount());
@@ -722,81 +377,16 @@ fn decodeScan(
         break :zero br.marker_byte;
     };
     if (marker >= 0xD0 and marker <= 0xD7) return error.BackendError;
-	// T.81 A.4: "The output of the decoder is rescaled by multiplying by
-	// 2^Pt." Prediction runs on the reduced samples above, so the rescale
-	// follows the whole scan. The mask keeps the P-bit sample width that
-	// reconstruction already imposes.
-	if (pt > 0) {
-		var i: usize = 0;
-		while (i < width * height * nc) : (i += 1) {
-			const reduced = sampleAt(out, sample_bytes, 0, i, 0, 1, 0);
-			writeSample(out, sample_bytes, 0, i, 0, 1, 0, @intCast((reduced << pt) & sample_mask));
-		}
-	}
-    return out;
-}
-
-/// Read a single sample from the interleaved output buffer at (y, x, ci).
-/// Sample is u8 for sample_bytes==1, u16 host-endian for sample_bytes==2.
-inline fn sampleAt(
-    out: []const u8,
-    sample_bytes: usize,
-    y: usize,
-    x: usize,
-    w: usize,
-    nc: usize,
-    ci: usize,
-) i32 {
-    const off = ((y * w + x) * nc + ci) * sample_bytes;
-    if (sample_bytes == 1) return @intCast(out[off]);
-    // Host-endian u16 read
-    const lo: u16 = out[off];
-    const hi: u16 = out[off + 1];
-    const v: u16 = lo | (hi << 8);
-    _ = .{}; // silence
-    return @intCast(v);
-}
-
-inline fn writeSample(
-    out: []u8,
-    sample_bytes: usize,
-    y: usize,
-    x: usize,
-    w: usize,
-    nc: usize,
-    ci: usize,
-    value: u16,
-) void {
-    const off = ((y * w + x) * nc + ci) * sample_bytes;
-    if (sample_bytes == 1) {
-        out[off] = @intCast(value & 0xFF);
-    } else {
-        out[off] = @intCast(value & 0xFF);
-        out[off + 1] = @intCast(value >> 8);
+    // T.81 A.4: "The output of the decoder is rescaled by multiplying by
+    // 2^Pt." Prediction runs on the reduced samples above, so the rescale
+    // follows the whole scan. The mask keeps the P-bit sample width that
+    // reconstruction already imposes.
+    if (pt > 0) {
+        var i: usize = 0;
+        while (i < width * height * nc) : (i += 1) {
+            const reduced = sampleAt(out, sample_bytes, 0, i, 0, 1, 0);
+            writeSample(out, sample_bytes, 0, i, 0, 1, 0, @intCast((reduced << pt) & sample_mask));
+        }
     }
-}
-
-inline fn computePredictorAt(
-    selector: u8,
-    out: []const u8,
-    sample_bytes: usize,
-    x: usize,
-    y: usize,
-    w: usize,
-    nc: usize,
-    ci: usize,
-) i32 {
-    const a: i32 = sampleAt(out, sample_bytes, y, x - 1, w, nc, ci);
-    const b: i32 = sampleAt(out, sample_bytes, y - 1, x, w, nc, ci);
-    const c: i32 = sampleAt(out, sample_bytes, y - 1, x - 1, w, nc, ci);
-    return switch (selector) {
-        1 => a,
-        2 => b,
-        3 => c,
-        4 => a + b - c,
-        5 => a + ((b - c) >> 1),
-        6 => b + ((a - c) >> 1),
-        7 => (a + b) >> 1,
-        else => unreachable,
-    };
+    return out;
 }
