@@ -88,7 +88,7 @@ pub fn parseDht(
         const tc_th = data[off];
         const tc: u8 = tc_th >> 4;
         const th: u8 = tc_th & 0x0F;
-        if (tc != 0 or th > 3) return error.InvalidMarker; // lossless uses DC tables only
+        if (tc > 1 or th > 3) return error.InvalidMarker;
         off += 1;
         var bits: [16]u8 = undefined;
         var total: u16 = 0;
@@ -98,6 +98,13 @@ pub fn parseDht(
         }
         off += 16;
         if (off + total > seg_end) return error.TruncatedStream;
+        // Lossless scans use only Tc=0 tables (T.81 Table B.5). An AC-class
+        // table (ffmpeg's ljpeg writes the four K.3 tables) is never selected;
+        // the validator reports it, and decoding skips it.
+        if (tc == 1) {
+            off += total;
+            continue;
+        }
         const values = data[off .. off + total];
         // T.81 C.2: canonical codes may not overflow their width, and the
         // all-ones code is reserved; an exactly full table (finding 71, which

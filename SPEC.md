@@ -427,6 +427,12 @@ Sequential Huffman data faults are typed exactly at the code (validate,
   - FAIL 8 for whole bytes after valid padding;
   - 57 for a wrong RSTm or one after the final MCU, 56 for another marker
     where an RSTm belongs.
+- **AC-class tables in lossless frames:** a Tc=1 DHT table in a lossless
+  frame is FAIL 51, exact at its Tc/Th byte. T.81 Table B.5 allows only Tc=0
+  in the lossless processes. ffmpeg's ljpeg writes all four K.3 tables. A
+  lossless scan never selects such a table, so it is non-blocking: decoding
+  skips it, and the rest of the file is still judged. Its grade is pending
+  the owner (validate's PLAN).
 - **Huffman tables and scan headers in the marker walk:**
   - A DHT symbol past T.81's bound for the frame precision is FAIL 51,
     exact at the symbol byte (validate rulings G, 2026-11-23). The bounds:

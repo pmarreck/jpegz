@@ -175,6 +175,16 @@ pub fn finish(w: *Walk) Allocator.Error!void {
                 var total: usize = 0;
                 for (w.data[hp + 1 ..][0..16]) |count| total += count;
                 if (hp + 17 + total > segment[1]) break;
+                // T.81 Table B.5 allows only Tc=0 tables in lossless frames.
+                // Such a table is never selected, so decoding continues and
+                // the rest of the file is still judged (nonblocking).
+                if (lossless and tc != 0) {
+                    const detail = try std.fmt.allocPrint(w.allocator, "DHT Tc={d} Th={d}: a lossless frame allows only Tc=0 tables (T.81 Table B.5)", .{ tc, w.data[hp] & 0x0F });
+                    defer w.allocator.free(detail);
+                    try addExactFinding(&w.report, w.allocator, .huffman_table_corrupt, hp, detail);
+                    w.nonblocking_fails += 1;
+                    break :segments;
+                }
                 for (w.data[hp + 17 ..][0..total], 0..) |value, k| {
                     const size = value & 0x0F;
                     const run = value >> 4;

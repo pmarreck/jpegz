@@ -460,3 +460,35 @@ test "jpeg2000.validate: decodable YUV fixture has inconsistent container depth"
     try std.testing.expect(!reportHasCode(corrected, .jp2_invalid_codestream));
 }
 
+test "an AC-class DHT table in a lossless frame is FAIL 51 at its Tc/Th byte, and decoding continues" {
+	// ffmpeg 9.0.1's ljpeg writes the four K.3 tables, two of them AC
+	// class, which T.81 Table B.5 does not allow in a lossless frame. The
+	// table is never selected: one exact 51, the pixels are unchanged, and
+	// the rest of the file is still judged.
+	const allocator = std.testing.allocator;
+	const head = comptime losslessHead(.{ 1, 1 } ++ ([_]u8{0} ** 14), &.{ 0, 8 });
+	const ac = [_]u8{ 0xff, 0xc4, 0, 21, 0x10, 1, 1 } ++ ([_]u8{0} ** 14) ++ [_]u8{ 0x00, 0x01 };
+	// Insert the AC table right after the DC table's DHT (before SOS).
+	const sos = head.len - 10;
+	const clean = head ++ [_]u8{ 0x3f, 0xff, 0xd9 };
+	const with_ac = head[0..sos].* ++ ac ++ head[sos..].* ++ [_]u8{ 0x3f, 0xff, 0xd9 };
+	var report = try jpegz.validate(allocator, &with_ac);
+	defer report.deinit(allocator);
+	try expectOneExact(report.findings.items, .huffman_table_corrupt, sos + 4, "DHT Tc=1 Th=0: a lossless frame allows only Tc=0 tables (T.81 Table B.5)");
+	var fails: usize = 0;
+	for (report.findings.items) |f| fails += @intFromBool(f.severity == .fail);
+	try std.testing.expectEqual(@as(usize, 1), fails);
+	var a = try jpegz.decode(allocator, &clean);
+	defer a.deinit(allocator);
+	var b = try jpegz.decode(allocator, &with_ac);
+	defer b.deinit(allocator);
+	try std.testing.expectEqualSlices(u8, a.pixels, b.pixels);
+	// A later entropy fault is still found: the codec check ran.
+	const damaged = head[0..sos].* ++ ac ++ head[sos..].* ++ [_]u8{ 0xbf, 0xff, 0xd9 };
+	var report2 = try jpegz.validate(allocator, &damaged);
+	defer report2.deinit(allocator);
+	var insufficient = false;
+	for (report2.findings.items) |f| insufficient = insufficient or f.code == .insufficient_data;
+	try std.testing.expect(insufficient);
+}
+
