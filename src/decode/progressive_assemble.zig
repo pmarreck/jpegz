@@ -103,17 +103,14 @@ pub fn assembleProgressiveGeneric(
             while (bx < bw) : (bx += 1) {
                 const off: usize = (@as(usize, by) * @as(usize, bw) +
                     @as(usize, bx)) * 64;
-                var zz: [64]i16 = undefined;
-                @memcpy(&zz, coefs[i][off .. off + 64]);
-                // Dequantize (zig-zag space).
+                const zz = coefs[i][off .. off + 64];
+                // Dequantize and un-zig-zag in i32, as baseline does (and
+                // libjpeg's DEQUANTIZE): an i16 coefficient times a 16-bit
+                // quantizer always fits, but often not back in an i16.
+                var natural: [64]i32 = undefined;
                 var n: usize = 0;
                 while (n < 64) : (n += 1) {
-                    zz[n] = @as(i16, @intCast(@as(i32, zz[n]) * @as(i32, qt[n])));
-                }
-                var natural: [64]i32 = undefined;
-                n = 0;
-                while (n < 64) : (n += 1) {
-                    natural[ZIGZAG[n]] = @as(i32, zz[n]);
+                    natural[ZIGZAG[n]] = @as(i32, zz[n]) * @as(i32, qt[n]);
                 }
                 var block_pix: [64]Sample = undefined;
                 if (idct.idct8x8Generic(P, &natural, &block_pix)) of_flag.store(true, .monotonic);

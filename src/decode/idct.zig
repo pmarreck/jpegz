@@ -74,7 +74,24 @@ inline fn descale(comptime T: type, x: T, comptime n: comptime_int) T {
     return (x + (@as(T, 1) << (n - 1))) >> n;
 }
 
+/// Post-IDCT range limiting of a level-shifted value `v`.
+///
+/// At P=8 this is a clamp, matching libjpeg-turbo's SIMD islow, which
+/// saturates. At P=12 libjpeg-turbo runs the C islow, which indexes
+/// `range_limit[(v - CENTER) & RANGE_MASK]` (jdmaster.c
+/// prepare_range_limit_table). That wraps modulo 4·(MAX+1), so a far
+/// out-of-range value can land on 0 instead of MAX or the reverse. Only
+/// corrupt or mismatched coefficients get there; in range, both agree.
 inline fn rangeLimit(comptime SampleT: type, comptime max: comptime_int, v: anytype) SampleT {
+    if (comptime max == 4095) {
+        const center: comptime_int = (max + 1) / 2;
+        const range_mask: comptime_int = (max + 1) * 4 - 1;
+        const i: i64 = (@as(i64, v) - center) & range_mask;
+        if (i < center) return @intCast(i + center);
+        if (i < 2 * (max + 1)) return @intCast(max);
+        if (i < 4 * (max + 1) - center) return 0;
+        return @intCast(i - (4 * (max + 1) - center));
+    }
     if (v < 0) return 0;
     if (v > max) return @intCast(max);
     return @intCast(v);

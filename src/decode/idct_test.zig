@@ -71,19 +71,30 @@ test "idct8x8Generic DC-only positive amplitude yields uniform brighter at every
     }
 }
 
-test "idct8x8Generic clamps to [0, 2^P-1] at every P" {
-    inline for (.{ 8, 12 }) |P| {
+test "idct8x8Generic range-limits like libjpeg-turbo: a clamp at P=8, the masked table at P=12" {
+    // DC-only blocks: d = DESCALE(DC << PASS1_BITS, PASS1_BITS + 3), and the
+    // output is the level-shifted d range-limited.
+    const Case = struct { dc: i32, p8: u8, p12: u16 };
+    const cases = [_]Case{
+        // Moderately out of range: both precisions saturate.
+        .{ .dc = 24000, .p8 = 255, .p12 = 4095 }, // P=12: d = 3000
+        .{ .dc = -24000, .p8 = 0, .p12 = 0 }, // P=12: d = -3000
+        // Far out of range: libjpeg-turbo's C islow (P=12) indexes
+        // range_limit[d & 16383], so d = 32768 wraps to the center value.
+        .{ .dc = 1 << 18, .p8 = 255, .p12 = 2048 },
+        .{ .dc = -(1 << 18), .p8 = 0, .p12 = 2048 },
+        // d = 9000 lands in the table's undershoot zone: 0, not 4095.
+        .{ .dc = 72000, .p8 = 255, .p12 = 0 },
+    };
+    for (cases) |c| {
         var coeffs = [_]i32{0} ** 64;
-        // Saturate high: DC large enough to overflow even at P=12
-        coeffs[0] = 1 << 18;
-        var out: [64]Sample(P) = undefined;
-        _ = idct8x8Generic(P, &coeffs, &out);
-        const max_sample: Sample(P) = (1 << P) - 1;
-        for (out) |s| try std.testing.expectEqual(max_sample, s);
-        // Saturate low.
-        coeffs[0] = -(@as(i32, 1) << 18);
-        _ = idct8x8Generic(P, &coeffs, &out);
-        for (out) |s| try std.testing.expectEqual(@as(Sample(P), 0), s);
+        coeffs[0] = c.dc;
+        var out8: [64]u8 = undefined;
+        _ = idct8x8Generic(8, &coeffs, &out8);
+        for (out8) |s| try std.testing.expectEqual(c.p8, s);
+        var out12: [64]u16 = undefined;
+        _ = idct8x8Generic(12, &coeffs, &out12);
+        for (out12) |s| try std.testing.expectEqual(c.p12, s);
     }
 }
 
