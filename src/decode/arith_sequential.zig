@@ -188,33 +188,35 @@ fn decodeScanSof9(
         }
     }
 
+    // Each cleanup is armed before its first allocation, so a refusal
+    // partway through a loop frees what that loop already allocated.
     var planes: [3][]u8 = .{ &.{}, &.{}, &.{} };
-    {
-        var i: usize = 0;
-        while (i < channels) : (i += 1) {
-            planes[i] = try allocator.alloc(u8, plane_w[i] * plane_h[i]);
-        }
-    }
     errdefer {
         var j: usize = 0;
         while (j < channels) : (j += 1) {
             if (planes[j].len > 0) allocator.free(planes[j]);
         }
     }
+    {
+        var i: usize = 0;
+        while (i < channels) : (i += 1) {
+            planes[i] = try allocator.alloc(u8, plane_w[i] * plane_h[i]);
+        }
+    }
 
     var coef_buf: [3][]i32 = .{ &.{}, &.{}, &.{} };
+    defer {
+        var j: usize = 0;
+        while (j < channels) : (j += 1) {
+            if (coef_buf[j].len > 0) allocator.free(coef_buf[j]);
+        }
+    }
     {
         var i: usize = 0;
         while (i < channels) : (i += 1) {
             const total_blocks: usize = @as(usize, blocks_w[i]) * @as(usize, blocks_h[i]);
             coef_buf[i] = try allocator.alloc(i32, total_blocks * 64);
             @memset(coef_buf[i], 0);
-        }
-    }
-    defer {
-        var j: usize = 0;
-        while (j < channels) : (j += 1) {
-            if (coef_buf[j].len > 0) allocator.free(coef_buf[j]);
         }
     }
 

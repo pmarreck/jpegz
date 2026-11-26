@@ -76,15 +76,17 @@ pub fn assembleProgressiveGeneric(
     var planes: [3][]Sample = .{ &.{}, &.{}, &.{} };
     var plane_w: [3]u32 = .{ 0, 0, 0 };
     var plane_h: [3]u32 = .{ 0, 0, 0 };
+    // Armed before the first allocation: a refusal at plane 1 or 2 must
+    // free the planes already allocated (empty slices are skipped).
+    errdefer {
+        var j: usize = 0;
+        while (j < channels) : (j += 1) if (planes[j].len > 0) allocator.free(planes[j]);
+    }
     var i: usize = 0;
     while (i < channels) : (i += 1) {
         plane_w[i] = blocks_w[i] * 8;
         plane_h[i] = blocks_h[i] * 8;
         planes[i] = try allocator.alloc(Sample, plane_w[i] * plane_h[i]);
-    }
-    errdefer {
-        var j: usize = 0;
-        while (j < channels) : (j += 1) if (planes[j].len > 0) allocator.free(planes[j]);
     }
 
     // Per block: dequant in zig-zag space, un-zig-zag, IDCT, copy.
@@ -132,10 +134,15 @@ pub fn assembleProgressiveGeneric(
         if (sink) |sk| sk.emit(.fail, .dct_coefficient_overflow, null, "IDCT intermediate overflowed on out-of-range DCT coefficients (corrupt entropy data; wrapped like libjpeg)") catch return error.OutOfMemory;
     }
 
-    // Free coefficient buffers (no longer needed).
+    // Free coefficient buffers (no longer needed). Each slot is emptied as
+    // it is freed: the caller still owns `coefs`, and its errdefer frees
+    // them again if a later allocation here fails.
     {
         var k: usize = 0;
-        while (k < channels) : (k += 1) if (coefs[k].len > 0) allocator.free(coefs[k]);
+        while (k < channels) : (k += 1) if (coefs[k].len > 0) {
+            allocator.free(coefs[k]);
+            coefs[k] = &.{};
+        };
     }
 
     // Allocate output as []u8. For P=8 each sample is 1 byte. For P=12

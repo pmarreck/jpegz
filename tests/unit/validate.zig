@@ -20,4 +20,5 @@ test {
     _ = @import("validate_known_defects.zig");
     _ = @import("validate_dnl_hierarchy.zig");
     _ = @import("validate_dequant.zig");
+    _ = @import("validate_oom.zig");
 }
