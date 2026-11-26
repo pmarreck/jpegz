@@ -152,6 +152,9 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo 
     const ah_al = data[tail_off + 2];
     if (ah_al >> 4 != 0) return error.InvalidMarker;
     info.point_transform = @intCast(ah_al & 0x0F);
+    // The initial predictor 2^(P-Pt-1) needs Pt < P; libjpeg rejects the
+    // scan otherwise (start_pass_lossless: JERR_BAD_PROGRESSION).
+    if (info.point_transform >= frame.precision) return error.InvalidMarker;
     return info;
 }
 

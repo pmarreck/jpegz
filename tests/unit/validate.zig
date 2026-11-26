@@ -21,4 +21,5 @@ test {
     _ = @import("validate_dnl_hierarchy.zig");
     _ = @import("validate_dequant.zig");
     _ = @import("validate_oom.zig");
+    _ = @import("validate_totality.zig");
 }

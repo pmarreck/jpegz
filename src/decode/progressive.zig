@@ -438,6 +438,8 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo 
     info.num_components = data[pos + 2];
     if (info.num_components == 0 or info.num_components > 4)
         return error.InvalidMarker;
+    // libjpeg get_sos: JERR_BAD_LENGTH unless Ls = 6 + 2 * Ns.
+    if (seg_len != 6 + @as(usize, info.num_components) * 2) return error.InvalidMarker;
 
     var i: usize = 0;
     while (i < info.num_components) : (i += 1) {
@@ -467,5 +469,19 @@ pub fn parseSos(data: []const u8, pos: usize, frame: *FrameInfo) Error!ScanInfo 
     // values as progressive_scan_invalid. Rejecting them here also keeps
     // the refinement bit `1 << Al` within i16.
     if (info.al > 13) return error.InvalidMarker;
+    // libjpeg start_pass_phuff_decoder rejects these as JERR_BAD_PROGRESSION;
+    // past them, Se indexes a 64-entry block.
+    if (info.ss == 0) {
+        if (info.se != 0) return error.InvalidMarker;
+    } else {
+        if (info.ss > info.se or info.se > 63 or info.num_components != 1) return error.InvalidMarker;
+    }
+    // A scan may name only tables 0..3 (T.81 Table B.3); libjpeg checks the
+    // ones the scan uses (JERR_NO_HUFF_TABLE). A DC refinement uses none.
+    for (info.comp_indices[0..info.num_components]) |ci| {
+        const c = frame.components[ci];
+        if (info.ss == 0 and info.ah == 0 and c.dc_table > 3) return error.InvalidMarker;
+        if (info.ss != 0 and c.ac_table > 3) return error.InvalidMarker;
+    }
     return info;
 }

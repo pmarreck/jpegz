@@ -102,9 +102,11 @@ test "arithmetic decoded-value faults are 58 and 74 at the interval start, never
 	for ([_]Case{
 		.{ .data = seq, .at = 271, .mask = 0x01, .code = .dct_coefficient_overflow, .offset = 189,
 			.detail = "scan starting here: AC coefficient magnitude 2524 exceeds 1023 for 8-bit samples (T.81 F.1.2)" },
-		// 1025 is category 11: past the 8-bit AC bound, short of the old 0x8000 guard.
-		.{ .data = prog, .at = 365, .mask = 0x10, .code = .dct_coefficient_overflow, .offset = 388,
-			.detail = "restart interval starting here: AC coefficient magnitude 1025 exceeds 1023 for 8-bit samples (T.81 F.1.2)" },
+		// 1024 is category 11: past the 8-bit AC bound, short of the old 0x8000
+		// guard. (Entropy only: the old pin at 365 changed the SOS length,
+		// which is now a typed bad_marker_length, as libjpeg rejects it.)
+		.{ .data = prog, .at = 349, .mask = 0x75, .code = .dct_coefficient_overflow, .offset = 349,
+			.detail = "restart interval starting here: AC coefficient magnitude 1024 exceeds 1023 for 8-bit samples (T.81 F.1.2)" },
 		.{ .data = seq, .at = 205, .mask = 0x92, .code = .dct_coefficient_overflow, .offset = 189,
 			.detail = "scan starting here: DC difference magnitude 2048 exceeds 2047 for 8-bit samples (T.81 F.1.2)" },
 		// 2048 is one past the 8-bit DC bound, in an interleaved DC scan's third interval.

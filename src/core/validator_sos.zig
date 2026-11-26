@@ -98,6 +98,10 @@ pub fn onSos(w: *Walk, s: Seg) Allocator.Error!void {
         const ns = w.data[seg_body_start];
         if (ns == 0 or ns > 4 or (w.sof_component_count != 0 and ns > w.sof_component_count)) {
             try addExactFinding(&w.report, w.allocator, .sos_component_mismatch, seg_body_start, "SOS Ns must be 1..4 and cannot exceed SOF Nf");
+        } else if (seg_len != 6 + @as(usize, ns) * 2) {
+            // T.81 B.2.3 on every T.81 path, as for sequential Huffman below
+            // (libjpeg get_sos: JERR_BAD_LENGTH). The decoders reject it too.
+            try addExactFinding(&w.report, w.allocator, .bad_marker_length, pos, "SOS length must equal 6 + 2*Ns (T.81 B.2.3)");
         }
     }
     // Finding 75 (validate, 2026-11-22): an SOS Td/Ta outside T.81
@@ -292,6 +296,10 @@ pub fn onSos(w: *Walk, s: Seg) Allocator.Error!void {
                         try addFinding(&w.report, w.allocator, .fail, .lossless_predictor_invalid, spec_off, if (w.frame_differential) "differential lossless predictor (Ss) must be 0..7" else "lossless predictor (Ss) must be 1..7");
                     if (ah != 0)
                         try addFinding(&w.report, w.allocator, .fail, .lossless_pointtransform_invalid, spec_off + 2, "lossless scan must have Ah=0 (byte carries only point transform Al)");
+                    // The predictor 2^(P-Pt-1) needs Pt < P (libjpeg
+                    // start_pass_lossless: JERR_BAD_PROGRESSION).
+                    if (w.frame_precision) |p| if (al >= p)
+                        try addFinding(&w.report, w.allocator, .fail, .lossless_pointtransform_invalid, spec_off + 2, "lossless point transform Pt (Al) must be less than the sample precision P");
                 },
                 else => {},
             }

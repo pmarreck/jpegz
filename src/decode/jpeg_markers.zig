@@ -120,10 +120,15 @@ pub fn parseSof(data: []const u8, pos: usize) Error!FrameInfo {
         // class as `sof_zero_dimension` above.
         const tq = data[off + 2];
         if (tq > 3) return fail("sof_bad_quant_selector", error.InvalidMarker);
+        // T.81 B.2.2: H and V are 1..4 (libjpeg: JERR_BAD_SAMPLING). Every
+        // decoder divides and indexes by them, so none may see 0 or 5..15.
+        const h = data[off + 1] >> 4;
+        const v = data[off + 1] & 0x0F;
+        if (h < 1 or h > 4 or v < 1 or v > 4) return fail("sof_bad_sampling", error.InvalidMarker);
         fi.components[i] = .{
             .id = data[off],
-            .h_factor = @intCast(data[off + 1] >> 4),
-            .v_factor = @intCast(data[off + 1] & 0x0F),
+            .h_factor = @intCast(h),
+            .v_factor = @intCast(v),
             .qt_index = tq,
         };
     }
