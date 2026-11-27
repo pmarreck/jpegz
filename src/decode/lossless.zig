@@ -214,9 +214,13 @@ const parseSegmentLength = @import("segment.zig").parseSegmentLength;
 
 /// Decode the entropy-coded scan into a `width*height`-byte pixel
 /// buffer. Sample reconstruction per T.81 §H.1.2:
-///   sample[x,y] = (predictor(x,y) + diff[x,y]) mod 2^precision
-/// with predictor selected by Ss (1..7) and special handling for the
-/// first sample of the image and the first sample of each row.
+///   sample[x,y] = (predictor(x,y) + diff[x,y]) mod 2^16
+/// at every precision, with predictor selected by Ss (1..7) and special
+/// handling for the first sample of the image and the first sample of
+/// each row. Damaged data can leave a sample above 2^P - 1; later
+/// predictions use that 16-bit value, as libjpeg-turbo's UNDIFFERENCE does
+/// (`& 0xFFFF`), and the output is (sample << Pt) truncated to the
+/// sample container, as its scaler casts it.
 fn decodeScan(
     allocator: Allocator,
     data: []const u8,
@@ -238,9 +242,11 @@ fn decodeScan(
     // Output is interleaved per-pixel: pixel(x,y) starts at
     // out[(y*width + x)*nc*sample_bytes]. For P>8 each sample is
     // u16 host-endian — same shape libjpeg-turbo's jpeg16_ path emits.
-    const out = try allocator.alloc(u8, width * height * nc * sample_bytes);
-    errdefer allocator.free(out);
-    @memset(out, 0);
+    // Reconstruction works in 16-bit samples (see above); at P <= 8 the
+    // result is narrowed into a separate one-byte-per-sample buffer.
+    const work = try allocator.alloc(u8, width * height * nc * 2);
+    errdefer allocator.free(work);
+    @memset(work, 0);
 
     // Per-component Huffman table pointers (indexed by scan-component
     // position 0..nc-1, NOT by frame component index). Predictor state
@@ -263,7 +269,6 @@ fn decodeScan(
     const precision: u8 = frame.precision;
     const pt: u4 = scan.point_transform;
     const initial_pred: i32 = @as(i32, 1) << @intCast(@as(u8, precision) - @as(u8, pt) - 1);
-    const sample_mask: i32 = (@as(i32, 1) << @intCast(precision)) - 1;
 
     var br = bitstream.BitReader.init(data[entropy_start..]);
     var rst: RestartCtx = .{ .interval = restart_interval };
@@ -336,11 +341,11 @@ fn decodeScan(
                 const pred: i32 = if ((x == 0 and y == 0) or rst.force_initial)
                     initial_pred
                 else if (rst.samples_since < width)
-                    sampleAt(out, sample_bytes, y, x - 1, width, nc, ci_scan)
+                    sampleAt(work, 2, y, x - 1, width, nc, ci_scan)
                 else if (x == 0)
-                    sampleAt(out, sample_bytes, y - 1, x, width, nc, ci_scan)
+                    sampleAt(work, 2, y - 1, x, width, nc, ci_scan)
                 else
-                    computePredictorAt(scan.predictor, out, sample_bytes, x, y, width, nc, ci_scan);
+                    computePredictorAt(scan.predictor, work, 2, x, y, width, nc, ci_scan);
 
                 const ssss: u8 = dc_tables_per_comp[ci_scan].decode(&br) catch return error.BackendError;
                 if (ssss > 16) return error.BackendError;
@@ -356,8 +361,8 @@ fn decodeScan(
                     const bits = br.readBits(@intCast(ssss)) catch return error.TruncatedStream;
                     diff = @intCast(huffman.extendSign(bits, @intCast(ssss)));
                 }
-                const sample: i32 = (pred + diff) & sample_mask;
-                writeSample(out, sample_bytes, y, x, width, nc, ci_scan, @intCast(sample));
+                const sample: i32 = (pred + diff) & 0xFFFF;
+                writeSample(work, 2, y, x, width, nc, ci_scan, @intCast(sample));
             }
             // After the MCU's components are all decoded, clear the
             // initial-predictor flag and bump the per-RST counter.
@@ -379,14 +384,25 @@ fn decodeScan(
     if (marker >= 0xD0 and marker <= 0xD7) return error.BackendError;
     // T.81 A.4: "The output of the decoder is rescaled by multiplying by
     // 2^Pt." Prediction runs on the reduced samples above, so the rescale
-    // follows the whole scan. The mask keeps the P-bit sample width that
-    // reconstruction already imposes.
-    if (pt > 0) {
-        var i: usize = 0;
-        while (i < width * height * nc) : (i += 1) {
-            const reduced = sampleAt(out, sample_bytes, 0, i, 0, 1, 0);
-            writeSample(out, sample_bytes, 0, i, 0, 1, 0, @intCast((reduced << pt) & sample_mask));
+    // follows the whole scan. The result is truncated to the container, as
+    // libjpeg-turbo's scaler casts `(sample << Al)` to its sample type.
+    const n = width * height * nc;
+    if (sample_bytes == 2) {
+        if (pt > 0) {
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                const reduced = sampleAt(work, 2, 0, i, 0, 1, 0);
+                writeSample(work, 2, 0, i, 0, 1, 0, @truncate(@as(u32, @intCast(reduced)) << pt));
+            }
         }
+        return work;
     }
+    const out = try allocator.alloc(u8, n);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const reduced: u32 = @intCast(sampleAt(work, 2, 0, i, 0, 1, 0));
+        out[i] = @truncate(reduced << pt);
+    }
+    allocator.free(work);
     return out;
 }
