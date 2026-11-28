@@ -5,7 +5,11 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Priority: decode robustness on damaged input
 
-- [ ] Explain the remaining pixel differences from libjpeg-turbo on damaged input (no crashes): 21 of 3,000 12-bit mutants, 34 of 3,000 general and 27 of 3,000 arithmetic; classify each as a parity bug or an accepted recovery difference.
+- [ ] Validation records an invalid progressive scan header and decodes past it: the walker FAIL is non-blocking, the decoder skips that scan and the refinement scans that depend on it (INFO "not judged"), and everything else is judged; then sequential, lossless and arithmetic sequential (context: docs/plan_context/damaged-input-parity-2026-11-27.md).
+- [ ] Implement the owner ruling on IDCT range: 64-bit arithmetic with no wrap at P=8 and P=12, then clamp to 0..2^P-1; revert fa289eb's 12-bit masked table; in-range output stays byte-identical to libjpeg-turbo; tell validate that legal files lose the jpegz-only IDCT-overflow FAIL (context: docs/plan_context/damaged-input-parity-2026-11-27.md).
+- [x] OWNER: for valid files whose IDCT input is far out of range, should jpegz output exact math plus a clamp, emulate libjpeg-turbo's LP64 C path, or leave it as is? Answer: exact math plus a clamp. "We need to do the most correct thing. We don't copy faulty oracle behavior." (done 2026-11-28 00:21 EST).
+
+- [ ] Explain the remaining pixel differences from libjpeg-turbo on damaged input: lossless is fixed (7ceac1f); arithmetic SOF9 (29), 12-bit progressive (21), SOF10 (4) and sequential (3) remain, mostly gated on the IDCT owner question (context: docs/plan_context/damaged-input-parity-2026-11-27.md).
 - [x] Did validate confirm the two code extensions in c86fe21 (bad_marker_length on every T.81 SOS path; lossless_pointtransform_invalid for Pt >= P)? Answer: yes, both as implemented: existing codes, FAIL, exact offsets (done 2026-11-26 18:17 EST; commit c86fe21).
 - [x] Lossless AC-class DHT tables are FAIL 51, non-blocking, and decoding continues (done 2026-11-26 13:24 EST; commit d62051e).
 - [x] 12-bit progressive dequantization panic fixed, and 12-bit IDCT range limiting matches libjpeg-turbo's masked table (done 2026-11-26 15:33 EST; commit fa289eb).
@@ -41,7 +45,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## JPEG entropy and comparison coverage
 
-- [x] Type Huffman-path data faults per validate's rulings F and G: 74, 58, FAIL 8, 56/57, truncated_stream and insufficient_data at file offsets on sequential, progressive and lossless paths; walker parity for DHT overruns, DHT symbols past the bound (51 at the byte), progressive undefined tables (69) and later-scan Ns; corpus report and reds to validate (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md; done 2026-11-23 04:50 EST; commits 34e8c7e, a3eaba7, 175f09c, b30012a, 6294fcf).
 - [x] Lenient Huffman resync on an out-of-order RSTm should account for the skipped intervals (libjpeg's resync advances its MCU count to the marker); today recovery stops at EOI with an extra truncated_stream. Answer: sequential and progressive resync now follow jpeg_resync_to_restart (ahead 1-2: empty interval, marker kept; behind 1-2: skip; else take); pixels outside the empty interval match the original and libjpeg-turbo (done 2026-11-23 06:30 EST; commit 3daedfd).
 - [x] Complete scan consumption, MCU counts, sampling edges, noninterleaved scans, restart cadence and predictor-reset coverage across supported modes. Answer: covered on every supported mode by malformed-input tests plus 2,744 producer controls (all valid, pixel-identical to libjpeg-turbo); the sweep found and fixed lossless category 16 below 16-bit precision; lossless arithmetic has no producer and rests on hand-built tests (context: docs/plan_context/scan-geometry-coverage-2026-11-23.md; done 2026-11-23 07:35 EST).
 - [x] Complete progressive scan-history and coefficient-range constraints with independent normative review and valid boundary controls. Answer: validate reviewed the rules against T.81 G.1.1.1 (rulings I); history faults are FAIL 59 with a history: detail, exact at Ss or AhAl, one per root cause; no new range rule (58 plus one-bit refinements bound it); 2,920 producer files stay valid (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md; done 2026-11-23 09:20 EST).
@@ -57,7 +60,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Build and CLI
 
 - [x] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks. Answer: build.zig compiles the pinned brotliSrc (common, dec, enc) with Zig for each target via -Dbrotli-src/BROTLI_SRC, which every Nix build and the dev shell set; the Windows cross checks now link JXL; system libraries remain the fallback when no source is given (done 2026-11-23 11:45 EST).
-- [ ] Track libjxlz's validator exports pulling the Brotli encoder into the link (FYI sent earlier); the vendored Brotli compiles the encoder until libjxlz drops that dependency.
+- [ ] Bump the libjxlz pin to 9751b6cb or later (its validator no longer reaches the Brotli encoder), then drop brotlienc from the system-Brotli link, the c/enc sources from vendoredBrotli and the build.zig comment saying the validator exports reach the encoder; brotlidec and brotlicommon stay (libjxlz note 2026-11-28).
 - [ ] Add U5b progress controls and pure timestamp-injected rendering; verify rendered output with Peter and test terminal/width degradation.
 
 ## Deferred
