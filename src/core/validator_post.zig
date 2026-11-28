@@ -30,7 +30,10 @@ const Walk = walk.Walk;
 const Seg = walk.Seg;
 const checkSequentialScanField = @import("validator_sos.zig").checkSequentialScanField;
 
-pub fn checkCodec(allocator: Allocator, data: []const u8, variant: Variant, sink: *types.FindingsSink) errors.DecodeError!void {
+/// Decode `data` through the cleanroom codec in recovery mode, recording
+/// findings in `sink`. `skip_scans` lists progressive scans the marker walk
+/// already reported invalid; the decode skips them and judges the rest.
+pub fn checkCodec(allocator: Allocator, data: []const u8, variant: Variant, sink: *types.FindingsSink, skip_scans: []const u64) errors.DecodeError!void {
     if (variant == .lossless_huffman) return @import("../decode/lossless.zig").validate(data, sink);
     // Straight to the JPEG-LS decoder: the general dispatcher would fall
     // through an unsupported JPEG-LS scan into the T.81 decoders.
@@ -42,6 +45,21 @@ pub fn checkCodec(allocator: Allocator, data: []const u8, variant: Variant, sink
         image.deinit(allocator);
         return;
     }
+    // The public dispatcher reaches these decoders for these variants after
+    // the others decline, but its options carry no skip list.
+    if (skip_scans.len > 0) switch (variant) {
+        .progressive_huffman => {
+            var image = try @import("../decode/progressive.zig").decodeWithOptions(allocator, data, .{ .lenient = true, .findings_sink = sink, .skip_scans = skip_scans });
+            image.deinit(allocator);
+            return;
+        },
+        .progressive_arithmetic => {
+            var image = try @import("../decode/arith_decode.zig").decodeWithOptions(allocator, data, .{ .lenient = true, .findings_sink = sink, .skip_scans = skip_scans });
+            image.deinit(allocator);
+            return;
+        },
+        else => {},
+    };
     var image = try types.decodeWithOptions(allocator, data, .{ .lenient = true, .findings_sink = sink });
     image.deinit(allocator);
 }
@@ -244,7 +262,7 @@ pub fn finish(w: *Walk) Allocator.Error!void {
         var sink = types.FindingsSink.init(w.allocator);
         defer sink.deinit();
 
-        const result = checkCodec(w.allocator, w.data, w.report.variant, &sink);
+        const result = checkCodec(w.allocator, w.data, w.report.variant, &sink, w.skip_scans.items);
 
         // Drain sink → report findings (extraneous_bytes,
         // insufficient_data, etc.). Same severity/code/offset/detail

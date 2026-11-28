@@ -520,6 +520,7 @@ test {
 	_ = @import("decode/color.zig");
 	_ = @import("decode/cmyk.zig");
 	_ = @import("decode/findings.zig");
+	_ = @import("decode/progressive_skip.zig");
 }
 
 /// Classify one finding from the legacy `validate` report the way

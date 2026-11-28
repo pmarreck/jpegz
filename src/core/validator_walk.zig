@@ -157,11 +157,16 @@ pub fn skipEntropyData(data: []const u8, start: usize, bit_stuffed: bool) ?usize
 /// True when a FAIL finding other than the reclassified non-blocking ones is
 /// present: the codec check would only rediscover a structural fault.
 pub fn blockingFail(report: *const ValidationReport, nonblocking_fails: usize) bool {
+    return failCount(report) > nonblocking_fails;
+}
+
+/// Number of FAIL findings in the report.
+pub fn failCount(report: *const ValidationReport) usize {
     var fails: usize = 0;
     for (report.findings.items) |finding| {
         if (finding.severity == .fail) fails += 1;
     }
-    return fails > nonblocking_fails;
+    return fails;
 }
 
 /// State of one marker walk, shared by the segment handlers.
@@ -220,6 +225,10 @@ pub const Walk = struct {
     // FAIL findings that do not stop the codec check or the EOI check. They
     // were WARN before 2026-11-05; reclassifying them must not drop findings.
     nonblocking_fails: usize = 0,
+    // SOS marker offsets of progressive scans whose headers drew a FAIL. The
+    // codec check decodes past them (owner, 2026-11-28: record the error and
+    // parse past it), so their FAILs do not block it.
+    skip_scans: std.ArrayList(u64) = .empty,
 };
 
 /// The segment being handled: its marker and body bounds.

@@ -23,4 +23,5 @@ test {
     _ = @import("validate_totality.zig");
     _ = @import("validate_lossless_range.zig");
     _ = @import("validate_idct_range.zig");
+    _ = @import("validate_scan_skip.zig");
 }

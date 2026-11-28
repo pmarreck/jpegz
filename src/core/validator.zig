@@ -70,6 +70,7 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
     var w = Walk{ .data = data, .allocator = allocator, .report = report };
     errdefer w.report.deinit(allocator);
     defer w.dht_segments.deinit(allocator);
+    defer w.skip_scans.deinit(allocator);
     var pos: usize = 2;
 
     // ── Step 2: Walk markers ──────────────────────────────────
@@ -155,7 +156,15 @@ pub fn validate(allocator: Allocator, data: []const u8) Allocator.Error!Validati
         if (classifyVariant(marker_byte)) |variant| {
             try sof.onSof(&w, seg, variant);
         } else if (marker_byte == Marker.SOS) {
+            const fails_before = walk.failCount(&w.report);
             try sos.onSos(&w, seg);
+            // A progressive scan with an invalid header is skipped by the
+            // codec check, which still judges the scans around it.
+            const scan_fails = walk.failCount(&w.report) - fails_before;
+            if (scan_fails > 0 and (w.report.variant == .progressive_huffman or w.report.variant == .progressive_arithmetic)) {
+                try w.skip_scans.append(allocator, marker_offset);
+                w.nonblocking_fails += scan_fails;
+            }
             // Entropy-coded data follows. Skip until we hit a non-RST,
             // non-padding marker (likely EOI, but could be another SOS
             // for progressive/multi-scan sequences).

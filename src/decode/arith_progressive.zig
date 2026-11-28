@@ -7,6 +7,7 @@ const types = @import("../core/types.zig");
 const arith_coder = @import("arith_coder.zig");
 const baseline = @import("baseline.zig");
 const progressive = @import("progressive.zig");
+const skip = @import("progressive_skip.zig");
 const findings_mod = @import("findings.zig");
 const Error = @import("arith_decode.zig").Error;
 const DecodeOptions = @import("arith_decode.zig").DecodeOptions;
@@ -35,6 +36,7 @@ pub fn decodeArithProgressive(allocator: Allocator, data: []const u8, options: D
     // ScanState persists DAC overrides across scans; the per-scan
     // resets happen inside each SOS branch via `state.startScan(...)`.
     var state: arith_coder.ScanState = arith_coder.ScanState.init(&.{});
+    var skipper = skip.Skipper{ .list = options.skip_scans };
 
     errdefer {
         var i: usize = 0;
@@ -101,8 +103,10 @@ pub fn decodeArithProgressive(allocator: Allocator, data: []const u8, options: D
             0xDA => { // SOS
                 if (!seen_sof) return error.InvalidMarker;
                 const sos_at = pos - 2;
+                if (skipper.skipListed(data, sos_at, &pos, &frame.?)) continue;
                 const scan = try progressive.parseSos(data, pos, &frame.?);
                 pos += progressive.parseSegmentLength(data, pos);
+                if (try skipper.skipRefinement(data, sos_at, &pos, &scan, options.findings_sink)) continue;
                 // DAC overrides apply scan-wide; copy them onto the
                 // ScanState before the per-scan reset (init zeros all
                 // stats but preserves the DAC fields we just wrote).

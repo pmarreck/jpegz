@@ -47,6 +47,10 @@ comptime {
 pub const DecodeOptions = struct {
     findings_sink: ?*findings_mod.FindingsSink = null,
     lenient: bool = false,
+    /// Validation only, progressive (SOF10) frames: SOS marker offsets of
+    /// scans the marker walk already reported invalid (see
+    /// `progressive.DecodeOptions.skip_scans`).
+    skip_scans: []const u64 = &.{},
 };
 
 /// Where an arithmetic entropy segment ends (T.81 D.1.8, D.2.6), as offsets

@@ -41,6 +41,7 @@ const jpeg_markers = @import("jpeg_markers.zig");
 
 // Parts of this decoder live in sibling files (see Layout above).
 const decodeOneScan = @import("progressive_scan.zig").decodeOneScan;
+const skip = @import("progressive_skip.zig");
 pub const CoefDump = @import("progressive_dump.zig").CoefDump;
 pub const decodeAndDumpCoefs = @import("progressive_dump.zig").decodeAndDumpCoefs;
 pub const assembleProgressiveGeneric = @import("progressive_assemble.zig").assembleProgressiveGeneric;
@@ -86,6 +87,10 @@ pub const DecodeOptions = struct {
     /// Opt into partial-pixel recovery for truncated entropy and restart
     /// deviations. An attached sink records warnings or failure findings.
     lenient: bool = false,
+    /// Validation only: SOS marker offsets of scans the marker walk already
+    /// reported invalid. They are skipped, with any later scan that refines
+    /// what they set, so the rest of the file is still decoded and judged.
+    skip_scans: []const u64 = &.{},
 };
 
 /// Decode a supported progressive JPEG (T.81 SOF2), with recovery disabled.
@@ -122,6 +127,7 @@ pub fn decodeWithOptions(
     var restart_interval: u16 = 0;
     // JFIF / Adobe APP14 seen before the frame decides RGB passthrough.
     var color_signals: cmyk_mod.ColorSignals = .{};
+    var skipper = skip.Skipper{ .list = options.skip_scans };
 
     errdefer {
         var i: usize = 0;
@@ -222,8 +228,12 @@ pub fn decodeWithOptions(
             }, // DRI in progressive — v1.x follow-up
             0xDA => { // SOS
                 if (!seen_sof) return error.InvalidMarker;
+                const sos_at = pos - 2;
+                if (skipper.skipListed(data, sos_at, &pos, &frame.?)) continue;
                 const scan = try parseSos(data, pos, &frame.?);
                 pos += parseSegmentLength(data, pos);
+                if (try skipper.skipRefinement(data, sos_at, &pos, &scan, options.findings_sink)) continue;
+                if (try skipper.skipTableless(data, sos_at, &pos, &scan, &frame.?, &dc_tables, &ac_tables, options.findings_sink)) continue;
                 // Decode this scan into coefficient buffers; return the
                 // byte position past the entropy data (just before the
                 // next marker's 0xFF).
