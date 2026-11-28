@@ -151,7 +151,6 @@ pub fn decodeArithProgressive(allocator: Allocator, data: []const u8, options: D
             max_h,
             max_v,
             progressive.frameRgbPassthrough(&frame.?, color_signals),
-            null,
         ),
         else => return error.NotImplemented, // 12-bit progressive arithmetic — corpus has none yet.
     };

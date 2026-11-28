@@ -266,8 +266,8 @@ pub fn decodeWithOptions(
     // Dispatch on precision at comptime via the generic Phase 2.
     const rgb_passthrough = frameRgbPassthrough(&frame.?, color_signals);
     return switch (frame.?.precision) {
-        8 => try assembleProgressiveGeneric(8, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, rgb_passthrough, options.findings_sink),
-        12 => try assembleProgressiveGeneric(12, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, rgb_passthrough, options.findings_sink),
+        8 => try assembleProgressiveGeneric(8, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, rgb_passthrough),
+        12 => try assembleProgressiveGeneric(12, allocator, &frame.?, &quant_tables, &coefs, &blocks_w, &blocks_h, max_h, max_v, rgb_passthrough),
         else => unreachable, // gated above
     };
 }

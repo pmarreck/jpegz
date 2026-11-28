@@ -87,38 +87,6 @@ inline fn rangeLimit(comptime SampleT: type, comptime max: comptime_int, v: anyt
     return @intCast(v);
 }
 
-// Wrapping-with-detection helpers. The production islow IDCT is a port of
-// libjpeg-turbo's jpeg_idct_islow, whose C `int` arithmetic wraps silently on
-// overflow (two's complement). Corrupt/out-of-range coefficients (e.g. from a
-// lenient decode of a malformed stream) can push i32 intermediates past their
-// range; Zig's checked arithmetic would PANIC. These helpers wrap exactly like
-// C (byte-identical to the oracle even on corrupt input) AND OR the overflow
-// into `of` so the caller can emit `dct_coefficient_overflow` (crash → signal).
-inline fn oadd(of: *u1, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
-    const r = @addWithOverflow(a, b);
-    of.* |= r[1];
-    return r[0];
-}
-inline fn osub(of: *u1, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
-    const r = @subWithOverflow(a, b);
-    of.* |= r[1];
-    return r[0];
-}
-inline fn omul(of: *u1, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
-    const r = @mulWithOverflow(a, b);
-    of.* |= r[1];
-    return r[0];
-}
-inline fn oshl(of: *u1, a: anytype, comptime n: comptime_int) @TypeOf(a) {
-    const r = @shlWithOverflow(a, @as(std.math.Log2Int(@TypeOf(a)), n));
-    of.* |= r[1];
-    return r[0];
-}
-inline fn odescale(of: *u1, comptime T: type, x: T, comptime n: comptime_int) T {
-    // Symmetric rounding right-shift (wrapping add of the 0.5-ULP bias).
-    return oadd(of, x, @as(T, 1) << (n - 1)) >> n;
-}
-
 /// Return the host integer type used for a P-bit DCT IDCT output sample.
 /// P=8 → u8, P=12 → u16.
 pub fn Sample(comptime P: u8) type {
@@ -130,9 +98,12 @@ pub fn Sample(comptime P: u8) type {
 }
 
 /// Return the host integer type used for intermediate accumulators at
-/// precision P: i64 at both. A dequantized coefficient fits i32, and from
-/// there no intermediate of either pass reaches 2^54, so nothing can wrap:
-/// a legal file with large quantizers (a quantizer of 244 times a legal
+/// precision P: i64 at both. A dequantized coefficient fits i32 (|c| <=
+/// 2^31). Worked through islow's sums and 13-bit constants, the column
+/// pass stays below 2^49, its descaled workspace below 2^38, and the row
+/// pass below 2^57, so nothing can overflow. The arithmetic is checked: in
+/// safe builds a wrong bound panics instead of wrapping, and a test drives
+/// the extremes. A legal file with large quantizers (a quantizer of 244 times a legal
 /// 8-bit coefficient of 1023) gets the exact islow value, then the clamp.
 /// With i32 at P=8 those intermediates wrapped and produced garbage.
 /// In-range output is unchanged, byte-identical to libjpeg-turbo.
@@ -146,17 +117,15 @@ fn Accumulator(comptime P: u8) type {
 
 /// 8-bit thin wrapper around the comptime-generic IDCT. Public stable
 /// API; cleanroom 8-bit callers use this. Byte-identical to
-/// libjpeg-turbo's `jpeg_idct_islow`.
-/// Returns true if any i32/i64 intermediate wrapped (corrupt coefficients).
-pub fn idct8x8(coeffs: *const [64]i32, out: *[64]u8) bool {
-    return idct8x8Generic(8, coeffs, out);
+/// libjpeg-turbo's `jpeg_idct_islow` in range.
+pub fn idct8x8(coeffs: *const [64]i32, out: *[64]u8) void {
+    idct8x8Generic(8, coeffs, out);
 }
 
 /// 12-bit thin wrapper. Cleanroom SOF1@P=12 (A1) calls this. Output is
 /// u16 host-endian, range [0, 4095].
-/// Returns true if any intermediate wrapped (corrupt coefficients).
-pub fn idct8x8_12(coeffs: *const [64]i32, out: *[64]u16) bool {
-    return idct8x8Generic(12, coeffs, out);
+pub fn idct8x8_12(coeffs: *const [64]i32, out: *[64]u16) void {
+    idct8x8Generic(12, coeffs, out);
 }
 
 /// libjpeg-turbo's `jpeg_idct_islow` algorithm, generic over precision
@@ -165,18 +134,14 @@ pub fn idct8x8_12(coeffs: *const [64]i32, out: *[64]u16) bool {
 /// constants and rounding ties as libjpeg, so in-range output matches
 /// `jpeg_idct_islow` (P=8) and `jpeg_idct_12_islow` (P=12) byte for byte.
 /// Out of range it computes without wrapping and clamps, where libjpeg
-/// wraps. The returned flag reports an intermediate overflow, which i64
-/// accumulators with i32 inputs cannot produce.
-pub fn idct8x8Generic(comptime P: u8, coeffs: *const [64]i32, out: *[64]Sample(P)) bool {
+/// wraps (see `Accumulator` for why nothing can overflow).
+pub fn idct8x8Generic(comptime P: u8, coeffs: *const [64]i32, out: *[64]Sample(P)) void {
     const Acc = Accumulator(P);
     const SampleT = Sample(P);
     const level_shift: comptime_int = 1 << (P - 1); // 128 for P=8, 2048 for P=12
     const sample_max: comptime_int = (1 << P) - 1; // 255 for P=8, 4095 for P=12
     const PASS1_BITS: comptime_int = pass1Bits(P);
     var workspace: [64]Acc = undefined;
-    // Overflow accumulator. C islow wraps silently; we wrap identically (byte-
-    // exact) and record it so the caller can emit dct_coefficient_overflow.
-    var of: u1 = 0;
 
     // ── Column pass: process 8 columns of the 8×8 input ──────────
     var ctr: usize = 0;
@@ -192,7 +157,7 @@ pub fn idct8x8Generic(comptime P: u8, coeffs: *const [64]i32, out: *[64]Sample(P
 
         // Shortcut: all-AC-zero column is the DC smeared up by PASS1_BITS.
         if (c1 == 0 and c2 == 0 and c3 == 0 and c4 == 0 and c5 == 0 and c6 == 0 and c7 == 0) {
-            const dcval: Acc = oshl(&of, c0, PASS1_BITS);
+            const dcval: Acc = @shlExact(c0, PASS1_BITS);
             workspace[0 * 8 + ctr] = dcval;
             workspace[1 * 8 + ctr] = dcval;
             workspace[2 * 8 + ctr] = dcval;
@@ -207,19 +172,19 @@ pub fn idct8x8Generic(comptime P: u8, coeffs: *const [64]i32, out: *[64]Sample(P
         // Even part: rotation by π/4 followed by butterflies.
         var z2: Acc = c2;
         var z3: Acc = c6;
-        var z1: Acc = omul(&of, oadd(&of, z2, z3), FIX_0_541196100);
-        const tmp2: Acc = oadd(&of, z1, omul(&of, z3, -FIX_1_847759065));
-        const tmp3: Acc = oadd(&of, z1, omul(&of, z2, FIX_0_765366865));
+        var z1: Acc = (z2 + z3) * FIX_0_541196100;
+        const tmp2: Acc = z1 + (z3 * -FIX_1_847759065);
+        const tmp3: Acc = z1 + (z2 * FIX_0_765366865);
 
         z2 = c0;
         z3 = c4;
-        const tmp0: Acc = oshl(&of, oadd(&of, z2, z3), CONST_BITS);
-        const tmp1: Acc = oshl(&of, osub(&of, z2, z3), CONST_BITS);
+        const tmp0: Acc = @shlExact((z2 + z3), CONST_BITS);
+        const tmp1: Acc = @shlExact((z2 - z3), CONST_BITS);
 
-        const tmp10: Acc = oadd(&of, tmp0, tmp3);
-        const tmp13: Acc = osub(&of, tmp0, tmp3);
-        const tmp11: Acc = oadd(&of, tmp1, tmp2);
-        const tmp12: Acc = osub(&of, tmp1, tmp2);
+        const tmp10: Acc = tmp0 + tmp3;
+        const tmp13: Acc = tmp0 - tmp3;
+        const tmp11: Acc = tmp1 + tmp2;
+        const tmp12: Acc = tmp1 - tmp2;
 
         // Odd part: butterflies + rotations to extract odd terms.
         var ot0: Acc = c7;
@@ -227,39 +192,39 @@ pub fn idct8x8Generic(comptime P: u8, coeffs: *const [64]i32, out: *[64]Sample(P
         var ot2: Acc = c3;
         var ot3: Acc = c1;
 
-        z1 = oadd(&of, ot0, ot3);
-        z2 = oadd(&of, ot1, ot2);
-        z3 = oadd(&of, ot0, ot2);
-        var z4: Acc = oadd(&of, ot1, ot3);
-        const z5: Acc = omul(&of, oadd(&of, z3, z4), FIX_1_175875602);
+        z1 = ot0 + ot3;
+        z2 = ot1 + ot2;
+        z3 = ot0 + ot2;
+        var z4: Acc = ot1 + ot3;
+        const z5: Acc = (z3 + z4) * FIX_1_175875602;
 
-        ot0 = omul(&of, ot0, FIX_0_298631336);
-        ot1 = omul(&of, ot1, FIX_2_053119869);
-        ot2 = omul(&of, ot2, FIX_3_072711026);
-        ot3 = omul(&of, ot3, FIX_1_501321110);
-        z1 = omul(&of, z1, -FIX_0_899976223);
-        z2 = omul(&of, z2, -FIX_2_562915447);
-        z3 = omul(&of, z3, -FIX_1_961570560);
-        z4 = omul(&of, z4, -FIX_0_390180644);
+        ot0 = ot0 * FIX_0_298631336;
+        ot1 = ot1 * FIX_2_053119869;
+        ot2 = ot2 * FIX_3_072711026;
+        ot3 = ot3 * FIX_1_501321110;
+        z1 = z1 * -FIX_0_899976223;
+        z2 = z2 * -FIX_2_562915447;
+        z3 = z3 * -FIX_1_961570560;
+        z4 = z4 * -FIX_0_390180644;
 
-        z3 = oadd(&of, z3, z5);
-        z4 = oadd(&of, z4, z5);
+        z3 = z3 + z5;
+        z4 = z4 + z5;
 
-        ot0 = oadd(&of, ot0, oadd(&of, z1, z3));
-        ot1 = oadd(&of, ot1, oadd(&of, z2, z4));
-        ot2 = oadd(&of, ot2, oadd(&of, z2, z3));
-        ot3 = oadd(&of, ot3, oadd(&of, z1, z4));
+        ot0 = ot0 + (z1 + z3);
+        ot1 = ot1 + (z2 + z4);
+        ot2 = ot2 + (z2 + z3);
+        ot3 = ot3 + (z1 + z4);
 
         // Final butterflies + rounding right-shift.
         const shift: comptime_int = CONST_BITS - PASS1_BITS;
-        workspace[0 * 8 + ctr] = odescale(&of, Acc, oadd(&of, tmp10, ot3), shift);
-        workspace[7 * 8 + ctr] = odescale(&of, Acc, osub(&of, tmp10, ot3), shift);
-        workspace[1 * 8 + ctr] = odescale(&of, Acc, oadd(&of, tmp11, ot2), shift);
-        workspace[6 * 8 + ctr] = odescale(&of, Acc, osub(&of, tmp11, ot2), shift);
-        workspace[2 * 8 + ctr] = odescale(&of, Acc, oadd(&of, tmp12, ot1), shift);
-        workspace[5 * 8 + ctr] = odescale(&of, Acc, osub(&of, tmp12, ot1), shift);
-        workspace[3 * 8 + ctr] = odescale(&of, Acc, oadd(&of, tmp13, ot0), shift);
-        workspace[4 * 8 + ctr] = odescale(&of, Acc, osub(&of, tmp13, ot0), shift);
+        workspace[0 * 8 + ctr] = descale(Acc, (tmp10 + ot3), shift);
+        workspace[7 * 8 + ctr] = descale(Acc, (tmp10 - ot3), shift);
+        workspace[1 * 8 + ctr] = descale(Acc, (tmp11 + ot2), shift);
+        workspace[6 * 8 + ctr] = descale(Acc, (tmp11 - ot2), shift);
+        workspace[2 * 8 + ctr] = descale(Acc, (tmp12 + ot1), shift);
+        workspace[5 * 8 + ctr] = descale(Acc, (tmp12 - ot1), shift);
+        workspace[3 * 8 + ctr] = descale(Acc, (tmp13 + ot0), shift);
+        workspace[4 * 8 + ctr] = descale(Acc, (tmp13 - ot0), shift);
     }
 
     // ── Row pass: process 8 rows of the workspace ────────────────
@@ -276,7 +241,7 @@ pub fn idct8x8Generic(comptime P: u8, coeffs: *const [64]i32, out: *[64]Sample(P
         const c7: Acc = workspace[base + 7];
 
         if (c1 == 0 and c2 == 0 and c3 == 0 and c4 == 0 and c5 == 0 and c6 == 0 and c7 == 0) {
-            const dcval: Acc = oadd(&of, odescale(&of, Acc, c0, PASS1_BITS + 3), level_shift);
+            const dcval: Acc = descale(Acc, c0, PASS1_BITS + 3) + level_shift;
             const v: SampleT = rangeLimit(SampleT, sample_max, dcval);
             out[base + 0] = v;
             out[base + 1] = v;
@@ -291,60 +256,58 @@ pub fn idct8x8Generic(comptime P: u8, coeffs: *const [64]i32, out: *[64]Sample(P
 
         var z2: Acc = c2;
         var z3: Acc = c6;
-        var z1: Acc = omul(&of, oadd(&of, z2, z3), FIX_0_541196100);
-        const tmp2: Acc = oadd(&of, z1, omul(&of, z3, -FIX_1_847759065));
-        const tmp3: Acc = oadd(&of, z1, omul(&of, z2, FIX_0_765366865));
+        var z1: Acc = (z2 + z3) * FIX_0_541196100;
+        const tmp2: Acc = z1 + (z3 * -FIX_1_847759065);
+        const tmp3: Acc = z1 + (z2 * FIX_0_765366865);
 
         z2 = c0;
         z3 = c4;
-        const tmp0: Acc = oshl(&of, oadd(&of, z2, z3), CONST_BITS);
-        const tmp1: Acc = oshl(&of, osub(&of, z2, z3), CONST_BITS);
+        const tmp0: Acc = @shlExact((z2 + z3), CONST_BITS);
+        const tmp1: Acc = @shlExact((z2 - z3), CONST_BITS);
 
-        const tmp10: Acc = oadd(&of, tmp0, tmp3);
-        const tmp13: Acc = osub(&of, tmp0, tmp3);
-        const tmp11: Acc = oadd(&of, tmp1, tmp2);
-        const tmp12: Acc = osub(&of, tmp1, tmp2);
+        const tmp10: Acc = tmp0 + tmp3;
+        const tmp13: Acc = tmp0 - tmp3;
+        const tmp11: Acc = tmp1 + tmp2;
+        const tmp12: Acc = tmp1 - tmp2;
 
         var ot0: Acc = c7;
         var ot1: Acc = c5;
         var ot2: Acc = c3;
         var ot3: Acc = c1;
 
-        z1 = oadd(&of, ot0, ot3);
-        z2 = oadd(&of, ot1, ot2);
-        z3 = oadd(&of, ot0, ot2);
-        var z4: Acc = oadd(&of, ot1, ot3);
-        const z5: Acc = omul(&of, oadd(&of, z3, z4), FIX_1_175875602);
+        z1 = ot0 + ot3;
+        z2 = ot1 + ot2;
+        z3 = ot0 + ot2;
+        var z4: Acc = ot1 + ot3;
+        const z5: Acc = (z3 + z4) * FIX_1_175875602;
 
-        ot0 = omul(&of, ot0, FIX_0_298631336);
-        ot1 = omul(&of, ot1, FIX_2_053119869);
-        ot2 = omul(&of, ot2, FIX_3_072711026);
-        ot3 = omul(&of, ot3, FIX_1_501321110);
-        z1 = omul(&of, z1, -FIX_0_899976223);
-        z2 = omul(&of, z2, -FIX_2_562915447);
-        z3 = omul(&of, z3, -FIX_1_961570560);
-        z4 = omul(&of, z4, -FIX_0_390180644);
+        ot0 = ot0 * FIX_0_298631336;
+        ot1 = ot1 * FIX_2_053119869;
+        ot2 = ot2 * FIX_3_072711026;
+        ot3 = ot3 * FIX_1_501321110;
+        z1 = z1 * -FIX_0_899976223;
+        z2 = z2 * -FIX_2_562915447;
+        z3 = z3 * -FIX_1_961570560;
+        z4 = z4 * -FIX_0_390180644;
 
-        z3 = oadd(&of, z3, z5);
-        z4 = oadd(&of, z4, z5);
+        z3 = z3 + z5;
+        z4 = z4 + z5;
 
-        ot0 = oadd(&of, ot0, oadd(&of, z1, z3));
-        ot1 = oadd(&of, ot1, oadd(&of, z2, z4));
-        ot2 = oadd(&of, ot2, oadd(&of, z2, z3));
-        ot3 = oadd(&of, ot3, oadd(&of, z1, z4));
+        ot0 = ot0 + (z1 + z3);
+        ot1 = ot1 + (z2 + z4);
+        ot2 = ot2 + (z2 + z3);
+        ot3 = ot3 + (z1 + z4);
 
         const shift: comptime_int = CONST_BITS + PASS1_BITS + 3;
-        out[base + 0] = rangeLimit(SampleT, sample_max, oadd(&of, odescale(&of, Acc, oadd(&of, tmp10, ot3), shift), level_shift));
-        out[base + 7] = rangeLimit(SampleT, sample_max, oadd(&of, odescale(&of, Acc, osub(&of, tmp10, ot3), shift), level_shift));
-        out[base + 1] = rangeLimit(SampleT, sample_max, oadd(&of, odescale(&of, Acc, oadd(&of, tmp11, ot2), shift), level_shift));
-        out[base + 6] = rangeLimit(SampleT, sample_max, oadd(&of, odescale(&of, Acc, osub(&of, tmp11, ot2), shift), level_shift));
-        out[base + 2] = rangeLimit(SampleT, sample_max, oadd(&of, odescale(&of, Acc, oadd(&of, tmp12, ot1), shift), level_shift));
-        out[base + 5] = rangeLimit(SampleT, sample_max, oadd(&of, odescale(&of, Acc, osub(&of, tmp12, ot1), shift), level_shift));
-        out[base + 3] = rangeLimit(SampleT, sample_max, oadd(&of, odescale(&of, Acc, oadd(&of, tmp13, ot0), shift), level_shift));
-        out[base + 4] = rangeLimit(SampleT, sample_max, oadd(&of, odescale(&of, Acc, osub(&of, tmp13, ot0), shift), level_shift));
+        out[base + 0] = rangeLimit(SampleT, sample_max, (descale(Acc, (tmp10 + ot3), shift) + level_shift));
+        out[base + 7] = rangeLimit(SampleT, sample_max, (descale(Acc, (tmp10 - ot3), shift) + level_shift));
+        out[base + 1] = rangeLimit(SampleT, sample_max, (descale(Acc, (tmp11 + ot2), shift) + level_shift));
+        out[base + 6] = rangeLimit(SampleT, sample_max, (descale(Acc, (tmp11 - ot2), shift) + level_shift));
+        out[base + 2] = rangeLimit(SampleT, sample_max, (descale(Acc, (tmp12 + ot1), shift) + level_shift));
+        out[base + 5] = rangeLimit(SampleT, sample_max, (descale(Acc, (tmp12 - ot1), shift) + level_shift));
+        out[base + 3] = rangeLimit(SampleT, sample_max, (descale(Acc, (tmp13 + ot0), shift) + level_shift));
+        out[base + 4] = rangeLimit(SampleT, sample_max, (descale(Acc, (tmp13 - ot0), shift) + level_shift));
     }
-
-    return of != 0;
 }
 
 // ─────── Reference fixed-point-decimal IDCT (kept for tests / oracle) ──────

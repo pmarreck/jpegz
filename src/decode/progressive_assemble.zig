@@ -9,7 +9,6 @@ const huffman = @import("huffman.zig");
 const idct = @import("idct.zig");
 const color = @import("color.zig");
 const cmyk_mod = @import("cmyk.zig");
-const findings_mod = @import("findings.zig");
 const jpeg_markers = @import("jpeg_markers.zig");
 const ZIGZAG = @import("progressive.zig").ZIGZAG;
 const FrameInfo = @import("progressive.zig").FrameInfo;
@@ -27,7 +26,7 @@ fn assembleProgressive(
     max_h: u32,
     max_v: u32,
 ) Error!types.Image {
-    return assembleProgressiveGeneric(8, allocator, frame, quant_tables, coefs, blocks_w, blocks_h, max_h, max_v, false, null);
+    return assembleProgressiveGeneric(8, allocator, frame, quant_tables, coefs, blocks_w, blocks_h, max_h, max_v, false);
 }
 
 /// Phase 2 of progressive decode, generic over precision P ∈ {8, 12}.
@@ -66,7 +65,6 @@ pub fn assembleProgressiveGeneric(
     max_v: u32,
     /// The 3-component frame already holds R,G,B (cmyk.rgbPassthrough).
     rgb_passthrough: bool,
-    sink: ?*findings_mod.FindingsSink,
 ) Error!types.Image {
     const Sample = idct.Sample(P); // u8 for P=8, u16 for P=12.
     const channels: u8 = frame.num_components;
@@ -90,8 +88,6 @@ pub fn assembleProgressiveGeneric(
     }
 
     // Per block: dequant in zig-zag space, un-zig-zag, IDCT, copy.
-    // Set if any block's IDCT wrapped on out-of-range coefficients (corrupt).
-    var of_flag = std.atomic.Value(bool).init(false);
     i = 0;
     while (i < channels) : (i += 1) {
         const comp = &frame.components[i];
@@ -115,7 +111,7 @@ pub fn assembleProgressiveGeneric(
                     natural[ZIGZAG[n]] = @as(i32, zz[n]) * @as(i32, qt[n]);
                 }
                 var block_pix: [64]Sample = undefined;
-                if (idct.idct8x8Generic(P, &natural, &block_pix)) of_flag.store(true, .monotonic);
+                idct.idct8x8Generic(P, &natural, &block_pix);
                 // Copy 8×8 spatial block into plane.
                 var py: u32 = 0;
                 while (py < 8) : (py += 1) {
@@ -128,10 +124,6 @@ pub fn assembleProgressiveGeneric(
                 }
             }
         }
-    }
-
-    if (of_flag.load(.monotonic)) {
-        if (sink) |sk| sk.emit(.fail, .dct_coefficient_overflow, null, "IDCT intermediate overflowed on out-of-range DCT coefficients (corrupt entropy data; wrapped like libjpeg)") catch return error.OutOfMemory;
     }
 
     // Free coefficient buffers (no longer needed). Each slot is emptied as

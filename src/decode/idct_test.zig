@@ -10,7 +10,7 @@ const Sample = idct.Sample;
 test "idct8x8 of all-zero coefficients yields uniform 128" {
     const coeffs = [_]i32{0} ** 64;
     var out: [64]u8 = undefined;
-    _ = idct8x8(&coeffs, &out);
+    idct8x8(&coeffs, &out);
     for (out) |s| try std.testing.expectEqual(@as(u8, 128), s);
 }
 
@@ -18,7 +18,7 @@ test "idct8x8 of DC-only with positive amplitude yields uniform brighter" {
     var coeffs = [_]i32{0} ** 64;
     coeffs[0] = 256; // DC coefficient: shifts the mean up
     var out: [64]u8 = undefined;
-    _ = idct8x8(&coeffs, &out);
+    idct8x8(&coeffs, &out);
     // Per the formula: output = NORM[0]*NORM[0] * coeff * 1 * 1 * 0.25 + 128
     //                = (1/√2)² * 256 * 0.25 + 128 = 0.5 * 64 + 128 = 160
     for (out) |s| try std.testing.expectEqual(@as(u8, 160), s);
@@ -28,7 +28,7 @@ test "idct8x8 of DC-only with negative amplitude yields uniform darker" {
     var coeffs = [_]i32{0} ** 64;
     coeffs[0] = -256;
     var out: [64]u8 = undefined;
-    _ = idct8x8(&coeffs, &out);
+    idct8x8(&coeffs, &out);
     // -256 → 128 - 32 = 96
     for (out) |s| try std.testing.expectEqual(@as(u8, 96), s);
 }
@@ -37,11 +37,11 @@ test "idct8x8 clamps to 0..255" {
     var coeffs = [_]i32{0} ** 64;
     coeffs[0] = 4096; // way too large; output would overflow without clamp
     var out: [64]u8 = undefined;
-    _ = idct8x8(&coeffs, &out);
+    idct8x8(&coeffs, &out);
     for (out) |s| try std.testing.expectEqual(@as(u8, 255), s);
 
     coeffs[0] = -4096;
-    _ = idct8x8(&coeffs, &out);
+    idct8x8(&coeffs, &out);
     for (out) |s| try std.testing.expectEqual(@as(u8, 0), s);
 }
 
@@ -51,7 +51,7 @@ test "idct8x8Generic all-zero coefficients yield uniform level-shift at every P"
     inline for (.{ 8, 12 }) |P| {
         const coeffs = [_]i32{0} ** 64;
         var out: [64]Sample(P) = undefined;
-        _ = idct8x8Generic(P, &coeffs, &out);
+        idct8x8Generic(P, &coeffs, &out);
         const expected: Sample(P) = 1 << (P - 1);
         for (out) |s| try std.testing.expectEqual(expected, s);
     }
@@ -62,7 +62,7 @@ test "idct8x8Generic DC-only positive amplitude yields uniform brighter at every
         var coeffs = [_]i32{0} ** 64;
         coeffs[0] = 256; // DC coefficient
         var out: [64]Sample(P) = undefined;
-        _ = idct8x8Generic(P, &coeffs, &out);
+        idct8x8Generic(P, &coeffs, &out);
         // Formula at every P: NORM[0]² × DC × 0.25 + level_shift
         //   = (1/√2)² × 256 × 0.25 + 2^(P-1)
         //   = 0.5 × 64 + 2^(P-1) = 32 + 2^(P-1)
@@ -90,10 +90,10 @@ test "out-of-range IDCT output is the exact value, clamped, at every precision" 
         var coeffs = [_]i32{0} ** 64;
         coeffs[0] = c.dc;
         var out8: [64]u8 = undefined;
-        try std.testing.expect(!idct8x8Generic(8, &coeffs, &out8));
+        idct8x8Generic(8, &coeffs, &out8);
         for (out8) |s| try std.testing.expectEqual(c.p8, s);
         var out12: [64]u16 = undefined;
-        try std.testing.expect(!idct8x8Generic(12, &coeffs, &out12));
+        idct8x8Generic(12, &coeffs, &out12);
         for (out12) |s| try std.testing.expectEqual(c.p12, s);
     }
 }
@@ -114,7 +114,7 @@ test "idct8x8_fpd (fixed-point-decimal oracle) matches production islow idct8x8 
         }
         var a: [64]u8 = undefined;
         var b: [64]u8 = undefined;
-        _ = idct8x8(&coeffs, &a);
+        idct8x8(&coeffs, &a);
         idct8x8_fpd(&coeffs, &b);
         for (a, b) |va, vb| {
             const d = if (va > vb) va - vb else vb - va;
@@ -164,7 +164,7 @@ test "idct computes absurd coefficients without wrapping, then clamps" {
     inline for (.{ 8, 12 }) |P| {
         const max: f64 = (1 << P) - 1;
         var out: [64]Sample(P) = undefined;
-        try std.testing.expect(!idct8x8Generic(P, &coeffs, &out));
+        idct8x8Generic(P, &coeffs, &out);
         const ref = referenceIdct(&coeffs, (max + 1) / 2);
         var clamped: usize = 0;
         for (out, ref) |s, r| {
@@ -182,13 +182,62 @@ test "idct computes absurd coefficients without wrapping, then clamps" {
     }
 }
 
-test "idct8x8 reports NO overflow on valid in-range coefficients" {
-    // Realistic small block must not false-positive the overflow flag.
-    var coeffs = [_]i32{0} ** 64;
-    coeffs[0] = 320;
-    coeffs[1] = -48;
-    coeffs[8] = 24;
-    var out: [64]u8 = undefined;
-    const overflowed = idct8x8(&coeffs, &out);
-    try std.testing.expect(!overflowed);
+test "no IDCT intermediate overflows at the extremes of i32 input" {
+    // `Accumulator` bounds every intermediate below 2^57 for |c| <= 2^31.
+    // The arithmetic is checked, so in this safety-checked build a wrong
+    // bound panics. Drive the bound with full-scale blocks: one constant
+    // sign, alternating signs, the sign pattern that maximizes each output
+    // sample, and seeded random signs, at both extreme magnitudes. Samples
+    // the double-precision T.81 value puts beyond the range by more than
+    // islow's fixed-point error must sit on the clamp bound.
+    var patterns: [64 + 4 + 256][64]i8 = undefined;
+    var n: usize = 0;
+    for (0..64) |p| { // the basis-product signs at output sample p
+        const x: f64 = @floatFromInt(p % 8);
+        const y: f64 = @floatFromInt(p / 8);
+        for (0..64) |k| {
+            const u: f64 = @floatFromInt(k % 8);
+            const v: f64 = @floatFromInt(k / 8);
+            const w = @cos((2 * x + 1) * u * std.math.pi / 16.0) * @cos((2 * y + 1) * v * std.math.pi / 16.0);
+            patterns[n][k] = if (w < 0) -1 else 1;
+        }
+        n += 1;
+    }
+    for ([_]i8{ 1, -1 }) |sgn| {
+        patterns[n] = [_]i8{sgn} ** 64;
+        n += 1;
+        for (0..64) |k| patterns[n][k] = if ((k % 8 + k / 8) % 2 == 0) sgn else -sgn;
+        n += 1;
+    }
+    var prng = std.Random.DefaultPrng.init(0x1dc7);
+    const random = prng.random();
+    while (n < patterns.len) : (n += 1) {
+        for (&patterns[n]) |*s| s.* = if (random.boolean()) 1 else -1;
+    }
+    var clamped: usize = 0;
+    for (patterns) |pattern| {
+        for ([_]i64{ std.math.maxInt(i32), -@as(i64, std.math.minInt(i32)) }) |mag| {
+            var coeffs: [64]i32 = undefined;
+            for (&coeffs, pattern) |*c, s| c.* = @intCast(std.math.clamp(@as(i64, s) * mag, std.math.minInt(i32), std.math.maxInt(i32)));
+            const err = 2 + 64.0 * @as(f64, @floatFromInt(mag)) / 1024.0;
+            inline for (.{ 8, 12 }) |P| {
+                const max: f64 = (1 << P) - 1;
+                var out: [64]Sample(P) = undefined;
+                idct8x8Generic(P, &coeffs, &out);
+                const ref = referenceIdct(&coeffs, (max + 1) / 2);
+                for (out, ref) |s, r| {
+                    const got: f64 = @floatFromInt(s);
+                    if (r > max + err) {
+                        try std.testing.expectEqual(max, got);
+                        clamped += 1;
+                    } else if (r < -err) {
+                        try std.testing.expectEqual(@as(f64, 0), got);
+                        clamped += 1;
+                    }
+                }
+            }
+        }
+    }
+    // The blocks must reach the clamp, or the comparison checked nothing.
+    try std.testing.expect(clamped > 1000);
 }

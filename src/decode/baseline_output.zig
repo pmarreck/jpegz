@@ -27,12 +27,9 @@ pub fn transformBlockToPlane(
     plane_w: u32,
     block_x: u32,
     block_y: u32,
-    of_flag: *std.atomic.Value(bool),
 ) void {
     var block: [64]u8 = undefined;
-    // islow wraps on out-of-range (corrupt) coefficients instead of panicking;
-    // record the wrap so decodeScanT can emit dct_coefficient_overflow.
-    if (idct.idct8x8(coeffs, &block)) of_flag.store(true, .monotonic);
+    idct.idct8x8(coeffs, &block);
     var by: u32 = 0;
     while (by < 8) : (by += 1) {
         var bx: u32 = 0;

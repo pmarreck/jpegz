@@ -29,13 +29,12 @@ pub fn transformBlockRow(
     plane_w: u32,
     blocks_w_for_comp: u32,
     by_idx: u32,
-    of_flag: *std.atomic.Value(bool),
 ) void {
     var bx_idx: u32 = 0;
     while (bx_idx < blocks_w_for_comp) : (bx_idx += 1) {
         const linear: usize = (@as(usize, by_idx) * @as(usize, blocks_w_for_comp) + @as(usize, bx_idx)) * 64;
         const slot: *const [64]i32 = coef_buf[linear..][0..64];
-        transformBlockToPlane(slot, plane, plane_w, bx_idx * 8, by_idx * 8, of_flag);
+        transformBlockToPlane(slot, plane, plane_w, bx_idx * 8, by_idx * 8);
     }
 }
 

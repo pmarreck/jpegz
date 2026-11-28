@@ -271,7 +271,6 @@ fn decodeScanSof9(
     _ = try finishSegment(&state.qcoder, base, .scan_end, &expected_rst, options);
 
     // ── Phase 2: IDCT each block into its component plane ─────
-    var of_flag = std.atomic.Value(bool).init(false);
     {
         var ci: usize = 0;
         while (ci < channels) : (ci += 1) {
@@ -281,16 +280,12 @@ fn decodeScanSof9(
                 while (bx < blocks_w[ci]) : (bx += 1) {
                     const linear: usize = (@as(usize, by) * @as(usize, blocks_w[ci]) + @as(usize, bx)) * 64;
                     const slot: *const [64]i32 = coef_buf[ci][linear..][0..64];
-                    baseline.transformBlockToPlane(slot, planes[ci], plane_w[ci], bx * 8, by * 8, &of_flag);
+                    baseline.transformBlockToPlane(slot, planes[ci], plane_w[ci], bx * 8, by * 8);
                 }
             }
         }
     }
 
-    // NOTE: SOF9 arith path has no findings sink plumbed, so an IDCT wrap
-    // here is safely wrapped (no panic) but not surfaced as
-    // dct_coefficient_overflow. Baseline + progressive paths emit it.
-    _ = of_flag.load(.monotonic);
     // ── Phase 3: chroma upsample + color convert via baseline ──
     return baseline.assembleOutput(allocator, frame, channels, width, height, max_h, max_v, plane_w, plane_h, &planes, null);
 }
