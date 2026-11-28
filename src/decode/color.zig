@@ -37,7 +37,28 @@ pub inline fn clampSample12I32(v: i32) u16 {
     return @intCast(v);
 }
 
-/// IJG "fancy" chroma upsampling. `src` is `src_w` × `src_h`; output is
+/// libjpeg-turbo's jinit_upsampler uses the fancy h2v1 and h2v2 filters
+/// only when the subsampled width (`active_w`) exceeds 2; narrower chroma
+/// is replicated (h2v1_upsample, h2v2_upsample). T.81 leaves upsampling to
+/// the decoder, and jpegz matches libjpeg-turbo here. Vertical-only (h1v2)
+/// upsampling stays fancy at every width, as there.
+inline fn narrowChroma(h_ratio: u32, active_w: u32) bool {
+    return h_ratio == 2 and active_w <= 2;
+}
+
+/// Replicate each chroma sample over its 2×`v_ratio` output cell.
+fn replicate(comptime T: type, src: []const T, src_w: u32, src_h: u32, dst: []T, out_w: u32, out_h: u32, v_ratio: u32) void {
+    for (0..out_h) |oy| {
+        const cy = @min(oy / v_ratio, src_h - 1);
+        for (0..out_w) |ox| {
+            const cx = @min(ox / 2, src_w - 1);
+            dst[oy * out_w + ox] = src[cy * src_w + cx];
+        }
+    }
+}
+
+/// IJG "fancy" chroma upsampling (narrow chroma excepted, see
+/// `narrowChroma`). `src` is `src_w` × `src_h`; output is
 /// `out_w` × `out_h`. `active_w` / `active_h` are the in-frame chroma
 /// extents (`<= src_w/src_h`); boundary clamping uses these so MCU-pad
 /// chroma never bleeds into visible pixels.
@@ -56,11 +77,15 @@ pub fn fancyUpsample(
     const dst = try allocator.alloc(u8, @as(usize, out_w) * @as(usize, out_h));
     errdefer allocator.free(dst);
 
+    if (narrowChroma(h_ratio, active_w)) {
+        replicate(u8, src, src_w, src_h, dst, out_w, out_h, v_ratio);
+        return dst;
+    }
     const cw: u32 = @max(active_w, 1);
     const ch: u32 = @max(active_h, 1);
     // libjpeg-turbo `h2v2_fancy_upsample` uses asymmetric rounding
     // +8 (left output) / +7 (right output) so the 2×2 outputs round in
-    // opposite directions, cancelling the bias across the pair. Same
+    // opposite directions, canceling the bias across the pair. Same
     // convention as `fancyUpsample12`.
     if (h_ratio == 2 and v_ratio == 2) {
         var cy: u32 = 0;
@@ -219,6 +244,10 @@ pub fn fancyUpsample12(
     const dst = try allocator.alloc(u16, @as(usize, out_w) * @as(usize, out_h));
     errdefer allocator.free(dst);
 
+    if (narrowChroma(h_ratio, active_w)) {
+        replicate(u16, src, src_w, src_h, dst, out_w, out_h, v_ratio);
+        return dst;
+    }
     const cw: u32 = @max(active_w, 1);
     const ch: u32 = @max(active_h, 1);
     // libjpeg-turbo `h2v2_fancy_upsample` (jdsample.c): the 2×2 outputs

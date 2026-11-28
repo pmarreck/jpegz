@@ -463,3 +463,40 @@ test "JPEG-LS restart intervals (DRI + RSTm) decode exactly: CharLS restart stre
     }
 }
 
+test "chroma two samples wide or narrower upsamples by replication, as libjpeg-turbo does" {
+    // T.81 leaves upsampling to the decoder; jpegz matches libjpeg-turbo,
+    // whose jinit_upsampler uses the fancy (triangle) h2v1 and h2v2 filters
+    // only when the subsampled width exceeds 2 and replicates samples
+    // otherwise. Each fixture's scans are interleaved with 16-pixel MCUs, so
+    // narrowing its SOF width to 1..16 keeps the same entropy data.
+    const allocator = std.testing.allocator;
+    const fixtures = [_]struct { name: []const u8, data: []const u8 }{
+        .{ .name = "8-bit 4:2:0", .data = @embedFile("fixtures/baseline_16x16_rgb_420.jpg") },
+        .{ .name = "12-bit 4:2:0", .data = @embedFile("fixtures/baseline_16x16_rgb12_420.jpg") },
+        .{ .name = "12-bit 4:2:2", .data = @embedFile("fixtures/baseline_16x16_rgb12_422.jpg") },
+        .{ .name = "arithmetic 4:2:0", .data = @embedFile("fixtures/arith_baseline_16x16_rgb_420.jpg") },
+        .{ .name = "arithmetic 4:2:2", .data = @embedFile("fixtures/arith_baseline_16x16_rgb_422.jpg") },
+        .{ .name = "YCCK 4:2:0", .data = @embedFile("fixtures/cmyk_16x16_ycck_subsampled.jpg") },
+    };
+    for (fixtures) |fx| {
+        // The first SOF0, SOF1 or SOF9: its width field is 7 bytes in.
+        var sof: usize = 2;
+        while (!(fx.data[sof] == 0xff and (fx.data[sof + 1] == 0xc0 or fx.data[sof + 1] == 0xc1 or fx.data[sof + 1] == 0xc9))) {
+            sof += 2 + (@as(usize, fx.data[sof + 2]) << 8 | fx.data[sof + 3]);
+        }
+        try std.testing.expectEqual(@as(u16, 16), std.mem.readInt(u16, fx.data[sof + 7 ..][0..2], .big));
+        var width: u16 = 1;
+        while (width <= 6) : (width += 1) {
+            errdefer std.debug.print("{s} at width {d}\n", .{ fx.name, width });
+            const data = try allocator.dupe(u8, fx.data);
+            defer allocator.free(data);
+            std.mem.writeInt(u16, data[sof + 7 ..][0..2], width, .big);
+            var ours = try jpegz.decode(allocator, data);
+            defer ours.deinit(allocator);
+            var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+            defer oracle.deinit(allocator);
+            try std.testing.expectEqual(oracle.width, ours.width);
+            try std.testing.expectEqualSlices(u8, oracle.pixels, ours.pixels);
+        }
+    }
+}
