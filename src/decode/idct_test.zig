@@ -71,29 +71,29 @@ test "idct8x8Generic DC-only positive amplitude yields uniform brighter at every
     }
 }
 
-test "idct8x8Generic range-limits like libjpeg-turbo: a clamp at P=8, the masked table at P=12" {
-    // DC-only blocks: d = DESCALE(DC << PASS1_BITS, PASS1_BITS + 3), and the
-    // output is the level-shifted d range-limited.
+test "out-of-range IDCT output is the exact value, clamped, at every precision" {
+    // Owner ruling (2026-11-28): no wraparound, then a clamp to 0..2^P-1.
+    // DC-only blocks: the exact sample is DC/8 plus the level shift.
     const Case = struct { dc: i32, p8: u8, p12: u16 };
     const cases = [_]Case{
-        // Moderately out of range: both precisions saturate.
-        .{ .dc = 24000, .p8 = 255, .p12 = 4095 }, // P=12: d = 3000
-        .{ .dc = -24000, .p8 = 0, .p12 = 0 }, // P=12: d = -3000
-        // Far out of range: libjpeg-turbo's C islow (P=12) indexes
-        // range_limit[d & 16383], so d = 32768 wraps to the center value.
-        .{ .dc = 1 << 18, .p8 = 255, .p12 = 2048 },
-        .{ .dc = -(1 << 18), .p8 = 0, .p12 = 2048 },
-        // d = 9000 lands in the table's undershoot zone: 0, not 4095.
-        .{ .dc = 72000, .p8 = 255, .p12 = 0 },
+        .{ .dc = 24000, .p8 = 255, .p12 = 4095 }, // 3000 + shift
+        .{ .dc = -24000, .p8 = 0, .p12 = 0 },
+        // libjpeg-turbo's C table wraps these onto the center (2048 at 12
+        // bits) or onto 0; the exact value is far above or below the range.
+        .{ .dc = 1 << 18, .p8 = 255, .p12 = 4095 },
+        .{ .dc = -(1 << 18), .p8 = 0, .p12 = 0 },
+        .{ .dc = 72000, .p8 = 255, .p12 = 4095 },
+        .{ .dc = 2_000_000_000, .p8 = 255, .p12 = 4095 },
+        .{ .dc = -2_000_000_000, .p8 = 0, .p12 = 0 },
     };
     for (cases) |c| {
         var coeffs = [_]i32{0} ** 64;
         coeffs[0] = c.dc;
         var out8: [64]u8 = undefined;
-        _ = idct8x8Generic(8, &coeffs, &out8);
+        try std.testing.expect(!idct8x8Generic(8, &coeffs, &out8));
         for (out8) |s| try std.testing.expectEqual(c.p8, s);
         var out12: [64]u16 = undefined;
-        _ = idct8x8Generic(12, &coeffs, &out12);
+        try std.testing.expect(!idct8x8Generic(12, &coeffs, &out12));
         for (out12) |s| try std.testing.expectEqual(c.p12, s);
     }
 }
@@ -130,19 +130,56 @@ test "idct8x8_fpd all-zero coefficients yield uniform 128" {
     for (out) |s| try std.testing.expectEqual(@as(u8, 128), s);
 }
 
-test "idct8x8 wraps (no panic) and reports overflow on out-of-range coefficients" {
-    // Malformed streams (esp. lenient decode) can feed the islow IDCT
-    // dequantized coefficients far outside the valid 8-bit range, overflowing
-    // i32 intermediates. The C islow wraps silently; the Zig port must too
-    // (no panic) and must report it so the decoder can emit
-    // dct_coefficient_overflow. Fuzz crasher #9 (validate DNG) hit this.
+/// T.81 A.3.3 in double precision, level-shifted, not clamped.
+fn referenceIdct(coeffs: *const [64]i32, level_shift: f64) [64]f64 {
+    var out: [64]f64 = undefined;
+    for (0..8) |y| for (0..8) |x| {
+        var sum: f64 = 0;
+        for (0..8) |v| for (0..8) |u| {
+            const cu: f64 = if (u == 0) std.math.sqrt1_2 else 1;
+            const cv: f64 = if (v == 0) std.math.sqrt1_2 else 1;
+            const fx = @as(f64, @floatFromInt(2 * x + 1)) * @as(f64, @floatFromInt(u)) * std.math.pi / 16.0;
+            const fy = @as(f64, @floatFromInt(2 * y + 1)) * @as(f64, @floatFromInt(v)) * std.math.pi / 16.0;
+            sum += cu * cv * @as(f64, @floatFromInt(coeffs[v * 8 + u])) * @cos(fx) * @cos(fy);
+        };
+        out[y * 8 + x] = sum / 4.0 + level_shift;
+    };
+    return out;
+}
+
+test "idct computes absurd coefficients without wrapping, then clamps" {
+    // Malformed streams in lenient decode can feed dequantized coefficients
+    // near the i32 limits (fuzz crasher #9 hit this). With i32 intermediates
+    // the 8-bit IDCT wrapped; it must compute the exact islow value and clamp,
+    // with no overflow. Where the exact value lies beyond the range by more
+    // than islow's fixed-point error (which grows with coefficient mass), the
+    // sample must be the clamp bound.
     var coeffs = [_]i32{0} ** 64;
-    coeffs[0] = 2_000_000_000; // absurd DC — overflows (c0+c4)<<13
+    coeffs[0] = 2_000_000_000;
     coeffs[1] = -1_500_000_000;
     coeffs[9] = 1_000_000_000;
-    var out: [64]u8 = undefined;
-    const overflowed = idct8x8(&coeffs, &out); // must NOT panic
-    try std.testing.expect(overflowed);
+    var mass: f64 = 0;
+    for (coeffs) |c| mass += @abs(@as(f64, @floatFromInt(c)));
+    const err = 2 + mass / 1024;
+    inline for (.{ 8, 12 }) |P| {
+        const max: f64 = (1 << P) - 1;
+        var out: [64]Sample(P) = undefined;
+        try std.testing.expect(!idct8x8Generic(P, &coeffs, &out));
+        const ref = referenceIdct(&coeffs, (max + 1) / 2);
+        var clamped: usize = 0;
+        for (out, ref) |s, r| {
+            const got: f64 = @floatFromInt(s);
+            if (r > max + err) {
+                try std.testing.expectEqual(max, got);
+                clamped += 1;
+            } else if (r < -err) {
+                try std.testing.expectEqual(@as(f64, 0), got);
+                clamped += 1;
+            }
+        }
+        // Nearly every sample of this block is far outside the range.
+        try std.testing.expect(clamped >= 48);
+    }
 }
 
 test "idct8x8 reports NO overflow on valid in-range coefficients" {

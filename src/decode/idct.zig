@@ -13,9 +13,8 @@
 //!
 //! The generic core is libjpeg-turbo "islow" integer IDCT
 //! (Loeffler/Ligtenberg/Moschytz with 13-bit fixed-point constants).
-//! Accumulator widens from i32 → i64 at P=12 because dequantized
-//! 12-bit DC × 16-bit quant entries can reach ~2^31, which the
-//! column-pass `<< PASS1_BITS` shift would otherwise overflow.
+//! Accumulators are i64 at every precision, so no intermediate can wrap;
+//! out-of-range results are clamped (see `Accumulator` and `rangeLimit`).
 //! Source-of-truth: jidctint.c (8-bit) and jidct12.c (12-bit).
 //!
 //! Output ordering for all flavors:
@@ -74,24 +73,15 @@ inline fn descale(comptime T: type, x: T, comptime n: comptime_int) T {
     return (x + (@as(T, 1) << (n - 1))) >> n;
 }
 
-/// Post-IDCT range limiting of a level-shifted value `v`.
+/// Post-IDCT range limiting of a level-shifted value `v`: a clamp to
+/// 0..max (T.81 A.3.1), at every precision.
 ///
-/// At P=8 this is a clamp, matching libjpeg-turbo's SIMD islow, which
-/// saturates. At P=12 libjpeg-turbo runs the C islow, which indexes
-/// `range_limit[(v - CENTER) & RANGE_MASK]` (jdmaster.c
-/// prepare_range_limit_table). That wraps modulo 4·(MAX+1), so a far
-/// out-of-range value can land on 0 instead of MAX or the reverse. Only
-/// corrupt or mismatched coefficients get there; in range, both agree.
+/// libjpeg-turbo's C islow instead indexes `range_limit[d & RANGE_MASK]`,
+/// which wraps a far out-of-range value onto 0, max or the center, and its
+/// SIMD islow saturates 16-bit intermediates. Owner ruling (2026-11-28):
+/// jpegz computes the exact value and clamps it, rather than copy either.
+/// In range, all of them agree.
 inline fn rangeLimit(comptime SampleT: type, comptime max: comptime_int, v: anytype) SampleT {
-    if (comptime max == 4095) {
-        const center: comptime_int = (max + 1) / 2;
-        const range_mask: comptime_int = (max + 1) * 4 - 1;
-        const i: i64 = (@as(i64, v) - center) & range_mask;
-        if (i < center) return @intCast(i + center);
-        if (i < 2 * (max + 1)) return @intCast(max);
-        if (i < 4 * (max + 1) - center) return 0;
-        return @intCast(i - (4 * (max + 1) - center));
-    }
     if (v < 0) return 0;
     if (v > max) return @intCast(max);
     return @intCast(v);
@@ -140,12 +130,15 @@ pub fn Sample(comptime P: u8) type {
 }
 
 /// Return the host integer type used for intermediate accumulators at
-/// precision P. P=8 keeps i32 (preserves libjpeg-turbo byte-identical
-/// output). P=12 widens to i64 to absorb dequantized 12-bit DC × 16-bit
-/// quant table entries that can reach ~2^31 before the column-pass shift.
+/// precision P: i64 at both. A dequantized coefficient fits i32, and from
+/// there no intermediate of either pass reaches 2^54, so nothing can wrap:
+/// a legal file with large quantizers (a quantizer of 244 times a legal
+/// 8-bit coefficient of 1023) gets the exact islow value, then the clamp.
+/// With i32 at P=8 those intermediates wrapped and produced garbage.
+/// In-range output is unchanged, byte-identical to libjpeg-turbo.
 fn Accumulator(comptime P: u8) type {
     return switch (P) {
-        8 => i32,
+        8 => i64,
         12 => i64,
         else => @compileError("idct: unsupported precision (only 8 or 12)"),
     };
@@ -166,12 +159,14 @@ pub fn idct8x8_12(coeffs: *const [64]i32, out: *[64]u16) bool {
     return idct8x8Generic(12, coeffs, out);
 }
 
-/// libjpeg-turbo's `jpeg_idct_islow` reproduced bit-for-bit, generic
-/// over precision P ∈ {8, 12}. Operates on natural-row-major
-/// coefficients (post-dequant) and produces level-shifted P-bit samples.
-/// Same algorithm topology, fixed-point constants, and rounding ties as
-/// libjpeg — at P=8 the output matches `jpeg_idct_islow` byte-for-byte;
-/// at P=12 it matches `jpeg_idct_12_islow`.
+/// libjpeg-turbo's `jpeg_idct_islow` algorithm, generic over precision
+/// P ∈ {8, 12}. Operates on natural-row-major coefficients (post-dequant)
+/// and produces level-shifted P-bit samples. Same topology, fixed-point
+/// constants and rounding ties as libjpeg, so in-range output matches
+/// `jpeg_idct_islow` (P=8) and `jpeg_idct_12_islow` (P=12) byte for byte.
+/// Out of range it computes without wrapping and clamps, where libjpeg
+/// wraps. The returned flag reports an intermediate overflow, which i64
+/// accumulators with i32 inputs cannot produce.
 pub fn idct8x8Generic(comptime P: u8, coeffs: *const [64]i32, out: *[64]Sample(P)) bool {
     const Acc = Accumulator(P);
     const SampleT = Sample(P);

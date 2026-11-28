@@ -214,24 +214,6 @@ test "RGB-marked baseline (Adobe APP14 transform=0) decodes as RGB, byte-matchin
     try std.testing.expectEqualSlices(u8, wrapper.pixels, cleanroom.pixels);
 }
 
-test "IDCT overflow: out-of-range coefficient decodes without panic + emits dct_coefficient_overflow" {
-    const allocator = std.testing.allocator;
-    var sink = jpegz.FindingsSink.init(allocator);
-    defer sink.deinit();
-    // Must NOT panic (formerly did). Decode succeeds with wrapped (best-effort)
-    // pixels, matching libjpeg's silent-wrap behavior on the same bytes.
-    var img = try jpegz.decodeWithOptions(allocator, fixture_overflow_ac_8x8, .{ .findings_sink = &sink });
-    defer img.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 8), img.width);
-    try std.testing.expectEqual(@as(u32, 8), img.height);
-    // The overflow is surfaced as a fail-severity finding, not swallowed.
-    var found = false;
-    for (sink.items()) |f| {
-        if (f.code == .dct_coefficient_overflow and f.severity == .fail) found = true;
-    }
-    try std.testing.expect(found);
-}
-
 test "multi-scan sequential DCT decodes byte-identically to libjpeg-turbo" {
 	const allocator = std.testing.allocator;
 	const Case = struct { name: []const u8, data: []const u8 };

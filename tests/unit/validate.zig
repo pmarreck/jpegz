@@ -19,8 +19,8 @@ test {
     _ = @import("validate_jp2_totality.zig");
     _ = @import("validate_known_defects.zig");
     _ = @import("validate_dnl_hierarchy.zig");
-    _ = @import("validate_dequant.zig");
     _ = @import("validate_oom.zig");
     _ = @import("validate_totality.zig");
     _ = @import("validate_lossless_range.zig");
+    _ = @import("validate_idct_range.zig");
 }

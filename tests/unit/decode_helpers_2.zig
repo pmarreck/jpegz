@@ -105,9 +105,10 @@ pub const fixture_baseline_16x16_rgb_marked = @embedFile("fixtures/baseline_16x1
 
 /// Fuzz crasher #9 (validate DNG → embedded JPEG → jpegz.decode): a
 /// well-formed 8×8 baseline JPEG whose dequantized AC coefficient
-/// (category-10 amplitude 1023 × quant 255 = 260865) overflows the islow
-/// IDCT's i32 intermediates (c1 × FIX_1_501321110). Formerly a panic; now
-/// wraps like libjpeg AND emits dct_coefficient_overflow (crash → signal).
+/// (category-10 amplitude 1023 × quant 255 = 260865) overflowed the islow
+/// IDCT's former i32 intermediates (c1 × FIX_1_501321110). It was first a
+/// panic, then a wrap with a false FAIL; since the IDCT range ruling it
+/// decodes exactly, then clamped (tests/unit/validate_idct_range.zig).
 pub const fixture_overflow_ac_8x8 = @embedFile("fixtures/overflow_ac_8x8.jpg");
 
 // Non-interleaved sequential DCT (T.81 §A.2.2, §B.2.3 Ns < Nf): a frame whose
