@@ -6,7 +6,9 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Priority: decode robustness on damaged input
 
 - [ ] Validation records an invalid progressive scan header and decodes past it: the walker FAIL is non-blocking, the decoder skips that scan and the refinement scans that depend on it (INFO "not judged"), and everything else is judged; then sequential, lossless and arithmetic sequential (context: docs/plan_context/damaged-input-parity-2026-11-27.md).
-- [ ] Implement the owner ruling on IDCT range: 64-bit arithmetic with no wrap at P=8 and P=12, then clamp to 0..2^P-1; revert fa289eb's 12-bit masked table; in-range output stays byte-identical to libjpeg-turbo; tell validate that legal files lose the jpegz-only IDCT-overflow FAIL (context: docs/plan_context/damaged-input-parity-2026-11-27.md).
+- [ ] Remove the now-unreachable IDCT overflow flag and its dct_coefficient_overflow emissions (i64 accumulators with i32 inputs cannot overflow); the checked arithmetic also costs speed. baseline.zig needs a split first (over the line gate).
+- [ ] Split build.zig (787 code lines, one 1,100-line build function) into coherent modules so it can be changed under the line gate.
+- [x] Implement the owner ruling on IDCT range: 64-bit arithmetic with no wrap, then a clamp to 0..2^P-1; in-range output byte-identical to libjpeg-turbo; validate told (done 2026-11-28 04:05 EST; commit 54d12d3).
 - [x] OWNER: for valid files whose IDCT input is far out of range, should jpegz output exact math plus a clamp, emulate libjpeg-turbo's LP64 C path, or leave it as is? Answer: exact math plus a clamp. "We need to do the most correct thing. We don't copy faulty oracle behavior." (done 2026-11-28 00:21 EST).
 
 - [ ] Explain the remaining pixel differences from libjpeg-turbo on damaged input: lossless is fixed (7ceac1f); arithmetic SOF9 (29), 12-bit progressive (21), SOF10 (4) and sequential (3) remain, mostly gated on the IDCT owner question (context: docs/plan_context/damaged-input-parity-2026-11-27.md).
@@ -45,7 +47,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## JPEG entropy and comparison coverage
 
-- [x] Lenient Huffman resync on an out-of-order RSTm should account for the skipped intervals (libjpeg's resync advances its MCU count to the marker); today recovery stops at EOI with an extra truncated_stream. Answer: sequential and progressive resync now follow jpeg_resync_to_restart (ahead 1-2: empty interval, marker kept; behind 1-2: skip; else take); pixels outside the empty interval match the original and libjpeg-turbo (done 2026-11-23 06:30 EST; commit 3daedfd).
 - [x] Complete scan consumption, MCU counts, sampling edges, noninterleaved scans, restart cadence and predictor-reset coverage across supported modes. Answer: covered on every supported mode by malformed-input tests plus 2,744 producer controls (all valid, pixel-identical to libjpeg-turbo); the sweep found and fixed lossless category 16 below 16-bit precision; lossless arithmetic has no producer and rests on hand-built tests (context: docs/plan_context/scan-geometry-coverage-2026-11-23.md; done 2026-11-23 07:35 EST).
 - [x] Complete progressive scan-history and coefficient-range constraints with independent normative review and valid boundary controls. Answer: validate reviewed the rules against T.81 G.1.1.1 (rulings I); history faults are FAIL 59 with a history: detail, exact at Ss or AhAl, one per root cause; no new range rule (58 plus one-bit refinements bound it); 2,920 producer files stay valid (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md; done 2026-11-23 09:20 EST).
 - [ ] Classify the known-good corpus as a set and expand reproducible corruption-probe sweeps across JPEG-LS, JPEG 2000 and JPEG XL; JPEG-LS swept 2026-11-21 (93.0% of 1,600 on four T.87 streams; survivors all entropy) and JPEG 2000/JPEG XL swept 2026-11-22 (nine fixtures, 3,600 cases, no crash; lossless gray JXL survivors all decode in libjxl's djxl); the set-level corpus classification remains (context: docs/measurements/jp2-jxl-corruption-coverage-2026-11-22.md).
@@ -60,7 +61,8 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Build and CLI
 
 - [x] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks. Answer: build.zig compiles the pinned brotliSrc (common, dec, enc) with Zig for each target via -Dbrotli-src/BROTLI_SRC, which every Nix build and the dev shell set; the Windows cross checks now link JXL; system libraries remain the fallback when no source is given (done 2026-11-23 11:45 EST).
-- [ ] Bump the libjxlz pin to 9751b6cb or later (its validator no longer reaches the Brotli encoder), then drop brotlienc from the system-Brotli link, the c/enc sources from vendoredBrotli and the build.zig comment saying the validator exports reach the encoder; brotlidec and brotlicommon stay (libjxlz note 2026-11-28).
+- [ ] Carry libjxlz's finding detail (PAR2, ZERO_FILL, none) into the JXL facade finding's detail text, with an exhaustive guard on JxlValidationDetail so a new value fails to compile, and add the result's observation count (libjxlz note 2026-11-28).
+- [ ] Drop brotlienc from the system-Brotli link, the c/enc sources from vendoredBrotli and the build.zig comment saying libjxlz's validator reaches the encoder; brotlidec and brotlicommon stay. Waits on the build.zig split. (The libjxlz pin is now 1d3c7b20, fef98af.)
 - [ ] Add U5b progress controls and pure timestamp-injected rendering; verify rendered output with Peter and test terminal/width degradation.
 
 ## Deferred
