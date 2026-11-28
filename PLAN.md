@@ -5,11 +5,11 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Priority: decode robustness on damaged input
 
-- [ ] Split src/decode/baseline.zig (1,127 code lines) into coherent modules, behavior-neutrally; it blocks the two items below.
+- [x] Split src/decode/baseline.zig (1,127 code lines) into five modules, behavior-neutrally (done 2026-11-28 06:25 EST; commit 55162e7).
 - [ ] Extend validation past invalid scan headers to multi-scan sequential Huffman, lossless and arithmetic sequential frames (a sequential scan has no history, so only its own components go unjudged); tell validate (context: docs/plan_context/damaged-input-parity-2026-11-27.md).
 - [ ] Awaiting validate: a dedicated finding code for "scan not judged" instead of INFO unknown_marker (asked 2026-11-28 in the eb03fb8 note); adopt whatever validate assigns.
 - [x] Validation records an invalid progressive scan header and decodes past it: the walker FAIL is non-blocking, the decoder skips that scan and the refinements that depend on it (INFO "not judged"), and everything else is judged; DHT Tc/Th range became exact FAIL 51 and history stops after an SOS length mismatch; validate told (done 2026-11-28 05:56 EST; commits 925aa1a, eb03fb8, 58822f1).
-- [ ] Remove the now-unreachable IDCT overflow flag and its dct_coefficient_overflow emissions (i64 accumulators with i32 inputs cannot overflow); the checked arithmetic also costs speed. baseline.zig needs a split first (over the line gate).
+- [x] Remove the unreachable IDCT overflow flag and its emissions; plain checked i64 arithmetic with a worst-case bound test; no finding changes; about 4x faster IDCT (done 2026-11-28 06:58 EST; commit 9f73b31).
 - [ ] Split build.zig (787 code lines, one 1,100-line build function) into coherent modules so it can be changed under the line gate.
 - [ ] Split src/jpegz.zig (632 code lines; the commit gate advised it on eb03fb8) into coherent modules behind the same public API.
 - [x] Implement the owner ruling on IDCT range: 64-bit arithmetic with no wrap, then a clamp to 0..2^P-1; in-range output byte-identical to libjpeg-turbo; validate told (done 2026-11-28 04:05 EST; commit 54d12d3).
@@ -51,7 +51,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## JPEG entropy and comparison coverage
 
-- [x] Complete progressive scan-history and coefficient-range constraints with independent normative review and valid boundary controls. Answer: validate reviewed the rules against T.81 G.1.1.1 (rulings I); history faults are FAIL 59 with a history: detail, exact at Ss or AhAl, one per root cause; no new range rule (58 plus one-bit refinements bound it); 2,920 producer files stay valid (context: docs/plan_context/arithmetic-error-classification-2026-11-22.md; done 2026-11-23 09:20 EST).
 - [ ] Classify the known-good corpus as a set and expand reproducible corruption-probe sweeps across JPEG-LS, JPEG 2000 and JPEG XL; JPEG-LS swept 2026-11-21 (93.0% of 1,600 on four T.87 streams; survivors all entropy) and JPEG 2000/JPEG XL swept 2026-11-22 (nine fixtures, 3,600 cases, no crash; lossless gray JXL survivors all decode in libjxl's djxl); the set-level corpus classification remains (context: docs/measurements/jp2-jxl-corruption-coverage-2026-11-22.md).
 - [ ] Compare proven malformed fixtures and false rejects against prior art; report demonstrated detection, hypothetical detectability and valid changes separately. Blocked 2026-11-23: rerunning jpeg-fragments (docs/measurements/jpeg-probe-2026-09-11.md) builds with Maven-downloaded jars, and downloaded binaries are not run without owner approval or a Nix-pinned build.
 - [ ] Confirm consumer promotion through tiffz.jpegz and rerun the private full-PDF experiment without publishing originals or mutants (context: docs/plan_context/pre-canon-2026-09-24.md).
@@ -63,7 +62,6 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 
 ## Build and CLI
 
-- [x] Vendor Brotli, preserve compressed-metadata validation, enable Windows JXL and run cross checks. Answer: build.zig compiles the pinned brotliSrc (common, dec, enc) with Zig for each target via -Dbrotli-src/BROTLI_SRC, which every Nix build and the dev shell set; the Windows cross checks now link JXL; system libraries remain the fallback when no source is given (done 2026-11-23 11:45 EST).
 - [ ] Carry libjxlz's finding detail (PAR2, ZERO_FILL, none) into the JXL facade finding's detail text, with an exhaustive guard on JxlValidationDetail so a new value fails to compile, and add the result's observation count (libjxlz note 2026-11-28).
 - [ ] Drop brotlienc from the system-Brotli link, the c/enc sources from vendoredBrotli and the build.zig comment saying libjxlz's validator reaches the encoder; brotlidec and brotlicommon stay. Waits on the build.zig split. (The libjxlz pin is now 1d3c7b20, fef98af.)
 - [ ] Add U5b progress controls and pure timestamp-injected rendering; verify rendered output with Peter and test terminal/width degradation.
