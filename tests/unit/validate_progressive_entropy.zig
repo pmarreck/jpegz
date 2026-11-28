@@ -281,6 +281,62 @@ test "progressive AC first-pass runs cannot exceed the selected band" {
 	}
 }
 
+test "progressive AC refinement runs cannot exceed the selected band" {
+	// T.81 G.1.2.3: a refinement code's run counts zero-history
+	// coefficients within this scan's band, and its new value goes on the
+	// zero after them. A run the band ends inside has no valid decode;
+	// libjpeg-turbo then stores the value through jpeg_natural_order[64],
+	// clobbering coefficient 63. One grayscale block whose AC first scan
+	// (Al=1) leaves every coefficient zero. AC Huffman codes 000/001/010/011
+	// represent EOB/ZRL/E1/F1; a set sign bit follows E1 and F1.
+	const header = [_]u8{ 0xff, 0xd8, 0xff, 0xdb, 0, 67, 0 } ++ ([_]u8{16} ** 64) ++
+		[_]u8{ 0xff, 0xc2, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0 } ++
+		[_]u8{ 0xff, 0xc4, 0, 20, 0, 1 } ++ ([_]u8{0} ** 15) ++ [_]u8{0} ++
+		[_]u8{ 0xff, 0xc4, 0, 23, 0x10, 0, 0, 4 } ++ ([_]u8{0} ** 13) ++ [_]u8{ 0, 0xf0, 0xe1, 0xf1 } ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 0, 0, 0, 0x7f } ++
+		[_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, 1, 63, 0x01, 0x1f };
+	const cases = [_]struct { ac: u8, ss: u8, se: u8, valid: bool, nonzero: bool = false }{
+		.{ .ac = 0x1f, .ss = 1, .se = 63, .valid = true },
+		.{ .ac = 0x7f, .ss = 1, .se = 16, .valid = true, .nonzero = true },
+		.{ .ac = 0x7f, .ss = 1, .se = 15, .valid = false },
+		.{ .ac = 0x5f, .ss = 1, .se = 15, .valid = true, .nonzero = true },
+		.{ .ac = 0x5f, .ss = 1, .se = 14, .valid = false },
+		.{ .ac = 0x7f, .ss = 48, .se = 63, .valid = true, .nonzero = true },
+		.{ .ac = 0x7f, .ss = 49, .se = 63, .valid = false },
+		.{ .ac = 0x3f, .ss = 1, .se = 16, .valid = true },
+		.{ .ac = 0x3f, .ss = 1, .se = 15, .valid = false },
+		.{ .ac = 0x3f, .ss = 49, .se = 63, .valid = false },
+	};
+	const allocator = std.testing.allocator;
+	for (cases, 0..) |case, index| {
+		errdefer std.debug.print("refinement run case {d}\n", .{index});
+		const scan = [_]u8{ 0xff, 0xda, 0, 8, 1, 1, 0, case.ss, case.se, 0x10 };
+		const data = try std.mem.concat(allocator, u8, &.{ &header, &scan, &.{ case.ac, 0xff, 0xd9 } });
+		defer allocator.free(data);
+		const code_at = header.len + scan.len;
+		if (jpegz.decode(allocator, data)) |image| {
+			var decoded = image;
+			defer decoded.deinit(allocator);
+			try std.testing.expect(case.valid);
+			var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+			defer oracle.deinit(allocator);
+			try std.testing.expectEqual(case.nonzero, !std.mem.allEqual(u8, oracle.pixels, 128));
+			try std.testing.expectEqualSlices(u8, oracle.pixels, decoded.pixels);
+		} else |err| {
+			try std.testing.expect(!case.valid);
+			try std.testing.expectEqual(error.BackendError, err);
+		}
+		var report = try jpegz.validate(allocator, data);
+		defer report.deinit(allocator);
+		try std.testing.expectEqual(case.valid, report.isValid());
+		if (!case.valid) {
+			var detail_buf: [48]u8 = undefined;
+			const detail = try std.fmt.bufPrint(&detail_buf, "AC refinement zero run past Se={d}", .{case.se});
+			try expectOneExact(report.findings.items, .entropy_decode_invalid, code_at, detail);
+		}
+	}
+}
+
 test "progressive boundaries account for EOB runs padding and refinement bits" {
 	// T.81 G.1.2 and F.1.2.3, independently reviewed before implementation.
 	// Literal entropy bytes, not a test-side encoder. DC code0 => category0.

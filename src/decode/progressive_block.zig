@@ -301,6 +301,7 @@ fn decodeProgressiveAcRefine(
         // refined here even though the encoder wrote no refinement bit
         // for it (it belongs to the NEXT RS code).
         const is_zrl = (size == 0 and run_field == 15);
+        var reached = false;
         while (k <= scan.se) {
             if (block[k] != 0) {
                 try refineExistingNonzero(br, block, k, positive, negative, recovery);
@@ -310,6 +311,7 @@ fn decodeProgressiveAcRefine(
                         block[k] = new_val;
                         k += 1;
                     }
+                    reached = true;
                     break;
                 }
                 zeros_remaining -= 1;
@@ -318,10 +320,19 @@ fn decodeProgressiveAcRefine(
                     // refining any nonzero that follows. Advance past
                     // this zero so the outer RS loop resumes after it.
                     k += 1;
+                    reached = true;
                     break;
                 }
             }
             k += 1;
+        }
+        if (!reached) {
+            // The band ended before the code's run did: no valid encoder
+            // writes that, as for a first scan's run past Se. libjpeg-turbo
+            // then stores the new value through jpeg_natural_order[64],
+            // clobbering coefficient 63; jpegz reports the fault.
+            try recovery.fault(.entropy_decode_invalid, br.markOffset(ac_mark), "AC refinement zero run past Se={d}", .{scan.se});
+            return error.BackendError;
         }
     }
 }
