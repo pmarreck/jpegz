@@ -26,8 +26,8 @@
         },
         .libjxlz = .{
             // Private: Nix seeds this package from its locked SSH input.
-            .url = "https://github.com/pmarreck/libjxlz/archive/ff81ff23bc0f4fffc00850c68677d02f65913670.tar.gz",
-            .hash = "libjxlz-0.1.0-H-8wm8kEmAHjK2LotQPepalj6CNUT8BYcj6ixMebL14v",
+            .url = "https://github.com/pmarreck/libjxlz/archive/1d3c7b2093ccf3b86ddbf78f1a04076963ec2c3c.tar.gz",
+            .hash = "libjxlz-0.1.0-H-8wm6RsmAG1zWrZbsaps84_XFvkgWjgbduqnla_fF0U",
         },
     },
 }

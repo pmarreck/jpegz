@@ -37,11 +37,11 @@
     "libjxlz-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1794044083,
-        "narHash": "sha256-osruXqAnXVgCF7xh+NqXB15JqSgpOi0wtWqRknHhS2E=",
+        "lastModified": 1795842572,
+        "narHash": "sha256-Q1J0biRnJ0GINpGNrWNd9f0d1+nxNmNcVwfAMCkzR5Q=",
         "ref": "yolo",
-        "rev": "ff81ff23bc0f4fffc00850c68677d02f65913670",
-        "revCount": 3603,
+        "rev": "1d3c7b2093ccf3b86ddbf78f1a04076963ec2c3c",
+        "revCount": 3623,
         "type": "git",
         "url": "ssh://git@github.com/pmarreck/libjxlz"
       },

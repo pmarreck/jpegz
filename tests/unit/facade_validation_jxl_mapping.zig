@@ -311,6 +311,11 @@ test "JPEG XL facade preserves warning then fatal findings and completion" {
 }
 
 test "JPEG XL trailing header invalidity survives recovery and resource limits" {
+    // libjxlz (12d575fa, owner-approved): after a complete container, a cut
+    // box header is damage only when its type can still be one of the twelve
+    // ISO/IEC 18181-2 box types. One to four zero bytes are zero fill (WARN
+    // 199), and bytes that cannot begin a defined type are trailing data
+    // (WARN 199).
     const clean = [_]u8{
         255, 10, 0, 0, 0, 128, 160, 184, 17, 8, 2, 1, 0, 64, 0, 137,
         160, 86, 21, 64, 2, 0, 194, 141, 120, 155, 2, 255, 170, 50, 0,
@@ -323,27 +328,41 @@ test "JPEG XL trailing header invalidity survives recovery and resource limits" 
         0, 0, 0, 8 + clean.len, 'j', 'x', 'l', 'c',
     };
     const boxed = header ++ clean;
-    const input = boxed ++ [_]u8{ 0, 0, 0, 8, 't', 'e', 's', 't' };
+    const Expect = enum { clean, warn, fail };
+    const Trailer = struct { box: [8]u8, expect: [9]Expect };
+    const trailers = [_]Trailer{
+        // An empty "xml " box, a defined type: every cut after the size field
+        // can still be its header, so it stays FAIL at the header's offset.
+        .{ .box = .{ 0, 0, 0, 8, 'x', 'm', 'l', ' ' }, .expect = .{ .clean, .warn, .warn, .warn, .fail, .fail, .fail, .fail, .clean } },
+        // An empty box of an undefined type: once the type bytes rule out
+        // every defined type, the cut tail is trailing data; the whole box is
+        // an unknown box, which Part 2 allows.
+        .{ .box = .{ 0, 0, 0, 8, 't', 'e', 's', 't' }, .expect = .{ .clean, .warn, .warn, .warn, .fail, .warn, .warn, .warn, .clean } },
+    };
     var options = jpegz.jpegxl.default_options;
     options.host_byte_offset = 1000;
-    for (0..9) |tail| {
-        var result = try jpegz.jpegxl.validate(std.testing.allocator, input[0 .. boxed.len + tail], options);
-        defer result.deinit(std.testing.allocator);
-        const valid = tail == 0 or tail == 8;
-        try std.testing.expectEqual(if (valid) jpegz.StrictVerdict.valid else .corrupt, result.verdict);
-        try std.testing.expectEqual(@as(?bool, true), result.decode_complete);
-        try std.testing.expectEqual(@as(usize, if (valid) 0 else 1), result.findings.items.len);
-        if (!valid) {
+    for (trailers) |trailer| {
+        const input = boxed ++ trailer.box;
+        for (trailer.expect, 0..) |expect, tail| {
+            errdefer std.debug.print("trailer {s}, tail {d}\n", .{ trailer.box[4..8], tail });
+            var result = try jpegz.jpegxl.validate(std.testing.allocator, input[0 .. boxed.len + tail], options);
+            defer result.deinit(std.testing.allocator);
+            try std.testing.expectEqual(if (expect == .fail) jpegz.StrictVerdict.corrupt else .valid, result.verdict);
+            try std.testing.expectEqual(@as(?bool, true), result.decode_complete);
+            try std.testing.expectEqual(@as(usize, if (expect == .clean) 0 else 1), result.findings.items.len);
+            if (expect == .clean) continue;
             const finding = result.findings.items[0];
-            try std.testing.expectEqual(jpegz.FindingCode.jxl_truncated_box_header, finding.code.?);
-            try std.testing.expectEqual(jpegz.Severity.fail, finding.severity);
+            try std.testing.expectEqual(if (expect == .fail) jpegz.FindingCode.jxl_truncated_box_header else .jxl_trailing_data, finding.code.?);
+            try std.testing.expectEqual(if (expect == .fail) jpegz.Severity.fail else .warn, finding.severity);
             try std.testing.expectEqual(@as(?u64, boxed.len), finding.offset);
             try std.testing.expectEqual(@as(?u64, 1000 + boxed.len), finding.host_offset);
-            try std.testing.expect(finding.offset_is_exact);
+            if (expect == .fail) try std.testing.expect(finding.offset_is_exact);
         }
     }
+    // A resource limit does not hide a cut header of a defined type.
+    const input = boxed ++ trailers[0].box;
     options.max_pixels = 0;
-    var limited = try jpegz.jpegxl.validate(std.testing.allocator, input[0 .. boxed.len + 1], options);
+    var limited = try jpegz.jpegxl.validate(std.testing.allocator, input[0 .. boxed.len + 5], options);
     defer limited.deinit(std.testing.allocator);
     try std.testing.expectEqual(jpegz.StrictVerdict.corrupt, limited.verdict);
     try std.testing.expectEqual(@as(?bool, false), limited.decode_complete);
