@@ -175,6 +175,15 @@ pub fn finish(w: *Walk) Allocator.Error!void {
                 var total: usize = 0;
                 for (w.data[hp + 1 ..][0..16]) |count| total += count;
                 if (hp + 17 + total > segment[1]) break;
+                // T.81 B.2.4.2: Tc is 0 or 1 and Th is 0..3. No scan can
+                // select another table, and decoders reject the whole
+                // segment, so the codec check would only rediscover it.
+                if (tc > 1 or w.data[hp] & 0x0F > 3) {
+                    const detail = try std.fmt.allocPrint(w.allocator, "DHT Tc={d} Th={d}: Tc must be 0 or 1 and Th must be 0..3 (T.81 B.2.4.2)", .{ tc, w.data[hp] & 0x0F });
+                    defer w.allocator.free(detail);
+                    try addExactFinding(&w.report, w.allocator, .huffman_table_corrupt, hp, detail);
+                    break :segments;
+                }
                 // T.81 Table B.5 allows only Tc=0 tables in lossless frames.
                 // Such a table is never selected, so decoding continues and
                 // the rest of the file is still judged (nonblocking).

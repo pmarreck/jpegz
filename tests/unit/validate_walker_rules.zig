@@ -492,3 +492,28 @@ test "an AC-class DHT table in a lossless frame is FAIL 51 at its Tc/Th byte, an
 	try std.testing.expect(insufficient);
 }
 
+
+test "a DHT table with Tc above 1 or Th above 3 is FAIL 51 at its Tc/Th byte (T.81 B.2.4.2)" {
+	// A table class or destination T.81 does not define: no scan can select
+	// it, and decoders reject the whole segment. One exact 51 at the byte;
+	// the codec check does not rediscover it as an offsetless 51.
+	const allocator = std.testing.allocator;
+	const progressive = @embedFile("fixtures/progressive_32x32_gray_dri.jpg");
+	const first_sos = std.mem.indexOf(u8, progressive, &.{ 0xff, 0xda }).?;
+	const dht = first_sos + std.mem.indexOf(u8, progressive[first_sos..], &.{ 0xff, 0xc4 }).?;
+	const tcth = dht + 4;
+	try std.testing.expectEqual(@as(u8, 0x10), progressive[tcth]);
+	const Case = struct { byte: u8, detail: []const u8 };
+	for ([_]Case{
+		.{ .byte = 0x8e, .detail = "DHT Tc=8 Th=14: Tc must be 0 or 1 and Th must be 0..3 (T.81 B.2.4.2)" },
+		.{ .byte = 0x20, .detail = "DHT Tc=2 Th=0: Tc must be 0 or 1 and Th must be 0..3 (T.81 B.2.4.2)" },
+		.{ .byte = 0x14, .detail = "DHT Tc=1 Th=4: Tc must be 0 or 1 and Th must be 0..3 (T.81 B.2.4.2)" },
+	}) |c| {
+		errdefer std.debug.print("Tc/Th byte 0x{x:0>2}\n", .{c.byte});
+		var data = progressive.*;
+		data[tcth] = c.byte;
+		var report = try jpegz.validate(allocator, &data);
+		defer report.deinit(allocator);
+		try expectOneExact(report.findings.items, .huffman_table_corrupt, tcth, c.detail);
+	}
+}
