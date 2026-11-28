@@ -470,3 +470,36 @@ test "cleanroom emits NO Finding(.adobe_app14_conflicts_jfif) when APP14 says YC
     }
 }
 
+test "an Adobe ColorTransform other than 0 means the encoder's transform, as libjpeg-turbo reads it" {
+    // Adobe defines ColorTransform 0 (none), 1 (YCbCr) and 2 (YCCK). For any
+    // other byte, libjpeg-turbo warns (JWRN_ADOBE_XFORM) and assumes the
+    // encoder's transform: YCbCr for three components, YCCK for four, as it
+    // also does for 2 with three components and 1 with four. jpegz used to
+    // read undefined bytes as "no transform" and pass the samples through.
+    const allocator = std.testing.allocator;
+    const fixtures = [_][]const u8{
+        @embedFile("fixtures/rgb_8x8_p8_baseline.jpg"),
+        @embedFile("fixtures/rgb_8x8_p12_baseline.jpg"),
+        @embedFile("fixtures/rgb_8x8_p8_progressive.jpg"),
+        @embedFile("fixtures/rgb_8x8_p12_progressive.jpg"),
+        @embedFile("fixtures/rgb_8x8_p8_arith_progressive.jpg"),
+        @embedFile("fixtures/baseline_4x4_cmyk.jpg"),
+        @embedFile("fixtures/cmyk_16x16_ycck_subsampled.jpg"),
+    };
+    const transform_at = 17; // byte 11 of the APP14 body that starts at 2
+    for (fixtures, 0..) |fixture, fi| {
+        try std.testing.expectEqualStrings("Adobe\x00", fixture[6..12]);
+        for ([_]u8{ 0, 1, 2, 3, 0x80, 0xfe, 0xff }) |transform| {
+            errdefer std.debug.print("fixture {d}, ColorTransform {d}\n", .{ fi, transform });
+            const data = try allocator.dupe(u8, fixture);
+            defer allocator.free(data);
+            data[transform_at] = transform;
+            var ours = try jpegz.decode(allocator, data);
+            defer ours.deinit(allocator);
+            var oracle = try jpegz.internal.wrapperDecode(allocator, data);
+            defer oracle.deinit(allocator);
+            try std.testing.expectEqual(oracle.channels, ours.channels);
+            try std.testing.expectEqualSlices(u8, oracle.pixels, ours.pixels);
+        }
+    }
+}

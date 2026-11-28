@@ -33,11 +33,15 @@ pub const Error = errors.DecodeError;
 
 /// APP14 ColorTransform values (Adobe APP14 spec byte 11 of payload).
 /// `none` = no APP14 marker was seen; treat as raw CMYK for 4-comp,
-/// or YCbCr for 3-comp (matches libjpeg-turbo's default).
+/// or YCbCr for 3-comp (matches libjpeg-turbo's default). Any value but
+/// 0 means the encoder applied its color transform: YCbCr for three
+/// components, YCCK for four (libjpeg-turbo default_decompress_parms).
 pub const ColorTransform = enum(u8) {
     cmyk = 0,
     ycbcr = 1,
     ycck = 2,
+    /// A byte Adobe does not define (3..255).
+    other = 3,
     /// Sentinel: no APP14 segment was encountered in the marker walk.
     none = 0xFF,
 };
@@ -53,7 +57,7 @@ pub const ColorTransform = enum(u8) {
 ///   byte   6    : DCTEncodeVersion (typically 100)
 ///   bytes  7..8 : APP14Flags0      (u16 BE)
 ///   bytes  9..10: APP14Flags1      (u16 BE)
-///   byte   11   : ColorTransform   (0 = CMYK, 1 = YCbCr, 2 = YCCK)
+///   byte   11   : ColorTransform   (0 = none, 1 = YCbCr, 2 = YCCK)
 pub fn parseApp14ColorTransform(body: []const u8) ?ColorTransform {
     if (body.len < 12) return null;
     if (!std.mem.eql(u8, body[0..6], "Adobe\x00")) return null;
@@ -61,7 +65,9 @@ pub fn parseApp14ColorTransform(body: []const u8) ?ColorTransform {
         0 => .cmyk,
         1 => .ycbcr,
         2 => .ycck,
-        else => .cmyk, // libjpeg-turbo treats unknown as CMYK (raw)
+        // Undefined: libjpeg-turbo warns (JWRN_ADOBE_XFORM) and assumes the
+        // encoder's transform, YCbCr for three components and YCCK for four.
+        else => .other,
     };
 }
 
@@ -91,7 +97,7 @@ pub const ColorSignals = struct {
 
 /// Whether a 3-component frame already holds R,G,B samples, following
 /// libjpeg-turbo's default_decompress_parms precedence at every precision:
-/// JFIF means YCbCr; else Adobe transform 0 means RGB and 1 or 2 YCbCr;
+/// JFIF means YCbCr; else Adobe transform 0 means RGB and any other YCbCr;
 /// else component IDs 'R','G','B' mean RGB; anything else is YCbCr.
 pub fn rgbPassthrough(channels: u8, signals: ColorSignals, ids: [3]u8) bool {
 	if (channels != 3) return false;
@@ -195,7 +201,8 @@ pub fn assemble(
     const pixels = try allocator.alloc(u8, out_len);
     errdefer allocator.free(pixels);
 
-    const is_ycck = color_transform == .ycck;
+    // libjpeg-turbo: transform 0 is CMYK; any other value is YCCK.
+    const is_ycck = color_transform != .cmyk and color_transform != .none;
 
     var y: u32 = 0;
     while (y < height) : (y += 1) {
@@ -236,8 +243,8 @@ pub fn assemble(
         .channels = 4,
         .bits_per_sample = 8,
         .source_color_space = switch (color_transform) {
-            .ycck => .ycck,
-            .cmyk, .none, .ycbcr => .cmyk,
+            .ycck, .ycbcr, .other => .ycck,
+            .cmyk, .none => .cmyk,
         },
         .layout = .cmyk,
     };

@@ -317,6 +317,8 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
     // (no APP14 seen) → treat 4-comp as raw CMYK per libjpeg-turbo
     // default.
     var app14_color_transform: cmyk_mod.ColorTransform = .none;
+    // Its raw byte, for the conflict warning (undefined values included).
+    var app14_transform_byte: u8 = 0;
     // Track whether the file declared JFIF (APP0 "JFIF\0") so that
     // we can flag colorspace conflicts when APP14 (Adobe) also shows
     // up with a non-YCbCr ColorTransform — JFIF implies YCbCr for
@@ -360,12 +362,7 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                 if (app14_conflict_offset != null and frame.?.num_components == 3) {
                     if (options.findings_sink) |sink| {
                         var buf: [128]u8 = undefined;
-                        const ct_byte: u8 = switch (app14_color_transform) {
-                            .cmyk => 0,
-                            .ycbcr => 1,
-                            .ycck => 2,
-                            .none => 0xFF,
-                        };
+                        const ct_byte: u8 = app14_transform_byte;
                         const detail = std.fmt.bufPrint(&buf,
                             "JFIF APP0 implies YCbCr but Adobe APP14 ColorTransform={d} disagrees",
                             .{ct_byte}) catch buf[0..0];
@@ -445,6 +442,7 @@ fn decodeImpl(allocator: Allocator, data: []const u8, options: DecodeOptions) Er
                     const body = data[pos + 2 .. pos + seg_len];
                     if (cmyk_mod.parseApp14ColorTransform(body)) |ct| {
                         app14_color_transform = ct;
+                        app14_transform_byte = body[11];
                         // JFIF implies YCbCr (3-component); APP14
                         // ColorTransform != ycbcr disagrees. Stash the
                         // marker offset; emit after we see SOF (we want
