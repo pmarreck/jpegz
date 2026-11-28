@@ -110,25 +110,37 @@ test "an invalid progressive scan header is recorded, the scan skipped, and the 
     }
 }
 
-test "a progressive SOS length other than 6 + 2*Ns leaves every later AC refinement unjudged" {
+test "a progressive SOS length other than 6 + 2*Ns leaves later history and AC refinements unjudged" {
     // A length past the real header makes the marker walk, and the codec
     // check after it, resume beyond the next scans, which are never seen.
-    // Whatever they set is unknown, so no later AC refinement is decoded:
-    // decoding one in step with coefficients it cannot see reported a false
-    // entropy fault. (Single-byte mutant from the 5,000-file sweep.)
+    // Whatever they set is unknown, so no later AC refinement is decoded
+    // (decoding one in step with coefficients it cannot see reported a false
+    // entropy fault) and no later scan's history is judged (one missed a
+    // swallowed scan and reported its own "no scan has coded it" FAIL).
+    // Single-byte mutants from the 5,000-file sweep.
     const allocator = std.testing.allocator;
-    const fixture = @embedFile("fixtures/progressive_16x16_rgb12_440.jpg");
-    var sos: [16]usize = undefined;
-    try std.testing.expectEqual(@as(usize, 10), sosOffsets(fixture, &sos));
-    // Scan 5 (Y 1..63 refining) declares Ls = 121 instead of 8: the walk
-    // resumes at scan 8, past the DC and Cr refinements.
-    try std.testing.expectEqual(@as(u8, 8), fixture[sos[5] + 3]);
-    const data = try allocator.dupe(u8, fixture);
-    defer allocator.free(data);
-    data[sos[5] + 3] = 0x79;
-    var report = try jpegz.validate(allocator, data);
-    defer report.deinit(allocator);
-    try expectFinding(report, .bad_marker_length, .fail, sos[5] + 2);
-    try std.testing.expectEqual(@as(usize, 1), countSeverity(report, .fail));
-    try expectNotJudged(report, &.{ sos[8], sos[9] });
+    const Case = struct { name: []const u8, data: []const u8, scan: usize, ls: u8, long_ls: u8, unjudged: []const usize };
+    for ([_]Case{
+        // Scan 5 (Y 1..63 refining) declares Ls = 121: the walk resumes at
+        // scan 8, past the DC and Cr refinements.
+        .{ .name = "12-bit Huffman", .data = @embedFile("fixtures/progressive_16x16_rgb12_440.jpg"), .scan = 5, .ls = 8, .long_ls = 0x79, .unjudged = &.{ 8, 9 } },
+        // Scan 0 (DC first) declares Ls = 76: the walk resumes at scan 4,
+        // past the Y 1..5, Cr and Cb first scans.
+        .{ .name = "arithmetic", .data = @embedFile("fixtures/arith_progressive_16x16_rgb_440.jpg"), .scan = 0, .ls = 12, .long_ls = 0x4c, .unjudged = &.{ 5, 7, 8, 9 } },
+    }) |c| {
+        errdefer std.debug.print("fixture {s}\n", .{c.name});
+        var sos: [16]usize = undefined;
+        try std.testing.expectEqual(@as(usize, 10), sosOffsets(c.data, &sos));
+        try std.testing.expectEqual(c.ls, c.data[sos[c.scan] + 3]);
+        const data = try allocator.dupe(u8, c.data);
+        defer allocator.free(data);
+        data[sos[c.scan] + 3] = c.long_ls;
+        var report = try jpegz.validate(allocator, data);
+        defer report.deinit(allocator);
+        try expectFinding(report, .bad_marker_length, .fail, sos[c.scan] + 2);
+        try std.testing.expectEqual(@as(usize, 1), countSeverity(report, .fail));
+        var at: [10]usize = undefined;
+        for (c.unjudged, 0..) |i, k| at[k] = sos[i];
+        try expectNotJudged(report, at[0..c.unjudged.len]);
+    }
 }

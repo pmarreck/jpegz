@@ -284,6 +284,13 @@ pub fn onSos(w: *Walk, s: Seg) Allocator.Error!void {
                             for (ss..@as(usize, se) + 1) |k| w.coef_al[cs][k] = @intCast(al);
                         }
                     }
+                    // A length other than 6 + 2*Ns (already a FAIL) leaves the
+                    // segment's extent unknown: the walk resumes by the
+                    // declared length, possibly past scans it never sees. This
+                    // scan's history was judged against scans all seen; later
+                    // ones are not judged (one root cause, one record, as
+                    // rulings H).
+                    if (seg_len != 6 + 2 * @as(usize, ns2)) w.history_known = false;
                 },
                 .lossless_huffman, .lossless_arithmetic => {
                     // T.81 §H.1: Ss is the predictor selector (1..7);
