@@ -6,7 +6,7 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 ## Priority: decode robustness on damaged input
 
 - [x] Split src/decode/baseline.zig (1,127 code lines) into five modules, behavior-neutrally (done 2026-11-28 06:25 EST; commit 55162e7).
-- [ ] Extend validation past invalid scan headers to multi-scan sequential Huffman, lossless and arithmetic sequential frames (a sequential scan has no history, so only its own components go unjudged); tell validate (context: docs/plan_context/damaged-input-parity-2026-11-27.md).
+- [ ] Extend validation past invalid scan headers to multi-scan sequential Huffman frames, the only non-progressive path with more than one scan: skip listed scans in decodeImpl and decodeScanT, count their components as coded, stand the coverage checks down when those are unknown; tell validate (context: docs/plan_context/damaged-input-parity-2026-11-27.md).
 - [ ] Awaiting validate: a dedicated finding code for "scan not judged" instead of INFO unknown_marker (asked 2026-11-28 in the eb03fb8 note); adopt whatever validate assigns.
 - [x] Validation records an invalid progressive scan header and decodes past it: the walker FAIL is non-blocking, the decoder skips that scan and the refinements that depend on it (INFO "not judged"), and everything else is judged; DHT Tc/Th range became exact FAIL 51 and history stops after an SOS length mismatch; validate told (done 2026-11-28 05:56 EST; commits 925aa1a, eb03fb8, 58822f1).
 - [x] Remove the unreachable IDCT overflow flag and its emissions; plain checked i64 arithmetic with a worst-case bound test; no finding changes; about 4x faster IDCT (done 2026-11-28 06:58 EST; commit 9f73b31).
@@ -15,9 +15,9 @@ Completed history: [plan log](docs/PLAN_LOG.md).
 - [x] Implement the owner ruling on IDCT range: 64-bit arithmetic with no wrap, then a clamp to 0..2^P-1; in-range output byte-identical to libjpeg-turbo; validate told (done 2026-11-28 04:05 EST; commit 54d12d3).
 - [x] OWNER: for valid files whose IDCT input is far out of range, should jpegz output exact math plus a clamp, emulate libjpeg-turbo's LP64 C path, or leave it as is? Answer: exact math plus a clamp. "We need to do the most correct thing. We don't copy faulty oracle behavior." (done 2026-11-28 00:21 EST).
 
-- [ ] Explain the remaining pixel differences from libjpeg-turbo on damaged input: lossless is fixed (7ceac1f); arithmetic SOF9 (29), 12-bit progressive (21), SOF10 (4) and sequential (3) remain, mostly gated on the IDCT owner question (context: docs/plan_context/damaged-input-parity-2026-11-27.md).
+- [x] Explain the remaining pixel differences from libjpeg-turbo on damaged input: 1,652 of 1,689 comparable files match; the other 34 are the intended IDCT clamp; fixed an undetected refinement run past Se, narrow-chroma upsampling and undefined Adobe ColorTransform bytes along the way (context: docs/plan_context/damaged-input-parity-2026-11-27.md; done 2026-11-28 09:20 EST; commits 3b06625, 338ef0c, 61710c8).
+- [ ] Awaiting validate: whether an undefined Adobe ColorTransform byte (3..255) gets a finding, and which code and severity (asked 2026-11-28 in the 61710c8 note).
 - [x] Did validate confirm the two code extensions in c86fe21 (bad_marker_length on every T.81 SOS path; lossless_pointtransform_invalid for Pt >= P)? Answer: yes, both as implemented: existing codes, FAIL, exact offsets (done 2026-11-26 18:17 EST; commit c86fe21).
-- [x] Lossless AC-class DHT tables are FAIL 51, non-blocking, and decoding continues (done 2026-11-26 13:24 EST; commit d62051e).
 - [x] 12-bit progressive dequantization panic fixed, and 12-bit IDCT range limiting matches libjpeg-turbo's masked table (done 2026-11-26 15:33 EST; commit fa289eb).
 - [x] Validate's allocation-failure segfault: no double free or leak at any refused allocation, swept over 21 fixtures (done 2026-11-26 17:00 EST; commit 1a01bd7).
 - [x] Decode-path bounds: SOS and SOF fields are checked before indexing, with a single-byte totality test over every decoder family; 15,425 damaged files, 0 crashes (done 2026-11-26 18:16 EST; commit c86fe21).

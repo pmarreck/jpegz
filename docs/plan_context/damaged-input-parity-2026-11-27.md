@@ -66,3 +66,55 @@ The plan:
 
 Sequential, lossless and arithmetic sequential paths follow once the
 progressive path is in.
+
+## Re-measurement after the IDCT ruling (2026-11-28)
+
+The earlier 15,425-file corpus did not survive a reboot. The new sweep
+covers every fixture plus 5,000 seeded single-byte mutants (seed
+4242). It compares jpegz.decode with libjpeg-turbo for the 1,815 files
+jpegz validates as clean. libjpeg-turbo refuses 126 of them (JPEG-LS
+and other variants it does not decode).
+
+After 54d12d3 (exact IDCT plus clamp), 40 files differed:
+
+| Cause | Files | Resolution |
+|---|---|---|
+| Exact IDCT leaves the sample range | 34 | Intended (owner ruling): jpegz clamps where libjpeg-turbo wraps. |
+| AC refinement run past Se | 3 | Was undetected damage; now FAIL entropy_decode_invalid (3b06625). |
+| Chroma two samples wide or narrower | 1 | jpegz used the fancy filter where libjpeg-turbo replicates (338ef0c). |
+| Undefined Adobe ColorTransform byte | 2 | jpegz read it as "no transform"; libjpeg-turbo reads any nonzero byte as the encoder's transform (61710c8). |
+
+Out-of-range classification is independent of jpegz's decode: it takes
+libjpeg-turbo's own coefficients, dequantizes them with the file's DQT
+and runs a double-precision T.81 IDCT. The 34 remaining differences are
+exactly the files where some block leaves the range by more than
+islow's fixed-point error.
+
+Result: 1,652 of the 1,689 comparable files match libjpeg-turbo exactly,
+and every remaining difference is intended.
+
+The refinement fix moves 3 files out of the comparison: they are no
+longer valid, and strict decode now fails on them.
+
+## Scan skipping beyond progressive frames (analysis, 2026-11-28)
+
+The progressive path shipped in eb03fb8 and 58822f1. For the others:
+
+- Lossless validation (lossless_validate.zig) and the SOF9 arithmetic
+  decoder each accept exactly one scan covering every component.
+  Skipping that scan leaves nothing to decode, so they gain nothing.
+- Only multi-scan (non-interleaved) sequential Huffman frames can gain.
+  The baseline decoder hands the first scan to decodeScanT, which loops
+  over the later ones, so both places need the skip. A skipped scan
+  must count its components as coded, or the decoder would report "EOI
+  before every component was scanned" as a consequence. When its
+  components cannot be located (bad Ns, Cs or length), coverage is
+  unknown and the coverage checks must stand down.
+- Assumption (reversible): any FAIL on a sequential scan's header lists
+  the scan, as on the progressive path. That includes
+  sequential_scan_invalid (Ss, Se, Ah, Al), even though the baseline
+  decoder ignores those fields. Decoding past them instead would turn a
+  progressive file whose SOF2 byte was damaged into SOF0 into an
+  avalanche of consequence faults. In the 5,000-mutant sweep, the 11
+  files with only that FAIL have intact entropy, so they would gain
+  nothing anyway.
